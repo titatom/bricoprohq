@@ -2,7 +2,9 @@ import { createContext, useContext, useState, useCallback } from 'react';
 
 const AuthContext = createContext(null);
 
-export const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// All API calls go through Next.js rewrites (/api/* → backend).
+// This means the image works on any host without rebuilding.
+export const API = '/api';
 
 export function AuthProvider({ children }) {
   const [token, setToken] = useState(() =>

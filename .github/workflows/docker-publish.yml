@@ -1,0 +1,63 @@
+name: Build and publish Docker images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_API: ghcr.io/titatom/bricoprohq-api
+  IMAGE_WEB: ghcr.io/titatom/bricoprohq-web
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for API image
+        id: meta-api
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_API }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+
+      - name: Extract metadata for Web image
+        id: meta-web
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_WEB }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ steps.meta-api.outputs.tags }}
+          labels: ${{ steps.meta-api.outputs.labels }}
+
+      - name: Build and push Web image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{ steps.meta-web.outputs.tags }}
+          labels: ${{ steps.meta-web.outputs.labels }}

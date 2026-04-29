@@ -6,8 +6,6 @@ services:
       POSTGRES_DB: bricoprohq
       POSTGRES_USER: bricopro
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bricopro}
-    ports:
-      - "5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
@@ -19,24 +17,20 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
 
   api:
-    build:
-      context: ./backend
+    image: ghcr.io/titatom/bricoprohq-api:latest
     restart: unless-stopped
     environment:
-      APP_ENV: ${APP_ENV:-production}
       DATABASE_URL: postgresql+psycopg://bricopro:${POSTGRES_PASSWORD:-bricopro}@db:5432/bricoprohq
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@bricopro.local}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin1234}
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -44,13 +38,13 @@ services:
         condition: service_started
 
   web:
-    build:
-      context: ./frontend
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    image: ghcr.io/titatom/bricoprohq-web:latest
     restart: unless-stopped
+    environment:
+      # Runtime — tells the Next.js server where to proxy /api/* requests
+      API_URL: http://api:8000
     ports:
-      - "3000:3000"
+      - "${WEB_PORT:-3000}:3000"
     depends_on:
       - api
 
