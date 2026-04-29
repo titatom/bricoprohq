@@ -204,13 +204,45 @@ It stores references (IDs / URLs) to source systems.
 
 ## Unraid Deployment
 
-1. Add a new Docker container in Unraid Community Applications
-2. Set the repository to your built image or use `docker compose`
-3. Map the volumes:
-   - `/mnt/user/appdata/bricoprohq/db` → `/var/lib/postgresql/data`
-4. Set environment variables in the template
+### Via Unraid terminal (recommended)
 
-Alternatively, use the provided `docker-compose.yml` from the Unraid terminal.
+```bash
+# SSH into Unraid or open a terminal
+cd /mnt/user/appdata
+git clone <repo-url> bricoprohq
+cd bricoprohq
+
+# Create your .env
+cp .env.example .env
+nano .env   # set SECRET_KEY, ADMIN_PASSWORD, and NEXT_PUBLIC_API_URL
+
+# Build and start
+docker compose up -d --build
+```
+
+**Important:** Set `NEXT_PUBLIC_API_URL` in `.env` to your Unraid server's LAN IP before building, e.g.:
+
+```dotenv
+NEXT_PUBLIC_API_URL=http://192.168.1.100:8000
+```
+
+This value is baked into the Next.js bundle at build time — the frontend needs to know how to reach the API from your browser.
+
+### Volumes to persist
+
+Map these in your Unraid appdata path:
+- `db_data` → `/mnt/user/appdata/bricoprohq/db`
+- `redis_data` → `/mnt/user/appdata/bricoprohq/redis`
+
+### Note on Docker / buildx version
+
+The `docker-compose.yml` intentionally omits the `version:` key so it works with Docker Compose V1 and V2 regardless of buildx version. If you previously saw `compose build requires buildx 0.17 or later`, this has been fixed.
+
+### Development (local, with hot-reload)
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+```
 
 ---
 
