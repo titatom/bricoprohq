@@ -204,50 +204,71 @@ It stores references (IDs / URLs) to source systems.
 
 ## Unraid Deployment
 
-```bash
-cd /mnt/user/appdata
-git clone <repo-url> bricoprohq
-cd bricoprohq
+Images are built automatically by GitHub Actions and published to GitHub Container Registry. **No building on Unraid required.**
 
+### Option A — Docker Compose (terminal)
+
+```bash
+# SSH into Unraid or open a terminal
+mkdir -p /mnt/user/appdata/bricoprohq
+cd /mnt/user/appdata/bricoprohq
+
+# Download the compose file
+curl -O https://raw.githubusercontent.com/titatom/bricoprohq/main/docker-compose.yml
+
+# Create your env file
+curl -O https://raw.githubusercontent.com/titatom/bricoprohq/main/.env.example
 cp .env.example .env
-nano .env   # set SECRET_KEY, ADMIN_PASSWORD, NEXT_PUBLIC_API_URL
+nano .env   # set SECRET_KEY and ADMIN_PASSWORD
 
-docker compose up -d --build
+# Pull images and start
+docker compose pull
+docker compose up -d
 ```
 
-Set `NEXT_PUBLIC_API_URL` to your Unraid server's LAN IP **before building**:
+### Option B — Unraid Docker Templates (GUI)
 
-```dotenv
-NEXT_PUBLIC_API_URL=http://192.168.1.100:8000
-```
+Four XML templates are in the `unraid/` folder. Add them one at a time in Unraid → Docker → Add Container → Advanced.
 
-### Fix: `compose build requires buildx 0.17 or later`
+**Start order:**
+1. `bricoprohq-db` (Postgres)
+2. `bricoprohq-redis`
+3. `bricoprohq-api`
+4. `bricoprohq-web`
 
-The `.env.example` already includes:
-
-```dotenv
-DOCKER_BUILDKIT=0
-COMPOSE_DOCKER_CLI_BUILD=0
-```
-
-Copy it to `.env` and those are picked up automatically. Alternatively:
+All four must be on the same **custom Docker network** named `bricoprohq`. Create it once:
 
 ```bash
-./start.sh up --build -d
+docker network create bricoprohq
 ```
 
-`start.sh` exports the same two variables before calling `docker compose`.
+**Key settings to fill in:**
 
-### Persistent volumes
+| Container | Setting | Value |
+|-----------|---------|-------|
+| db | POSTGRES_PASSWORD | your-db-password |
+| api | SECRET_KEY | random 32-char hex |
+| api | ADMIN_PASSWORD | your login password |
+| api | DATABASE_URL | `postgresql+psycopg://bricopro:your-db-password@bricoprohq-db:5432/bricoprohq` |
+| web | API_URL | `http://bricoprohq-api:8000` |
 
-- `db_data` → `/mnt/user/appdata/bricoprohq/db`
-- `redis_data` → `/mnt/user/appdata/bricoprohq/redis`
+The web container reaches the API through the internal Docker network — no IP addresses needed.
 
-### Local development (hot-reload)
+### Persistent data paths
+
+| Volume | Suggested Unraid path |
+|--------|-----------------------|
+| Postgres data | `/mnt/user/appdata/bricoprohq/db` |
+| Redis data | `/mnt/user/appdata/bricoprohq/redis` |
+
+### Updating to a new version
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+docker compose pull
+docker compose up -d
 ```
+
+Or in Unraid GUI: click each container → **Force Update**.
 
 ---
 

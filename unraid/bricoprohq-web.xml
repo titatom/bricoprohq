@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>bricoprohq-web</Name>
+  <Repository>ghcr.io/titatom/bricoprohq-web:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
+  <Network>bricoprohq</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project>https://github.com/titatom/bricoprohq</Project>
+  <Overview>Bricopro HQ — Next.js frontend. Requires bricoprohq-api to be running.</Overview>
+  <Category>Tools:</Category>
+  <WebUI>http://[IP]:[PORT:3000]</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/titatom/bricoprohq/main/docs/icon.png</Icon>
+  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+
+  <Config Name="Web Port" Target="3000" Default="3000" Mode="tcp" Description="Bricopro HQ web interface port." Type="Port" Display="always" Required="true" Mask="false">3000</Config>
+
+  <Config Name="API URL (internal)" Target="API_URL" Default="http://bricoprohq-api:8000" Description="Internal URL the web server uses to reach the API. Use the container name if on the same Docker network." Type="Variable" Display="always" Required="true" Mask="false">http://bricoprohq-api:8000</Config>
+</Container>

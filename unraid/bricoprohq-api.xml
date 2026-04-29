@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>bricoprohq-api</Name>
+  <Repository>ghcr.io/titatom/bricoprohq-api:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
+  <Network>bricoprohq</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project>https://github.com/titatom/bricoprohq</Project>
+  <Overview>Bricopro HQ — FastAPI backend. Requires bricoprohq-db and bricoprohq-redis to be running first.</Overview>
+  <Category>Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8000]/docs</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/titatom/bricoprohq/main/docs/icon.png</Icon>
+  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+
+  <Config Name="API Port" Target="8000" Default="8000" Mode="tcp" Description="FastAPI backend port. Also used internally by the web container." Type="Port" Display="always" Required="true" Mask="false">8000</Config>
+
+  <Config Name="Database URL" Target="DATABASE_URL" Default="postgresql+psycopg://bricopro:bricopro@bricoprohq-db:5432/bricoprohq" Description="PostgreSQL connection string. Update password to match bricoprohq-db." Type="Variable" Display="always" Required="true" Mask="false">postgresql+psycopg://bricopro:bricopro@bricoprohq-db:5432/bricoprohq</Config>
+
+  <Config Name="Redis URL" Target="REDIS_URL" Default="redis://bricoprohq-redis:6379/0" Description="Redis connection string." Type="Variable" Display="always" Required="true" Mask="false">redis://bricoprohq-redis:6379/0</Config>
+
+  <Config Name="Secret Key" Target="SECRET_KEY" Default="" Description="Random secret for JWT signing. Generate: python3 -c &quot;import secrets; print(secrets.token_hex(32))&quot;" Type="Variable" Display="always" Required="true" Mask="true"></Config>
+
+  <Config Name="Admin Email" Target="ADMIN_EMAIL" Default="admin@bricopro.local" Description="Login email for the admin account (created on first start)." Type="Variable" Display="always" Required="true" Mask="false">admin@bricopro.local</Config>
+
+  <Config Name="Admin Password" Target="ADMIN_PASSWORD" Default="admin1234" Description="Login password for the admin account. Change this." Type="Variable" Display="always" Required="true" Mask="true">admin1234</Config>
+</Container>
