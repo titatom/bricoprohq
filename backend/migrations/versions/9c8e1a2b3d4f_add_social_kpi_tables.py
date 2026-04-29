@@ -34,6 +34,7 @@ def upgrade() -> None:
         sa.Column("reach", sa.Integer(), nullable=False),
         sa.Column("clicks", sa.Integer(), nullable=False),
         sa.Column("engagements", sa.Integer(), nullable=False),
+        sa.Column("engagement_rate", sa.Float(), nullable=False),
         sa.Column("leads", sa.Integer(), nullable=False),
         sa.Column("messages", sa.Integer(), nullable=False),
         sa.Column("calls", sa.Integer(), nullable=False),

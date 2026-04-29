@@ -250,7 +250,7 @@ def processing_summary(_: User = Depends(auth_user), db: Session = Depends(get_d
         "documents_pending": pending_docs,
         "needs_review": db.query(ContentAsset).filter(ContentAsset.status == "needs_review").count(),
         "image_source": "immich-gpt",
-        "document_source": "paperless-gpt",
+        "document_source": "paperless / paperless-gpt",
         "personal_images": image_q.filter(ContentAsset.status == "personal_photo").count(),
         "business_images": image_q.filter(ContentAsset.status == "business_photo").count(),
         "social_candidates": image_q.filter(ContentAsset.status == "social_worthy").count(),
@@ -410,7 +410,7 @@ def social_generate(payload: SocialGenerateIn, _: User = Depends(auth_user), db:
 
 @app.get("/social/albums")
 def social_albums(_: User = Depends(auth_user), db: Session = Depends(get_db)):
-    default_album = db.query(Setting).filter(Setting.key == "social_default_album").first()
+    default_album = db.query(Setting).filter(Setting.key == "social_default_album_id").first()
     album_id = default_album.value if default_album and default_album.value else "recent-work"
     return [
         {"id": album_id, "name": "Configured Immich album", "source": "immich", "asset_count": 24},
@@ -476,10 +476,13 @@ SOCIAL_SETTING_DEFAULTS = {
     "image_model": "",
     "copy_model": "",
     "default_language": "bilingual",
+    "default_platforms": "facebook,instagram,gbp",
     "brand_voice": "Local, practical, trustworthy Bricopro voice",
     "facebook_account": "",
     "instagram_account": "",
     "google_business_account": "",
+    "meta_account_id": "",
+    "google_ads_account_id": "",
     "meta_ads_account": "",
     "google_ads_account": "",
     "before_after_enabled": "true",
@@ -494,6 +497,10 @@ def social_settings(_: User = Depends(auth_user), db: Session = Depends(get_db))
 
 @app.put("/social/settings")
 def save_social_settings(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    if payload.get("meta_account_id") and not payload.get("meta_ads_account"):
+        payload["meta_ads_account"] = payload["meta_account_id"]
+    if payload.get("google_ads_account_id") and not payload.get("google_ads_account"):
+        payload["google_ads_account"] = payload["google_ads_account_id"]
     out = {}
     for key, default in SOCIAL_SETTING_DEFAULTS.items():
         value = str(payload.get(key, default))
@@ -721,6 +728,7 @@ def campaign_generate(campaign_id: int, _: User = Depends(auth_user), db: Sessio
 # ── KPI / performance tracking ────────────────────────────────────────────────
 
 def _metric_payload(m: PostMetric) -> dict:
+    cost_per_lead = round(m.spend_cents / m.leads, 2) if m.leads else 0
     return {
         "id": m.id,
         "draft_id": m.draft_id,
@@ -739,6 +747,7 @@ def _metric_payload(m: PostMetric) -> dict:
         "calls": m.calls,
         "engagements": m.engagements,
         "engagement_rate": m.engagement_rate,
+        "cost_per_lead": cost_per_lead,
         "notes": m.notes,
     }
 
@@ -750,7 +759,10 @@ def kpi_records(_: User = Depends(auth_user), db: Session = Depends(get_db)):
 
 @app.post("/kpi/records")
 def create_kpi_record(payload: PostMetricIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
-    posted_at = date.fromisoformat(payload.published_date) if payload.published_date else None
+    try:
+        posted_at = date.fromisoformat(payload.published_date) if payload.published_date else None
+    except ValueError as exc:
+        raise HTTPException(422, "published_date must be YYYY-MM-DD") from exc
     metric = PostMetric(
         draft_id=payload.draft_id,
         campaign_id=payload.campaign_id,
@@ -783,9 +795,13 @@ def kpi_summary(_: User = Depends(auth_user), db: Session = Depends(get_db)):
     total_impressions = sum(r.impressions for r in records)
     return {
         "total_spend": total_spend,
+        "spend": total_spend,
         "total_leads": total_leads,
+        "leads": total_leads,
         "total_clicks": total_clicks,
+        "clicks": total_clicks,
         "total_impressions": total_impressions,
+        "impressions": total_impressions,
         "cost_per_lead": round(total_spend / total_leads, 2) if total_leads else 0,
         "click_through_rate": round((total_clicks / total_impressions) * 100, 2) if total_impressions else 0,
     }

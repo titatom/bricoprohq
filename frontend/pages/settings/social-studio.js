@@ -10,8 +10,13 @@ const DEFAULTS = {
   default_language: 'fr',
   default_platforms: 'facebook,instagram,gbp',
   brand_voice: 'Friendly, local, practical, trustworthy Bricopro expert.',
+  facebook_account: '',
+  instagram_account: '',
+  google_business_account: '',
   meta_account_id: '',
   google_ads_account_id: '',
+  meta_ads_account: '',
+  google_ads_account: '',
   before_after_enabled: 'true',
 };
 
@@ -114,12 +119,24 @@ export default function SocialStudioSettingsPage() {
           <h3 className="font-semibold text-gray-800 mb-4">Social accounts</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="label">Meta account ID</label>
-              <input className="input" value={form.meta_account_id} onChange={(e) => setForm({ ...form, meta_account_id: e.target.value })} placeholder="Business / ad account reference" />
+              <label className="label">Facebook Page / account</label>
+              <input className="input" value={form.facebook_account} onChange={(e) => setForm({ ...form, facebook_account: e.target.value })} placeholder="Facebook page reference" />
+            </div>
+            <div>
+              <label className="label">Instagram account</label>
+              <input className="input" value={form.instagram_account} onChange={(e) => setForm({ ...form, instagram_account: e.target.value })} placeholder="@bricopro" />
+            </div>
+            <div>
+              <label className="label">Google Business account</label>
+              <input className="input" value={form.google_business_account} onChange={(e) => setForm({ ...form, google_business_account: e.target.value })} placeholder="Business Profile reference" />
+            </div>
+            <div>
+              <label className="label">Meta Ads account ID</label>
+              <input className="input" value={form.meta_ads_account || form.meta_account_id} onChange={(e) => setForm({ ...form, meta_ads_account: e.target.value, meta_account_id: e.target.value })} placeholder="Business / ad account reference" />
             </div>
             <div>
               <label className="label">Google Ads account ID</label>
-              <input className="input" value={form.google_ads_account_id} onChange={(e) => setForm({ ...form, google_ads_account_id: e.target.value })} placeholder="Customer ID" />
+              <input className="input" value={form.google_ads_account || form.google_ads_account_id} onChange={(e) => setForm({ ...form, google_ads_account: e.target.value, google_ads_account_id: e.target.value })} placeholder="Customer ID" />
             </div>
           </div>
         </section>

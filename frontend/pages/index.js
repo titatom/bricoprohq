@@ -163,7 +163,7 @@ function ProcessingSummary({ summary }) {
     {
       label: 'Documents',
       value: summary?.documents_pending ?? 0,
-      detail: 'pending in Paperless-GPT',
+      detail: 'pending in Paperless / Paperless-GPT',
       icon: '📄',
       color: 'from-accent-500 to-accent-600',
     },

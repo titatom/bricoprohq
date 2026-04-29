@@ -14,7 +14,8 @@ const EMPTY = {
   leads: 0,
   messages: 0,
   calls: 0,
-  engagement: 0,
+  engagements: 0,
+  engagement_rate: 0,
   notes: '',
 };
 
@@ -43,8 +44,8 @@ export default function KPIPage() {
   const save = async (e) => {
     e.preventDefault();
     setSaving(true);
-    await apiFetch('/kpi/records', { method: 'POST', body: JSON.stringify(form) });
-    setForm(EMPTY);
+    const r = await apiFetch('/kpi/records', { method: 'POST', body: JSON.stringify(form) });
+    if (r.ok) setForm(EMPTY);
     setSaving(false);
     await load();
   };
@@ -58,9 +59,9 @@ export default function KPIPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
         {[
-          ['Spend', formatCurrency(summary?.spend), 'Ad budget used'],
-          ['Leads', summary?.leads || 0, 'Tracked leads'],
-          ['Clicks', summary?.clicks || 0, 'Traffic actions'],
+          ['Spend', formatCurrency(summary?.total_spend ?? summary?.spend), 'Ad budget used'],
+          ['Leads', summary?.total_leads ?? summary?.leads ?? 0, 'Tracked leads'],
+          ['Clicks', summary?.total_clicks ?? summary?.clicks ?? 0, 'Traffic actions'],
           ['Cost / Lead', formatCurrency(summary?.cost_per_lead), 'Efficiency'],
         ].map(([label, value, detail]) => (
           <div key={label} className="card">
@@ -96,15 +97,15 @@ export default function KPIPage() {
               <input className="input" value={form.post_url} onChange={(e) => setForm({ ...form, post_url: e.target.value })} />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              {['spend', 'impressions', 'reach', 'clicks', 'leads', 'messages', 'calls', 'engagement'].map((key) => (
+              {['spend', 'impressions', 'reach', 'clicks', 'leads', 'messages', 'calls', 'engagements', 'engagement_rate'].map((key) => (
                 <div key={key}>
-                  <label className="label capitalize">{key}</label>
+                  <label className="label capitalize">{key.replace('_', ' ')}</label>
                   <input
                     className="input"
                     type="number"
-                    step={key === 'spend' ? '0.01' : '1'}
+                    step={key === 'engagement_rate' ? '0.01' : '1'}
                     value={form[key]}
-                    onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                    onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })}
                   />
                 </div>
               ))}

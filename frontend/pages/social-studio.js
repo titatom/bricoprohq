@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import LoginForm from '../components/LoginForm';
@@ -115,8 +116,12 @@ function CandidateCard({ candidate, selected, onToggle }) {
   );
 }
 
-function ResultCard({ result, form, onSave, saving }) {
-  const [edited, setEdited] = useState({ ...result });
+function ResultCard({ result, onSave, saving }) {
+  const [editedDrafts, setEditedDrafts] = useState(result.drafts || []);
+
+  const updateDraft = (idx, patch) => {
+    setEditedDrafts((prev) => prev.map((draft, i) => (i === idx ? { ...draft, ...patch } : draft)));
+  };
 
   return (
     <div className="card mt-6 border-l-4 border-accent-500">
@@ -125,95 +130,51 @@ function ResultCard({ result, form, onSave, saving }) {
           <h3 className="font-semibold text-gray-800">Editable content pack</h3>
           <p className="text-xs text-gray-400">Every field below can be changed before saving.</p>
         </div>
-        <button className="btn-primary" onClick={() => onSave(edited)} disabled={saving}>
+        <button className="btn-primary" onClick={() => onSave(editedDrafts)} disabled={saving}>
           {saving ? 'Saving…' : 'Save to Publishing Queue'}
         </button>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="label">Title</label>
-          <input
-            className="input"
-            value={edited.title}
-            onChange={(e) => setEdited({ ...edited, title: e.target.value })}
-          />
-        </div>
-        <div>
-          <label className="label">Platform</label>
-          <select
-            className="select"
-            value={edited.platform || form.platform}
-            onChange={(e) => setEdited({ ...edited, platform: e.target.value })}
-          >
-            {PLATFORMS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="label">Main Copy</label>
-          <textarea
-            className="input h-36 resize-y"
-            value={edited.main_copy}
-            onChange={(e) => setEdited({ ...edited, main_copy: e.target.value })}
-          />
-        </div>
-        <div>
-          <label className="label">Short Variation</label>
-          <textarea
-            className="input h-36 resize-y"
-            value={edited.short_variation}
-            onChange={(e) => setEdited({ ...edited, short_variation: e.target.value })}
-          />
-        </div>
-        <div>
-          <label className="label">Hashtags</label>
-          <input
-            className="input"
-            value={edited.hashtags}
-            onChange={(e) => setEdited({ ...edited, hashtags: e.target.value })}
-          />
-        </div>
-        <div>
-          <label className="label">Call to Action</label>
-          <input
-            className="input"
-            value={edited.cta}
-            onChange={(e) => setEdited({ ...edited, cta: e.target.value })}
-          />
-        </div>
-        <div>
-          <label className="label">Selected Assets</label>
-          <textarea
-            className="input h-20 resize-y"
-            value={edited.asset_refs || ''}
-            onChange={(e) => setEdited({ ...edited, asset_refs: e.target.value })}
-            placeholder="Immich asset IDs or URLs"
-          />
-        </div>
-        <div>
-          <label className="label">Before / After Direction</label>
-          <textarea
-            className="input h-20 resize-y"
-            value={edited.visual_direction || ''}
-            onChange={(e) => setEdited({ ...edited, visual_direction: e.target.value })}
-          />
-        </div>
-        {edited.notes && (
-          <div className="col-span-full">
-            <label className="label">Notes</label>
-            <p className="text-sm text-orange-600 bg-orange-50 rounded-lg p-3">{edited.notes}</p>
+      <div className="space-y-5">
+        {editedDrafts.map((draft, idx) => (
+          <div key={`${draft.platform}-${idx}`} className="rounded-2xl border border-gray-100 p-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="label">Title</label>
+                <input className="input" value={draft.title || ''} onChange={(e) => updateDraft(idx, { title: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Platform</label>
+                <select className="select" value={draft.platform || 'facebook'} onChange={(e) => updateDraft(idx, { platform: e.target.value })}>
+                  {PLATFORMS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">Main Copy</label>
+                <textarea className="input h-36 resize-y" value={draft.main_copy || ''} onChange={(e) => updateDraft(idx, { main_copy: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Short Variation</label>
+                <textarea className="input h-36 resize-y" value={draft.short_variation || ''} onChange={(e) => updateDraft(idx, { short_variation: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Hashtags</label>
+                <input className="input" value={draft.hashtags || ''} onChange={(e) => updateDraft(idx, { hashtags: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Call to Action</label>
+                <input className="input" value={draft.cta || ''} onChange={(e) => updateDraft(idx, { cta: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Selected Assets</label>
+                <textarea className="input h-20 resize-y" value={(draft.selected_assets || []).join(', ')} readOnly />
+              </div>
+              <div>
+                <label className="label">Before / After Direction</label>
+                <textarea className="input h-20 resize-y" value={draft.visual_direction || ''} onChange={(e) => updateDraft(idx, { visual_direction: e.target.value })} />
+              </div>
+            </div>
           </div>
-        )}
-        {result.ai_used === false && (
-          <div className="col-span-full bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">
-            ⚠ No AI provider is configured — this is a template-based draft. Go to{' '}
-            <a href="/settings" className="underline font-medium">Settings → AI Provider</a> to enable real AI generation.
-          </div>
-        )}
-        {result.ai_used === true && (
-          <div className="col-span-full bg-green-50 border border-green-200 rounded-lg p-2 text-xs text-green-700">
-            ✓ Generated by AI
-          </div>
-        )}
+        ))}
       </div>
     </div>
   );
@@ -278,22 +239,31 @@ export default function SocialStudioPage() {
     e.preventDefault();
     setGenerating(true); setError(''); setResult(null);
     const selected = candidates.filter((c) => selectedAssets.includes(c.asset_id));
-    const r = await apiFetch('/social/generate', {
+    const r = await apiFetch('/social/generate-pack', {
       method: 'POST',
       body: JSON.stringify({
-        ...form,
+        album_id: form.album_id,
+        asset_ids: selected.map((c) => c.asset_id),
+        platforms: [form.platform],
+        service_category: form.service_category,
+        language: form.language,
+        tone: form.tone,
+        city: form.city,
+        cta: form.cta,
         job_description: form.job_description || selected.map((c) => `${c.title}: ${c.reason}`).join('\n'),
       }),
     });
     if (r.ok) {
       const data = await r.json();
       setResult({
-        ...data,
-        platform: form.platform,
-        asset_refs: selected.map((c) => c.asset_id).join(', '),
-        visual_direction: selected.some((c) => c.before_after_pair)
-          ? 'Create before/after image if the selected assets pair cleanly.'
-          : 'Use the strongest single finished-work image.',
+        drafts: (data.drafts || []).map((draft) => ({
+          ...draft,
+          visual_direction: draft.visual_direction || (
+            selected.some((c) => c.before_after_pair)
+              ? 'Create before/after image if the selected assets pair cleanly.'
+              : 'Use the strongest single finished-work image.'
+          ),
+        })),
       });
     } else {
       let msg = 'Generation failed.';
@@ -305,28 +275,38 @@ export default function SocialStudioPage() {
     setGenerating(false);
   };
 
-  const saveDraft = async (edited) => {
+  const saveDraft = async (drafts) => {
     setSaving(true);
-    await apiFetch('/publishing/drafts', {
-      method: 'POST',
-      body: JSON.stringify({
-        title: edited.title,
-        platform: edited.platform || form.platform,
-        language: form.language,
-        tone: form.tone,
-        service_category: form.service_category,
-        body: edited.main_copy,
-        short_body: edited.short_variation,
-        hashtags: edited.hashtags,
-        cta: edited.cta,
-        status: 'draft_generated',
-      }),
-    });
+    setError('');
+    let savedAll = true;
+    for (const draft of drafts) {
+      const r = await apiFetch('/publishing/drafts', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: draft.title,
+          platform: draft.platform || form.platform,
+          language: form.language,
+          tone: form.tone,
+          service_category: form.service_category,
+          body: draft.main_copy,
+          short_body: draft.short_variation,
+          hashtags: draft.hashtags,
+          cta: draft.cta,
+          status: 'draft_generated',
+        }),
+      });
+      if (!r.ok) {
+        setError('Saving draft failed. Please review the generated content and try again.');
+        savedAll = false;
+        break;
+      }
+    }
     setSaving(false);
+    if (savedAll) setError('Drafts saved to the publishing queue.');
   };
 
   const createCampaign = async (idea) => {
-    await apiFetch('/campaigns', {
+    const r = await apiFetch('/campaigns', {
       method: 'POST',
       body: JSON.stringify({
         name: idea.title,
@@ -335,14 +315,23 @@ export default function SocialStudioPage() {
         message: idea.focus,
       }),
     });
+    if (!r.ok) {
+      setError('Creating campaign failed.');
+      return;
+    }
     await loadCampaigns();
   };
 
   const saveKpi = async (e) => {
     e.preventDefault();
     setKpiSaving(true);
-    await apiFetch('/kpi/records', { method: 'POST', body: JSON.stringify(kpiForm) });
+    setError('');
+    const r = await apiFetch('/kpi/records', { method: 'POST', body: JSON.stringify(kpiForm) });
     setKpiSaving(false);
+    if (!r.ok) {
+      setError('Saving KPI record failed.');
+      return;
+    }
     setKpiForm({
       title: '', platform: 'facebook', post_url: '', campaign_name: '', spend: 0,
       impressions: 0, reach: 0, clicks: 0, leads: 0, messages: 0, calls: 0,
@@ -361,7 +350,7 @@ export default function SocialStudioPage() {
             Analyze Immich albums, pick social-worthy images, generate editable copy, plan campaigns, and track results.
           </p>
         </div>
-        <a href="/settings/social-studio" className="btn-secondary text-sm">Social Studio Settings</a>
+        <Link href="/settings/social-studio" className="btn-secondary text-sm">Social Studio Settings</Link>
       </div>
 
       <div className="card">
