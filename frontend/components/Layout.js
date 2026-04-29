@@ -6,6 +6,7 @@ const NAV = [
   { href: '/', label: 'Dashboard', icon: '🏠' },
   { href: '/social-studio', label: 'Social Studio', icon: '✨' },
   { href: '/publishing', label: 'Publishing', icon: '📅' },
+  { href: '/kpi', label: 'KPI', icon: '📈' },
   { href: '/settings', label: 'Settings', icon: '⚙️' },
 ];
 

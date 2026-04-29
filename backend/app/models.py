@@ -1,5 +1,5 @@
 from datetime import datetime, date
-from sqlalchemy import String, Integer, Boolean, DateTime, Date, Text, ForeignKey
+from sqlalchemy import String, Integer, Boolean, DateTime, Date, Text, ForeignKey, Float
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -86,3 +86,26 @@ class ContentDraft(Base):
     planned_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class PostMetric(Base):
+    __tablename__ = "post_metrics"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    draft_id: Mapped[int | None] = mapped_column(ForeignKey("content_drafts.id"), nullable=True)
+    campaign_id: Mapped[int | None] = mapped_column(ForeignKey("campaigns.id"), nullable=True)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    campaign_name: Mapped[str] = mapped_column(String(255), default="")
+    platform: Mapped[str] = mapped_column(String(100), default="facebook")
+    post_url: Mapped[str] = mapped_column(String(1000), default="")
+    post_id: Mapped[str] = mapped_column(String(255), default="")
+    posted_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    spend_cents: Mapped[int] = mapped_column(Integer, default=0)
+    impressions: Mapped[int] = mapped_column(Integer, default=0)
+    reach: Mapped[int] = mapped_column(Integer, default=0)
+    clicks: Mapped[int] = mapped_column(Integer, default=0)
+    engagements: Mapped[int] = mapped_column(Integer, default=0)
+    engagement_rate: Mapped[float] = mapped_column(Float, default=0)
+    leads: Mapped[int] = mapped_column(Integer, default=0)
+    messages: Mapped[int] = mapped_column(Integer, default=0)
+    calls: Mapped[int] = mapped_column(Integer, default=0)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
