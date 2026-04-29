@@ -1,7 +1,22 @@
-.env
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.env
+
+# Testing
+backend/test*.db
+
+# Node
 node_modules/
 .next/
-venv/
-.DS_Store
+frontend/.next/
+
+# Misc
+*.DS_Store
+.env.local
