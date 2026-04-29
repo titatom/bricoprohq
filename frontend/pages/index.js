@@ -1,29 +1,43 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import LoginForm from '../components/LoginForm';
-import StatusBadge from '../components/StatusBadge';
 
-const SOURCES = ['google_calendar', 'jobber', 'immich', 'paperless'];
+const SOURCES = ['google_calendar', 'jobber', 'immich', 'immich-gpt', 'paperless'];
 
 const SOURCE_META = {
   google_calendar: { label: 'Google Calendar', icon: '📅', color: 'brand' },
   jobber:          { label: 'Jobber',          icon: '🔧', color: 'brand' },
   immich:          { label: 'Immich / Photos', icon: '🖼️', color: 'brand' },
+  'immich-gpt':    { label: 'Immich-GPT',      icon: '🧠', color: 'brand' },
   paperless:       { label: 'Paperless',       icon: '📄', color: 'brand' },
 };
 
 const DEFAULT_QUICK_LINKS = [
-  { title: 'Jobber',                url: 'https://app.jobber.com',               category: 'Operations' },
-  { title: 'Google Calendar',       url: 'https://calendar.google.com',           category: 'Operations' },
-  { title: 'Gmail',                 url: 'https://mail.google.com',               category: 'Operations' },
-  { title: 'Paperless-ngx',        url: 'http://paperless.local',                category: 'Documents'  },
-  { title: 'Immich',               url: 'http://immich.local',                   category: 'Photos'     },
-  { title: 'WordPress Admin',      url: 'https://bricopro.ca/wp-admin',           category: 'Marketing'  },
-  { title: 'Meta Business Suite',  url: 'https://business.facebook.com',          category: 'Marketing'  },
-  { title: 'Google Business',      url: 'https://business.google.com',            category: 'Marketing'  },
-  { title: 'Canva',                url: 'https://canva.com',                      category: 'Marketing'  },
-  { title: 'Actual Budget',        url: 'http://actual.local',                   category: 'Finance'    },
+  { title: 'Jobber',               icon: '🔧', url: 'https://app.jobber.com',              category: 'Operations' },
+  { title: 'Google Calendar',      icon: '📅', url: 'https://calendar.google.com',          category: 'Operations' },
+  { title: 'Gmail',                icon: '✉️', url: 'https://mail.google.com',              category: 'Operations' },
+  { title: 'Paperless-ngx',        icon: '📄', url: 'http://paperless.local',               category: 'Documents'  },
+  { title: 'Immich',               icon: '🖼️', url: 'http://immich.local',                  category: 'Photos'     },
+  { title: 'WordPress Admin',      icon: '🌐', url: 'https://bricopro.ca/wp-admin',         category: 'Marketing'  },
+  { title: 'Meta Business Suite',  icon: '📣', url: 'https://business.facebook.com',        category: 'Marketing'  },
+  { title: 'Google Business',      icon: '⭐', url: 'https://business.google.com',           category: 'Marketing'  },
+  { title: 'Canva',                icon: '🎨', url: 'https://canva.com',                    category: 'Marketing'  },
+  { title: 'Actual Budget',        icon: '💸', url: 'http://actual.local',                  category: 'Finance'    },
 ];
+
+const QUICK_LINK_ICONS = {
+  jobber: '🔧',
+  'google calendar': '📅',
+  gmail: '✉️',
+  'paperless-ngx': '📄',
+  paperless: '📄',
+  immich: '🖼️',
+  'wordpress admin': '🌐',
+  'meta business suite': '📣',
+  'google business': '⭐',
+  canva: '🎨',
+  'actual budget': '💸',
+};
 
 function WidgetCard({ title, icon, status, stale, data, onRefresh, loading }) {
   const statusColor =
@@ -81,7 +95,7 @@ function QuickLinksWidget({ links, onAdd, onDelete }) {
           onSubmit={(e) => { e.preventDefault(); onAdd(form); setAdding(false); setForm({ title: '', url: '', category: 'Operations' }); }}
         >
           <input className="input flex-1 min-w-32" placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required />
-          <input className="input flex-1 min-w-48" placeholder="https://…" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} required />
+          <input className="input flex-1 min-w-48" placeholder="https://..." value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} required />
           <input className="input w-36" placeholder="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
           <button type="submit" className="btn-primary text-sm">Save</button>
         </form>
@@ -89,19 +103,21 @@ function QuickLinksWidget({ links, onAdd, onDelete }) {
       {categories.map((cat) => (
         <div key={cat} className="mb-3">
           <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide mb-2">{cat}</p>
-          <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 xl:grid-cols-8 gap-3">
             {links.filter((l) => (l.category || 'General') === cat).map((l) => (
-              <div key={l.id} className="flex items-center gap-1 bg-gray-100 rounded-lg px-3 py-1.5">
+              <div key={l.id} className="relative group">
                 <a
                   href={l.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-sm text-brand-700 hover:text-brand-900 font-medium"
+                  title={l.title}
+                  className="h-24 flex flex-col items-center justify-center gap-2 rounded-2xl border border-gray-100 bg-gray-50 hover:bg-brand-50 hover:border-brand-200 transition-colors"
                 >
-                  {l.title}
+                  <span className="text-3xl" aria-hidden="true">{l.icon && l.icon !== 'link' ? l.icon : QUICK_LINK_ICONS[l.title.toLowerCase()] || '🔗'}</span>
+                  <span className="sr-only">{l.title}</span>
                 </a>
                 <button
-                  className="text-gray-300 hover:text-red-400 ml-1 text-xs leading-none"
+                  className="absolute right-2 top-2 text-gray-300 hover:text-red-400 text-xs leading-none opacity-0 group-hover:opacity-100 transition-opacity"
                   onClick={() => onDelete(l.id)}
                   title="Remove"
                 >
@@ -117,11 +133,57 @@ function QuickLinksWidget({ links, onAdd, onDelete }) {
   );
 }
 
+function ProcessingSummary({ summary }) {
+  const cards = [
+    {
+      label: 'Images',
+      value: summary?.images_pending ?? 0,
+      detail: 'pending in Immich-GPT',
+      icon: '🧠',
+      color: 'from-brand-600 to-brand-700',
+    },
+    {
+      label: 'Documents',
+      value: summary?.documents_pending ?? 0,
+      detail: 'pending in Paperless-GPT',
+      icon: '📄',
+      color: 'from-accent-500 to-accent-600',
+    },
+    {
+      label: 'Review',
+      value: summary?.needs_review ?? 0,
+      detail: 'items need attention',
+      icon: '👀',
+      color: 'from-gray-700 to-gray-900',
+    },
+  ];
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      {cards.map((card) => (
+        <div key={card.label} className={`rounded-2xl bg-gradient-to-br ${card.color} p-5 text-white shadow-sm`}>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm text-white/75">{card.label} to process</p>
+              <p className="text-4xl font-black mt-2">{card.value}</p>
+            </div>
+            <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center text-xl">
+              {card.icon}
+            </span>
+          </div>
+          <p className="text-xs text-white/70 mt-4">{card.detail}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const { isLoggedIn, apiFetch } = useAuth();
   const [dashboard, setDashboard] = useState({});
   const [integrations, setIntegrations] = useState([]);
   const [quickLinks, setQuickLinks] = useState([]);
+  const [processingSummary, setProcessingSummary] = useState(null);
   const [refreshing, setRefreshing] = useState({});
 
   const loadDashboard = useCallback(async () => {
@@ -139,11 +201,16 @@ export default function DashboardPage() {
     if (r.ok) setQuickLinks(await r.json());
   }, [apiFetch]);
 
+  const loadProcessingSummary = useCallback(async () => {
+    const r = await apiFetch('/processing/summary');
+    if (r.ok) setProcessingSummary(await r.json());
+  }, [apiFetch]);
+
   const seedLinks = useCallback(async () => {
     for (const link of DEFAULT_QUICK_LINKS) {
       await apiFetch('/quick-links', {
         method: 'POST',
-        body: JSON.stringify({ ...link, icon: 'link', sort_order: 0, is_active: true }),
+        body: JSON.stringify({ ...link, sort_order: 0, is_active: true }),
       });
     }
     await loadQuickLinks();
@@ -153,6 +220,7 @@ export default function DashboardPage() {
     if (!isLoggedIn) return;
     loadDashboard();
     loadIntegrations();
+    loadProcessingSummary();
     loadQuickLinks().then(async () => {
       const r = await apiFetch('/quick-links');
       if (r.ok) {
@@ -167,13 +235,19 @@ export default function DashboardPage() {
     await apiFetch(`/dashboard/refresh/${source}`, { method: 'POST' });
     await loadDashboard();
     await loadIntegrations();
+    await loadProcessingSummary();
     setRefreshing((p) => ({ ...p, [source]: false }));
   };
 
   const addQuickLink = async (form) => {
     await apiFetch('/quick-links', {
       method: 'POST',
-      body: JSON.stringify({ ...form, icon: 'link', sort_order: 0, is_active: true }),
+      body: JSON.stringify({
+        ...form,
+        icon: QUICK_LINK_ICONS[form.title.toLowerCase()] || 'link',
+        sort_order: 0,
+        is_active: true,
+      }),
     });
     await loadQuickLinks();
   };
@@ -200,6 +274,15 @@ export default function DashboardPage() {
         </button>
       </div>
 
+      {/* Quick links */}
+      <QuickLinksWidget
+        links={quickLinks.filter((l) => l.is_active)}
+        onAdd={addQuickLink}
+        onDelete={deleteQuickLink}
+      />
+
+      <ProcessingSummary summary={processingSummary} />
+
       {/* Integration status bar */}
       <div className="flex gap-3 flex-wrap mb-6">
         {integrations.map((i) => (
@@ -210,7 +293,7 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* Dashboard widgets */}
+      {/* Integration widgets */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         {SOURCES.map((src) => {
           const meta = SOURCE_META[src];
@@ -230,14 +313,6 @@ export default function DashboardPage() {
         })}
       </div>
 
-      {/* Quick links */}
-      <div className="grid grid-cols-1">
-        <QuickLinksWidget
-          links={quickLinks.filter((l) => l.is_active)}
-          onAdd={addQuickLink}
-          onDelete={deleteQuickLink}
-        />
-      </div>
     </div>
   );
 }

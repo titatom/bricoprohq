@@ -156,6 +156,31 @@ class ImmichConnector(BaseConnector):
             raise ConnectorError(f"Immich request failed: {exc}") from exc
 
 
+class ImmichGptConnector(BaseConnector):
+    provider = "immich-gpt"
+
+    def fetch(self) -> dict:
+        self._require_config()
+        try:
+            r = httpx.get(
+                f"{self.base_url}/api/queue/summary",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=10,
+            )
+            r.raise_for_status()
+            data = r.json()
+            return {
+                "pending_images": data.get("pending_images", data.get("pending", 0)),
+                "needs_review": data.get("needs_review", 0),
+                "business_photos": data.get("business_photos", 0),
+                "personal_photos": data.get("personal_photos", 0),
+            }
+        except httpx.HTTPStatusError as exc:
+            raise ConnectorError(f"Immich-GPT HTTP error: {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise ConnectorError(f"Immich-GPT request failed: {exc}") from exc
+
+
 # ── Paperless ─────────────────────────────────────────────────────────────────
 
 class PaperlessConnector(BaseConnector):
@@ -193,6 +218,7 @@ _CONNECTORS = {
     "google_calendar": GoogleCalendarConnector,
     "jobber": JobberConnector,
     "immich": ImmichConnector,
+    "immich-gpt": ImmichGptConnector,
     "paperless": PaperlessConnector,
 }
 

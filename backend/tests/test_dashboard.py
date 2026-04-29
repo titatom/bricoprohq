@@ -49,6 +49,7 @@ def test_integrations_endpoint():
         assert r.status_code == 200
         providers = [i["provider"] for i in r.json()]
         assert "google_calendar" in providers
+        assert "immich-gpt" in providers
 
 
 def test_update_integration():
@@ -77,3 +78,27 @@ def test_quick_links_crud():
         assert any(l["id"] == link_id for l in r2.json())
         r3 = client.delete(f"/quick-links/{link_id}", headers=h)
         assert r3.status_code == 200
+
+
+def test_processing_summary_counts_immich_gpt_images():
+    app = make_client("test_dash_processing.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.post("/queues/assets", headers=h, json={
+            "title": "Business photo", "source": "immich-gpt", "status": "pending_ai",
+        })
+        client.post("/queues/assets", headers=h, json={
+            "title": "Personal photo", "source": "immich-gpt", "status": "personal_photo",
+        })
+        client.post("/queues/assets", headers=h, json={
+            "title": "Receipt", "source": "paperless-gpt", "status": "missing_tags",
+        })
+
+        r = client.get("/processing/summary", headers=h)
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["images_pending"] == 1
+        assert data["documents_pending"] == 1
+        assert data["personal_images"] == 1
+        assert data["image_source"] == "immich-gpt"

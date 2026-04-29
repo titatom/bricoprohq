@@ -4,12 +4,22 @@ import { useAuth } from '../context/AuthContext';
 
 const NAV = [
   { href: '/', label: 'Dashboard', icon: '🏠' },
-  { href: '/queues', label: 'Queues', icon: '📋' },
   { href: '/social-studio', label: 'Social Studio', icon: '✨' },
   { href: '/publishing', label: 'Publishing', icon: '📅' },
-  { href: '/campaigns', label: 'Campaigns', icon: '🎯' },
   { href: '/settings', label: 'Settings', icon: '⚙️' },
 ];
+
+function BrandMark({ size = 'md' }) {
+  const dimensions = size === 'lg' ? 'w-20 h-20 text-2xl' : 'w-11 h-11 text-base';
+
+  return (
+    <div className={`${dimensions} bg-accent-500 rounded-2xl flex items-center justify-center shadow-sm`}>
+      <div className="w-3/4 h-3/4 bg-brand-600 rounded-xl flex items-center justify-center border-2 border-white/85">
+        <span className="text-white font-black tracking-tighter leading-none">BP</span>
+      </div>
+    </div>
+  );
+}
 
 export default function Layout({ children }) {
   const { isLoggedIn, logout, user } = useAuth();
@@ -19,57 +29,45 @@ export default function Layout({ children }) {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Sidebar — navy */}
-      <aside className="w-56 bg-brand-600 flex flex-col flex-shrink-0">
+      <aside className="w-20 bg-brand-600 flex flex-col flex-shrink-0">
 
-        {/* Logo lockup */}
-        <div className="px-5 py-4 border-b border-brand-700">
-          {/* BP monogram box — mirrors the icon logo */}
-          <div className="flex items-center gap-3 mb-1">
-            <div className="flex-shrink-0 w-9 h-9 bg-accent-500 rounded flex items-center justify-center border-2 border-accent-500 shadow-sm">
-              <span className="text-white font-black text-sm tracking-tighter leading-none">BP</span>
-            </div>
-            <div>
-              <h1 className="text-white font-bold text-base leading-tight tracking-wide">BRICOPRO</h1>
-              <p className="text-brand-200 text-xs leading-tight">HQ</p>
-            </div>
-          </div>
+        <div className="px-4 py-5 border-b border-brand-700 flex justify-center">
+          <BrandMark />
         </div>
 
-        {/* Nav items */}
-        <nav className="flex-1 py-3 overflow-y-auto">
+        <nav className="flex-1 py-4 overflow-y-auto space-y-2">
           {NAV.map(({ href, label, icon }) => {
             const active = router.pathname === href;
             return (
               <Link
                 key={href}
                 href={href}
-                className={`flex items-center gap-3 px-5 py-2.5 text-sm transition-colors ${
+                aria-label={label}
+                title={label}
+                className={`mx-auto w-12 h-12 rounded-2xl flex items-center justify-center text-xl transition-colors ${
                   active
-                    ? 'bg-brand-700 text-white font-semibold border-l-2 border-accent-500'
-                    : 'text-brand-100 hover:bg-brand-700 hover:text-white border-l-2 border-transparent'
+                    ? 'bg-accent-500 text-white shadow-lg shadow-black/10'
+                    : 'text-brand-100 hover:bg-brand-700 hover:text-white'
                 }`}
               >
                 <span className="text-base">{icon}</span>
-                {label}
               </Link>
             );
           })}
         </nav>
 
-        {/* Footer */}
-        <div className="px-5 py-4 border-t border-brand-700">
-          <p className="text-brand-200 text-xs truncate mb-2 opacity-80">{user?.email || 'admin'}</p>
+        <div className="px-3 py-4 border-t border-brand-700">
           <button
             onClick={logout}
-            className="w-full text-xs text-brand-200 hover:text-accent-400 py-1 text-left transition-colors"
+            className="w-12 h-12 mx-auto rounded-2xl text-brand-200 hover:text-white hover:bg-brand-700 transition-colors flex items-center justify-center"
+            title={`Sign out ${user?.email || ''}`}
+            aria-label="Sign out"
           >
-            Sign out →
+            →
           </button>
         </div>
       </aside>
 
-      {/* Main content */}
       <main className="flex-1 overflow-y-auto bg-gray-50">
         {children}
       </main>

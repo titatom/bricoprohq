@@ -24,13 +24,11 @@ export default function LoginForm() {
     <div className="min-h-screen bg-brand-600 flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
 
-        {/* Logo card */}
+        {/* Logo mark only. */}
         <div className="flex flex-col items-center mb-8">
-          {/* Orange-bordered box mimicking the logo */}
-          <div className="border-4 border-accent-500 rounded-md px-6 py-3 mb-4 bg-brand-700 shadow-lg">
-            <span className="text-white font-black text-3xl tracking-widest">BRICOPRO</span>
+          <div className="w-20 h-20 bg-accent-500 rounded-2xl flex items-center justify-center shadow-xl ring-4 ring-white/10">
+            <span className="text-white font-black text-3xl tracking-tighter leading-none">BP</span>
           </div>
-          <p className="text-brand-200 text-sm tracking-wide uppercase">HQ — Business Command Center</p>
         </div>
 
         {/* Login card */}
