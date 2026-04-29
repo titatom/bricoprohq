@@ -69,7 +69,7 @@ function ResultCard({ result, onSave, saving }) {
   const [edited, setEdited] = useState({ ...result });
 
   return (
-    <div className="card mt-6 border-l-4 border-brand-500">
+    <div className="card mt-6 border-l-4 border-accent-500">
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold text-gray-800">Generated Content — {edited.title}</h3>
         <button className="btn-primary" onClick={() => onSave(edited)} disabled={saving}>

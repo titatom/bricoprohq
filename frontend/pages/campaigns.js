@@ -192,7 +192,7 @@ export default function CampaignsPage() {
             {SEASONAL_PRESETS.map((p) => (
               <button
                 key={p.name}
-                className="text-left p-3 rounded-lg border border-gray-200 hover:border-brand-300 hover:bg-brand-50 transition-colors"
+                className="text-left p-3 rounded-lg border border-gray-200 hover:border-accent-400 hover:bg-accent-50 transition-colors"
                 onClick={() => seedPreset(p)}
               >
                 <p className="font-medium text-gray-800 text-sm">{p.name}</p>

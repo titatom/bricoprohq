@@ -170,7 +170,7 @@ function AiProviderSection({ settings, onSave, onTest }) {
         {/* Provider tabs */}
         <div>
           <label className="label">Provider</label>
-          <div className="flex gap-1 p-1 bg-gray-100 rounded-lg w-fit">
+          <div className="flex gap-1 p-1 bg-brand-700 rounded-lg w-fit">
             {AI_PROVIDERS.map((p) => (
               <button
                 key={p.value}
@@ -178,8 +178,8 @@ function AiProviderSection({ settings, onSave, onTest }) {
                 onClick={() => handleProviderChange(p.value)}
                 className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
                   provider === p.value
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
+                    ? 'bg-white text-brand-600 shadow-sm font-semibold'
+                    : 'text-brand-300 hover:text-white'
                 }`}
               >
                 {p.label}

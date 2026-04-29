@@ -14,7 +14,7 @@ const KANBAN_COLS = [
   { key: 'idea',            label: 'Idea',           color: 'bg-purple-50 border-purple-200' },
   { key: 'draft_generated', label: 'Draft',          color: 'bg-yellow-50 border-yellow-200' },
   { key: 'needs_review',    label: 'Needs Review',   color: 'bg-orange-50 border-orange-200' },
-  { key: 'approved',        label: 'Approved',       color: 'bg-blue-50 border-blue-200'     },
+  { key: 'approved',        label: 'Approved',       color: 'bg-brand-50 border-brand-200'   },
   { key: 'scheduled',       label: 'Scheduled',      color: 'bg-cyan-50 border-cyan-200'     },
   { key: 'posted',          label: 'Posted',         color: 'bg-green-50 border-green-200'   },
 ];
@@ -227,7 +227,7 @@ export default function PublishingPage() {
               key={key}
               onClick={() => setView(key)}
               className={`px-4 py-2 text-sm font-medium transition-colors flex items-center gap-1.5 ${
-                view === key ? 'bg-brand-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                view === key ? 'bg-brand-600 text-white' : 'bg-white text-brand-600 hover:bg-brand-50'
               }`}
             >
               {icon} {label}
