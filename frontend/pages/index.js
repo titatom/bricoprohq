@@ -25,19 +25,33 @@ const DEFAULT_QUICK_LINKS = [
   { title: 'Actual Budget',        icon: '💸', url: 'http://actual.local',                  category: 'Finance'    },
 ];
 
-const QUICK_LINK_ICONS = {
-  jobber: '🔧',
-  'google calendar': '📅',
-  gmail: '✉️',
-  'paperless-ngx': '📄',
-  paperless: '📄',
-  immich: '🖼️',
-  'wordpress admin': '🌐',
-  'meta business suite': '📣',
-  'google business': '⭐',
-  canva: '🎨',
-  'actual budget': '💸',
+const QUICK_LINK_LOGO_DOMAINS = {
+  jobber: 'jobber.com',
+  'google calendar': 'calendar.google.com',
+  gmail: 'mail.google.com',
+  'paperless-ngx': 'docs.paperless-ngx.com',
+  paperless: 'docs.paperless-ngx.com',
+  immich: 'immich.app',
+  'wordpress admin': 'wordpress.org',
+  'meta business suite': 'facebook.com',
+  'google business': 'business.google.com',
+  canva: 'canva.com',
+  'actual budget': 'actualbudget.org',
 };
+
+function logoDomainFor(link) {
+  const knownDomain = QUICK_LINK_LOGO_DOMAINS[link.title.toLowerCase()];
+  if (knownDomain) return knownDomain;
+  try {
+    return new URL(link.url).hostname;
+  } catch {
+    return 'example.com';
+  }
+}
+
+function logoUrlFor(link) {
+  return `https://www.google.com/s2/favicons?domain=${logoDomainFor(link)}&sz=64`;
+}
 
 function WidgetCard({ title, icon, status, stale, data, onRefresh, loading }) {
   const statusColor =
@@ -79,12 +93,11 @@ function WidgetCard({ title, icon, status, stale, data, onRefresh, loading }) {
 function QuickLinksWidget({ links, onAdd, onDelete }) {
   const [form, setForm] = useState({ title: '', url: '', category: 'Operations' });
   const [adding, setAdding] = useState(false);
-  const categories = [...new Set(links.map((l) => l.category || 'General'))];
 
   return (
-    <div className="card col-span-full">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="font-semibold text-gray-800 flex items-center gap-2"><span>🔗</span> Quick Links</h3>
+    <div className="card col-span-full py-3 mb-6">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="font-semibold text-gray-800 text-sm">Quick Links</h3>
         <button className="btn-secondary text-xs py-1 px-3" onClick={() => setAdding((v) => !v)}>
           {adding ? 'Cancel' : '+ Add Link'}
         </button>
@@ -100,35 +113,40 @@ function QuickLinksWidget({ links, onAdd, onDelete }) {
           <button type="submit" className="btn-primary text-sm">Save</button>
         </form>
       )}
-      {categories.map((cat) => (
-        <div key={cat} className="mb-3">
-          <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide mb-2">{cat}</p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 xl:grid-cols-8 gap-3">
-            {links.filter((l) => (l.category || 'General') === cat).map((l) => (
-              <div key={l.id} className="relative group">
-                <a
-                  href={l.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={l.title}
-                  className="h-24 flex flex-col items-center justify-center gap-2 rounded-2xl border border-gray-100 bg-gray-50 hover:bg-brand-50 hover:border-brand-200 transition-colors"
-                >
-                  <span className="text-3xl" aria-hidden="true">{l.icon && l.icon !== 'link' ? l.icon : QUICK_LINK_ICONS[l.title.toLowerCase()] || '🔗'}</span>
-                  <span className="sr-only">{l.title}</span>
-                </a>
-                <button
-                  className="absolute right-2 top-2 text-gray-300 hover:text-red-400 text-xs leading-none opacity-0 group-hover:opacity-100 transition-opacity"
-                  onClick={() => onDelete(l.id)}
-                  title="Remove"
-                >
-                  ×
-                </button>
-              </div>
-            ))}
+      {links.length > 0 ? (
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          {links.map((link) => (
+            <div key={link.id} className="relative group flex-shrink-0">
+              <a
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={link.title}
+                aria-label={link.title}
+                className="w-11 h-11 rounded-xl border border-gray-100 bg-white hover:bg-brand-50 hover:border-brand-200 shadow-sm flex items-center justify-center transition-colors"
+              >
+                <img
+                  src={logoUrlFor(link)}
+                  alt=""
+                  className="w-6 h-6 object-contain"
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                />
+              </a>
+              <button
+                className="absolute -right-1 -top-1 w-4 h-4 rounded-full bg-white border border-gray-200 text-gray-300 hover:text-red-400 text-xs leading-none opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={() => onDelete(link.id)}
+                title={`Remove ${link.title}`}
+                aria-label={`Remove ${link.title}`}
+              >
+                ×
+              </button>
           </div>
+          ))}
         </div>
-      ))}
-      {links.length === 0 && <p className="text-sm text-gray-400">No quick links yet. Add some above.</p>}
+      ) : (
+        <p className="text-sm text-gray-400">No quick links yet. Add some above.</p>
+      )}
     </div>
   );
 }
@@ -145,7 +163,7 @@ function ProcessingSummary({ summary }) {
     {
       label: 'Documents',
       value: summary?.documents_pending ?? 0,
-      detail: 'pending in Paperless-GPT',
+      detail: 'pending in Paperless / Paperless-GPT',
       icon: '📄',
       color: 'from-accent-500 to-accent-600',
     },
@@ -244,7 +262,7 @@ export default function DashboardPage() {
       method: 'POST',
       body: JSON.stringify({
         ...form,
-        icon: QUICK_LINK_ICONS[form.title.toLowerCase()] || 'link',
+        icon: 'link',
         sort_order: 0,
         is_active: true,
       }),
@@ -261,6 +279,12 @@ export default function DashboardPage() {
 
   return (
     <div className="p-6">
+      <QuickLinksWidget
+        links={quickLinks.filter((l) => l.is_active)}
+        onAdd={addQuickLink}
+        onDelete={deleteQuickLink}
+      />
+
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Dashboard</h2>
@@ -273,13 +297,6 @@ export default function DashboardPage() {
           Refresh All
         </button>
       </div>
-
-      {/* Quick links */}
-      <QuickLinksWidget
-        links={quickLinks.filter((l) => l.is_active)}
-        onAdd={addQuickLink}
-        onDelete={deleteQuickLink}
-      />
 
       <ProcessingSummary summary={processingSummary} />
 

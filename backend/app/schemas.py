@@ -1,4 +1,3 @@
-from typing import Literal
 from pydantic import BaseModel, field_validator
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -102,6 +101,10 @@ class SocialGenerateIn(BaseModel):
     job_description: str = ""
     city: str = "Montréal"
     cta: str = "request_quote"
+    album_id: str = ""
+    candidate_id: int | None = None
+    image_refs: str = ""
+    before_after_notes: str = ""
 
     @field_validator("platform")
     @classmethod
@@ -164,3 +167,25 @@ class CampaignIn(BaseModel):
         if v not in CAMPAIGN_STATUSES:
             raise ValueError(f"Invalid campaign status '{v}'")
         return v
+
+# ── KPI / Performance ─────────────────────────────────────────────────────────
+
+class PostMetricIn(BaseModel):
+    draft_id: int | None = None
+    campaign_id: int | None = None
+    title: str = ""
+    campaign_name: str = ""
+    platform: str
+    post_url: str = ""
+    post_id: str = ""
+    published_date: str | None = None
+    spend: float = 0
+    impressions: int = 0
+    reach: int = 0
+    clicks: int = 0
+    leads: int = 0
+    messages: int = 0
+    calls: int = 0
+    engagements: int = 0
+    engagement_rate: float = 0
+    notes: str = ""

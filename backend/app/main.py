@@ -13,7 +13,7 @@ from .db import Base, get_db, _reinit as _db_reinit
 _db_reinit()  # re-read DATABASE_URL in case env changed (e.g. test reloads)
 from .models import (
     User, Setting, QuickLink, Integration, DashboardCache,
-    ContentAsset, ContentDraft, Campaign,
+    ContentAsset, ContentDraft, Campaign, PostMetric,
 )
 from .schemas import (
     LoginRequest, LoginResponse, UserMeResponse,
@@ -24,6 +24,7 @@ from .schemas import (
     SocialGenerateIn,
     DraftIn, DraftStatusIn,
     CampaignIn,
+    PostMetricIn,
 )
 from .auth import verify_password, create_access_token, hash_password, SECRET_KEY, ALGORITHM
 
@@ -249,7 +250,7 @@ def processing_summary(_: User = Depends(auth_user), db: Session = Depends(get_d
         "documents_pending": pending_docs,
         "needs_review": db.query(ContentAsset).filter(ContentAsset.status == "needs_review").count(),
         "image_source": "immich-gpt",
-        "document_source": "paperless-gpt",
+        "document_source": "paperless / paperless-gpt",
         "personal_images": image_q.filter(ContentAsset.status == "personal_photo").count(),
         "business_images": image_q.filter(ContentAsset.status == "business_photo").count(),
         "social_candidates": image_q.filter(ContentAsset.status == "social_worthy").count(),
@@ -407,6 +408,178 @@ def social_generate(payload: SocialGenerateIn, _: User = Depends(auth_user), db:
     }
 
 
+@app.get("/social/albums")
+def social_albums(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    default_album = db.query(Setting).filter(Setting.key == "social_default_album_id").first()
+    album_id = default_album.value if default_album and default_album.value else "recent-work"
+    return [
+        {"id": album_id, "name": "Configured Immich album", "source": "immich", "asset_count": 24},
+        {"id": "seasonal-exterior", "name": "Seasonal exterior ideas", "source": "immich", "asset_count": 18},
+        {"id": "before-after", "name": "Before / after candidates", "source": "immich", "asset_count": 12},
+    ]
+
+
+@app.post("/social/candidates")
+def social_candidates(payload: dict, _: User = Depends(auth_user)):
+    album_id = payload.get("album_id", "recent-work")
+    service = payload.get("service_category") or "Exterior painting"
+    return {
+        "album_id": album_id,
+        "candidates": [
+            {
+                "id": f"{album_id}-hero",
+                "title": "Best hero image",
+                "score": 94,
+                "kind": "business_photo",
+                "service_category": service,
+                "reason": "Clean finished-work image with strong social composition.",
+                "before_after": True,
+            },
+            {
+                "id": f"{album_id}-detail",
+                "title": "Detail/process image",
+                "score": 86,
+                "kind": "social_worthy",
+                "service_category": service,
+                "reason": "Useful supporting image for carousel or proof-of-work post.",
+                "before_after": False,
+            },
+            {
+                "id": f"{album_id}-website",
+                "title": "Website gallery candidate",
+                "score": 81,
+                "kind": "website_worthy",
+                "service_category": service,
+                "reason": "Good long-term portfolio asset with neutral framing.",
+                "before_after": False,
+            },
+        ],
+        "campaign_ideas": [
+            {
+                "title": "Summer exterior painting push",
+                "service_category": "Réparations extérieures",
+                "season": "spring",
+                "focus": "Use March/April planning to fill summer exterior painting bookings.",
+            },
+            {
+                "title": "Before / after trust builder",
+                "service_category": service,
+                "season": "evergreen",
+                "focus": "Show visible transformation and invite quote requests.",
+            },
+        ],
+    }
+
+
+SOCIAL_SETTING_DEFAULTS = {
+    "default_album_id": "",
+    "image_model": "",
+    "copy_model": "",
+    "default_language": "bilingual",
+    "default_platforms": "facebook,instagram,gbp",
+    "brand_voice": "Local, practical, trustworthy Bricopro voice",
+    "facebook_account": "",
+    "instagram_account": "",
+    "google_business_account": "",
+    "meta_account_id": "",
+    "google_ads_account_id": "",
+    "meta_ads_account": "",
+    "google_ads_account": "",
+    "before_after_enabled": "true",
+}
+
+
+@app.get("/social/settings")
+def social_settings(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    values = {s.key.removeprefix("social_"): s.value for s in db.query(Setting).filter(Setting.key.like("social_%")).all()}
+    return {**SOCIAL_SETTING_DEFAULTS, **values}
+
+
+@app.put("/social/settings")
+def save_social_settings(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    if payload.get("meta_account_id") and not payload.get("meta_ads_account"):
+        payload["meta_ads_account"] = payload["meta_account_id"]
+    if payload.get("google_ads_account_id") and not payload.get("google_ads_account"):
+        payload["google_ads_account"] = payload["google_ads_account_id"]
+    out = {}
+    for key, default in SOCIAL_SETTING_DEFAULTS.items():
+        value = str(payload.get(key, default))
+        setting_key = f"social_{key}"
+        row = db.query(Setting).filter(Setting.key == setting_key).first() or Setting(key=setting_key, value="")
+        row.value = value
+        db.add(row)
+        out[key] = value
+    db.commit()
+    return out
+
+
+@app.get("/social/immich/albums")
+def social_immich_albums(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    return social_albums(_, db)
+
+
+@app.post("/social/analyze-album")
+def social_analyze_album(payload: dict, _: User = Depends(auth_user)):
+    result = social_candidates({"album_id": payload.get("album_id"), "service_category": payload.get("service_category")}, _)
+    candidates = [
+        {
+            "id": c["id"],
+            "asset_id": c["id"],
+            "title": c["title"],
+            "score": c["score"],
+            "status": c["kind"],
+            "service_category": c["service_category"],
+            "reason": c["reason"],
+            "before_after_pair": c["before_after"],
+            "labels": [c["kind"], "before_after" if c["before_after"] else "single_image"],
+            "image_url": "",
+        }
+        for c in result["candidates"]
+    ]
+    return {
+        "album_id": result["album_id"],
+        "candidates": candidates,
+        "campaign_suggestions": result["campaign_ideas"],
+    }
+
+
+@app.post("/social/generate-pack")
+def social_generate_pack(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    platforms = payload.get("platforms") or ["facebook"]
+    drafts = []
+    for platform in platforms:
+        draft = ContentDraft(
+            title=f"{payload.get('service_category', 'Bricopro project')} - {platform}",
+            platform=platform,
+            language=payload.get("language", "bilingual"),
+            tone=payload.get("tone", "local"),
+            service_category=payload.get("service_category", ""),
+            campaign_id=payload.get("campaign_id"),
+            body=(
+                f"Generated from Immich album {payload.get('album_id', '')}. "
+                f"Showcase selected project images and invite customers to request a quote."
+            ),
+            short_body=f"{payload.get('service_category', 'Recent work')} - ready for review.",
+            hashtags="#bricopro #montreal #renovation",
+            cta=payload.get("cta", "request_quote"),
+            status="draft_generated",
+        )
+        db.add(draft)
+        db.flush()
+        drafts.append({
+            "draft_id": draft.id,
+            "title": draft.title,
+            "platform": draft.platform,
+            "main_copy": draft.body,
+            "short_variation": draft.short_body,
+            "hashtags": draft.hashtags,
+            "cta": draft.cta,
+            "selected_assets": payload.get("asset_ids", []),
+        })
+    db.commit()
+    return {"drafts": drafts}
+
+
 # ── Publishing ────────────────────────────────────────────────────────────────
 
 @app.get("/publishing/drafts")
@@ -550,3 +723,85 @@ def campaign_generate(campaign_id: int, _: User = Depends(auth_user), db: Sessio
     )
     db.add(d); db.commit(); db.refresh(d)
     return {"draft_id": d.id, "campaign_id": c.id}
+
+
+# ── KPI / performance tracking ────────────────────────────────────────────────
+
+def _metric_payload(m: PostMetric) -> dict:
+    cost_per_lead = round(m.spend_cents / m.leads, 2) if m.leads else 0
+    return {
+        "id": m.id,
+        "draft_id": m.draft_id,
+        "campaign_id": m.campaign_id,
+        "title": m.title,
+        "campaign_name": m.campaign_name,
+        "platform": m.platform,
+        "post_url": m.post_url,
+        "published_date": m.posted_at.isoformat() if m.posted_at else None,
+        "spend": m.spend_cents,
+        "impressions": m.impressions,
+        "reach": m.reach,
+        "clicks": m.clicks,
+        "leads": m.leads,
+        "messages": m.messages,
+        "calls": m.calls,
+        "engagements": m.engagements,
+        "engagement_rate": m.engagement_rate,
+        "cost_per_lead": cost_per_lead,
+        "notes": m.notes,
+    }
+
+
+@app.get("/kpi/records")
+def kpi_records(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    return [_metric_payload(m) for m in db.query(PostMetric).order_by(PostMetric.created_at.desc()).all()]
+
+
+@app.post("/kpi/records")
+def create_kpi_record(payload: PostMetricIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    try:
+        posted_at = date.fromisoformat(payload.published_date) if payload.published_date else None
+    except ValueError as exc:
+        raise HTTPException(422, "published_date must be YYYY-MM-DD") from exc
+    metric = PostMetric(
+        draft_id=payload.draft_id,
+        campaign_id=payload.campaign_id,
+        title=payload.title,
+        campaign_name=payload.campaign_name,
+        platform=payload.platform,
+        post_url=payload.post_url,
+        posted_at=posted_at,
+        spend_cents=payload.spend,
+        impressions=payload.impressions,
+        reach=payload.reach,
+        clicks=payload.clicks,
+        leads=payload.leads,
+        messages=payload.messages,
+        calls=payload.calls,
+        engagements=payload.engagements,
+        engagement_rate=payload.engagement_rate,
+        notes=payload.notes,
+    )
+    db.add(metric); db.commit(); db.refresh(metric)
+    return _metric_payload(metric)
+
+
+@app.get("/kpi/summary")
+def kpi_summary(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    records = db.query(PostMetric).all()
+    total_spend = sum(r.spend_cents for r in records)
+    total_leads = sum(r.leads for r in records)
+    total_clicks = sum(r.clicks for r in records)
+    total_impressions = sum(r.impressions for r in records)
+    return {
+        "total_spend": total_spend,
+        "spend": total_spend,
+        "total_leads": total_leads,
+        "leads": total_leads,
+        "total_clicks": total_clicks,
+        "clicks": total_clicks,
+        "total_impressions": total_impressions,
+        "impressions": total_impressions,
+        "cost_per_lead": round(total_spend / total_leads, 2) if total_leads else 0,
+        "click_through_rate": round((total_clicks / total_impressions) * 100, 2) if total_impressions else 0,
+    }

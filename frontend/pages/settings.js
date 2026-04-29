@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import LoginForm from '../components/LoginForm';
@@ -393,6 +394,20 @@ export default function SettingsPage() {
     <div className="p-6 max-w-3xl">
       <h2 className="text-2xl font-bold text-gray-900 mb-1">Settings</h2>
       <p className="text-gray-500 text-sm mb-8">Configure the AI provider and integration credentials. All values are saved to the database and persist across restarts.</p>
+
+      <div className="card mb-8 border-l-4 border-accent-500">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h3 className="font-semibold text-gray-800">Social Studio Settings</h3>
+            <p className="text-sm text-gray-500 mt-1">
+              Configure Immich albums, model choices, account defaults, and KPI preferences separately from core integrations.
+            </p>
+          </div>
+          <Link href="/settings/social-studio" className="btn-primary text-sm whitespace-nowrap">
+            Open Social Studio Settings
+          </Link>
+        </div>
+      </div>
 
       {/* AI Provider */}
       <section className="mb-8">
