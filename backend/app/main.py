@@ -8,7 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from jose import jwt, JWTError
 
-from .db import Base, engine, get_db
+from . import db as _db_module
+from .db import Base, get_db, _reinit as _db_reinit
+_db_reinit()  # re-read DATABASE_URL in case env changed (e.g. test reloads)
 from .models import (
     User, Setting, QuickLink, Integration, DashboardCache,
     ContentAsset, ContentDraft, Campaign,
@@ -38,7 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-Base.metadata.create_all(bind=engine)
+Base.metadata.create_all(bind=_db_module.engine)
 
 SOURCES = ["google_calendar", "jobber", "immich", "paperless"]
 CACHE_TTL_MINUTES = 15
@@ -289,28 +291,40 @@ def set_asset_status(
     return {"updated": True}
 
 
+# ── AI test connection ────────────────────────────────────────────────────────
+
+@app.post("/ai/test")
+def ai_test(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    from .services.ai import test_connection, AINotConfigured, AIError
+    try:
+        result = test_connection(db)
+        return {"ok": True, "message": result.get("message", "Connection successful"), "provider": result.get("provider"), "model": result.get("model")}
+    except AINotConfigured as exc:
+        raise HTTPException(400, str(exc))
+    except AIError as exc:
+        raise HTTPException(502, str(exc))
+
+
 # ── Social Studio ─────────────────────────────────────────────────────────────
 
-@app.post("/social/generate")
-def social_generate(payload: SocialGenerateIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
-    title = f"{payload.service_category} — {payload.platform}"
-
-    # Build content based on language
-    if payload.language == "fr":
+def _template_fallback(payload: SocialGenerateIn) -> dict:
+    """Simple template-based copy used when no AI provider is configured."""
+    lang = payload.language
+    if lang == "fr":
         body = (
             f"✅ Travaux récents : {payload.service_category} à {payload.city}.\n\n"
             f"{payload.job_description}\n\n"
-            f"Bricopro est votre entrepreneur local de confiance. "
-            f"Licencié et assuré. Demandez votre soumission gratuite aujourd'hui !"
+            "Bricopro est votre entrepreneur local de confiance. "
+            "Licencié et assuré. Demandez votre soumission gratuite aujourd'hui !"
         )
         short = f"{payload.service_category} à {payload.city} — travaux professionnels. Contactez Bricopro !"
         tags = "#montreal #bricopro #renovation #entrepreneur"
-    elif payload.language == "en":
+    elif lang == "en":
         body = (
             f"✅ Recent work: {payload.service_category} in {payload.city}.\n\n"
             f"{payload.job_description}\n\n"
-            f"Bricopro is your trusted local contractor. "
-            f"Licensed and insured. Request your free estimate today!"
+            "Bricopro is your trusted local contractor. "
+            "Licensed and insured. Request your free estimate today!"
         )
         short = f"{payload.service_category} in {payload.city} — professional work. Contact Bricopro!"
         tags = "#montreal #bricopro #renovation #contractor"
@@ -318,22 +332,29 @@ def social_generate(payload: SocialGenerateIn, _: User = Depends(auth_user), db:
         body = (
             f"✅ {payload.service_category} à {payload.city} / in {payload.city}.\n\n"
             f"{payload.job_description}\n\n"
-            f"Bricopro — entrepreneur local / local contractor. Licencié et assuré / Licensed and insured."
+            "Bricopro — entrepreneur local / local contractor. Licencié et assuré / Licensed and insured."
         )
         short = f"{payload.service_category} — Bricopro, Montréal"
         tags = "#montreal #bricopro #renovation #entrepreneur #contractor"
+    return {"main_copy": body, "short_variation": short, "hashtags": tags, "cta_text": "", "notes": "No AI provider configured — template used. Set up an AI provider in Settings for richer copy."}
 
-    cta_labels = {
-        "request_quote": "Demandez une soumission / Request a quote",
-        "book_spring": "Réservez vos travaux de printemps",
-        "book_winter": "Réservez avant l'hiver",
-        "visit_website": "Visitez notre site / Visit our website",
-        "call_message": "Appelez ou écrivez-nous / Call or message us",
-        "ask_availability": "Demandez nos disponibilités",
-        "leave_review": "Laissez un avis / Leave a review",
-        "see_projects": "Voir nos projets / See our projects",
-    }
-    cta_text = cta_labels.get(payload.cta, payload.cta)
+
+@app.post("/social/generate")
+def social_generate(payload: SocialGenerateIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    from .services.ai import generate_social_content, AINotConfigured, AIError
+
+    title = f"{payload.service_category} — {payload.platform}"
+    ai_used = True
+
+    try:
+        generated = generate_social_content(payload.model_dump(), db)
+    except AINotConfigured as exc:
+        log.warning("AI not configured, using template fallback: %s", exc)
+        generated = _template_fallback(payload)
+        ai_used = False
+    except AIError as exc:
+        log.error("AI generation failed: %s", exc)
+        raise HTTPException(502, f"AI generation failed: {exc}")
 
     d = ContentDraft(
         title=title,
@@ -341,9 +362,9 @@ def social_generate(payload: SocialGenerateIn, _: User = Depends(auth_user), db:
         language=payload.language,
         tone=payload.tone,
         service_category=payload.service_category,
-        body=body,
-        short_body=short,
-        hashtags=tags,
+        body=generated["main_copy"],
+        short_body=generated["short_variation"],
+        hashtags=generated["hashtags"],
         cta=payload.cta,
         status="draft_generated",
     )
@@ -353,9 +374,10 @@ def social_generate(payload: SocialGenerateIn, _: User = Depends(auth_user), db:
         "title": d.title,
         "main_copy": d.body,
         "short_variation": d.short_body,
-        "cta": cta_text,
+        "cta": generated.get("cta_text") or payload.cta,
         "hashtags": d.hashtags,
-        "notes": "Review and edit before publishing. Do not post automatically.",
+        "notes": generated.get("notes", "Review and edit before publishing."),
+        "ai_used": ai_used,
     }
 
 
