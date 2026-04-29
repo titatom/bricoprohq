@@ -42,8 +42,10 @@ app.add_middleware(
 
 Base.metadata.create_all(bind=_db_module.engine)
 
-SOURCES = ["google_calendar", "jobber", "immich", "paperless"]
+SOURCES = ["google_calendar", "jobber", "immich", "immich-gpt", "paperless"]
 CACHE_TTL_MINUTES = 15
+PENDING_IMAGE_STATUSES = {"new", "pending_ai", "needs_review"}
+PENDING_DOC_STATUSES = {"new", "pending_ai", "needs_review", "missing_tags", "missing_correspondent", "missing_document_type"}
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -228,6 +230,30 @@ def dashboard(_: User = Depends(auth_user), db: Session = Depends(get_db)):
             "data": {} if not c else json.loads(c.data_json),
         }
     return out
+
+
+# ── Processing summary ────────────────────────────────────────────────────────
+
+@app.get("/processing/summary")
+def processing_summary(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    image_q = db.query(ContentAsset).filter(ContentAsset.source.in_(["immich", "immich-gpt"]))
+    doc_q = db.query(ContentAsset).filter(ContentAsset.source.in_(["paperless", "paperless-gpt"]))
+    pending_images = image_q.filter(
+        ContentAsset.source == "immich-gpt",
+        ContentAsset.status.in_(PENDING_IMAGE_STATUSES),
+    ).count()
+    pending_docs = doc_q.filter(ContentAsset.status.in_(PENDING_DOC_STATUSES)).count()
+
+    return {
+        "images_pending": pending_images,
+        "documents_pending": pending_docs,
+        "needs_review": db.query(ContentAsset).filter(ContentAsset.status == "needs_review").count(),
+        "image_source": "immich-gpt",
+        "document_source": "paperless-gpt",
+        "personal_images": image_q.filter(ContentAsset.status == "personal_photo").count(),
+        "business_images": image_q.filter(ContentAsset.status == "business_photo").count(),
+        "social_candidates": image_q.filter(ContentAsset.status == "social_worthy").count(),
+    }
 
 
 # ── Queues ────────────────────────────────────────────────────────────────────

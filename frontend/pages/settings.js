@@ -89,10 +89,19 @@ const INTEGRATION_FIELDS = {
   immich: {
     label: 'Immich',
     icon: '🖼️',
-    description: 'Show recent photos and pending review queue.',
+    description: 'Connect source albums and recent photo context.',
     fields: [
       { key: 'base_url', label: 'Immich Base URL', placeholder: 'http://192.168.1.x:2283', help: 'Your Immich server URL on the local network' },
       { key: 'api_key',  label: 'Immich API Key',  placeholder: 'API key from Immich settings', type: 'password', help: 'Immich → Account → API Keys → New API Key' },
+    ],
+  },
+  'immich-gpt': {
+    label: 'Immich-GPT',
+    icon: '🤖',
+    description: 'Classify photos between personal, business, and social candidates.',
+    fields: [
+      { key: 'base_url', label: 'Immich-GPT Base URL', placeholder: 'http://192.168.1.x:3000', help: 'Your Immich-GPT service URL on the local network' },
+      { key: 'api_key',  label: 'Immich-GPT API Key',  placeholder: 'Service API key or token', type: 'password', help: 'Used by processing summaries and image classification flows' },
     ],
   },
   paperless: {
