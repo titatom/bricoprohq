@@ -516,6 +516,7 @@ def social_analyze_album(payload: dict, _: User = Depends(auth_user)):
     result = social_candidates({"album_id": payload.get("album_id"), "service_category": payload.get("service_category")}, _)
     candidates = [
         {
+            "id": c["id"],
             "asset_id": c["id"],
             "title": c["title"],
             "score": c["score"],
