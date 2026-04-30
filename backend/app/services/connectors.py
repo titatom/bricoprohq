@@ -70,6 +70,12 @@ class BaseConnector:
                 f"{self.provider}: api_key not configured. Set it in Settings."
             )
 
+    def _require_base_url(self):
+        if not self.base_url:
+            raise ConnectorNotConfigured(
+                f"{self.provider}: base_url not configured. Set it in Settings."
+            )
+
     def fetch(self) -> dict:
         raise NotImplementedError
 
@@ -81,6 +87,18 @@ def _json_or_connector_error(response: httpx.Response, service_name: str):
         body = response.text.strip()
         snippet = body[:120] if body else "<empty response>"
         raise ConnectorError(f"{service_name} returned a non-JSON response: {snippet}") from exc
+
+
+def _raise_http_status(exc: httpx.HTTPStatusError, service_name: str):
+    status = exc.response.status_code
+    path = exc.request.url.path
+    if status == 401:
+        hint = "authentication rejected; check the API key/auth mode"
+    elif status == 404:
+        hint = "endpoint not found; check the base URL and service API version"
+    else:
+        hint = "request failed"
+    raise ConnectorError(f"{service_name} HTTP error {status} at {path}: {hint}") from exc
 
 
 def _google_oauth_config(integration: Integration) -> dict:
@@ -287,6 +305,45 @@ class JobberConnector(BaseConnector):
 class ImmichConnector(BaseConnector):
     provider = "immich"
 
+    def _fetch_album_assets(self, album_id: str, headers: dict) -> list:
+        r = httpx.get(
+            f"{self.base_url}/api/albums/{album_id}",
+            headers=headers,
+            timeout=10,
+        )
+        r.raise_for_status()
+        album = _json_or_connector_error(r, "Immich")
+        if isinstance(album, dict):
+            return album.get("assets", [])
+        return []
+
+    def _fetch_recent_assets(self, limit: int, headers: dict) -> list:
+        r = httpx.post(
+            f"{self.base_url}/api/search/metadata",
+            json={"page": 1, "size": limit},
+            headers={**headers, "Content-Type": "application/json"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = _json_or_connector_error(r, "Immich")
+        if isinstance(data, list):
+            return data
+        if not isinstance(data, dict):
+            return []
+        assets = data.get("assets", data)
+        if isinstance(assets, list):
+            return assets
+        if isinstance(assets, dict):
+            for key in ("items", "results", "assets"):
+                value = assets.get(key)
+                if isinstance(value, list):
+                    return value
+        for key in ("items", "results"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
+        return []
+
     def fetch(self) -> dict:
         self._require_config()
         try:
@@ -294,22 +351,9 @@ class ImmichConnector(BaseConnector):
             album_id = self._setting("dashboard.immich.album_id", self.config.get("dashboard_album_id", "")).strip()
             limit = self._int_setting("dashboard.immich.limit", 6)
             if album_id:
-                r = httpx.get(
-                    f"{self.base_url}/api/albums/{album_id}",
-                    headers=headers,
-                    timeout=10,
-                )
+                assets = self._fetch_album_assets(album_id, headers)
             else:
-                r = httpx.get(
-                    f"{self.base_url}/api/asset",
-                    params={"take": limit, "skip": 0},
-                    headers=headers,
-                    timeout=10,
-                )
-            r.raise_for_status()
-            assets = _json_or_connector_error(r, "Immich")
-            if isinstance(assets, dict):
-                assets = assets.get("assets", [])
+                assets = self._fetch_recent_assets(limit, headers)
             if not isinstance(assets, list):
                 return {"recent_assets": [], "returned": 0, "album_id": album_id}
             recent = [
@@ -324,7 +368,7 @@ class ImmichConnector(BaseConnector):
             ]
             return {"recent_assets": recent, "returned": len(assets), "album_id": album_id}
         except httpx.HTTPStatusError as exc:
-            raise ConnectorError(f"Immich HTTP error: {exc.response.status_code}") from exc
+            _raise_http_status(exc, "Immich")
         except httpx.RequestError as exc:
             raise ConnectorError(f"Immich request failed: {exc}") from exc
 
@@ -422,23 +466,71 @@ class PaperlessConnector(BaseConnector):
 class PaperlessGptConnector(BaseConnector):
     provider = "paperless-gpt"
 
+    def _headers(self) -> dict:
+        auth_mode = self.config.get("auth_mode", "none").strip().lower()
+        if auth_mode in ("", "none"):
+            return {"Content-Type": "application/json"}
+        if not self.api_key:
+            raise ConnectorNotConfigured(
+                "paperless-gpt: api_key not configured for selected auth mode. Set it in Settings."
+            )
+        if auth_mode == "bearer":
+            return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        if auth_mode == "token":
+            return {"Authorization": f"Token {self.api_key}", "Content-Type": "application/json"}
+        if auth_mode == "x-api-key":
+            return {"x-api-key": self.api_key, "Content-Type": "application/json"}
+        raise ConnectorNotConfigured(
+            "paperless-gpt: unsupported auth_mode. Use none, bearer, token, or x-api-key."
+        )
+
+    def _summarize_documents(self, data) -> dict:
+        documents = []
+        if isinstance(data, list):
+            documents = data
+        elif isinstance(data, dict):
+            value = data.get("documents", data.get("results", data.get("items", [])))
+            if isinstance(value, list):
+                documents = value
+        pending = len(documents)
+        needs_review = 0
+        processed = 0
+        for doc in documents:
+            if not isinstance(doc, dict):
+                continue
+            status = str(doc.get("status", "")).lower()
+            tags = [str(t).lower() for t in doc.get("tags", []) if t]
+            if "needs_review" in status or "review" in tags or "paperless-gpt" in tags:
+                needs_review += 1
+            if status in {"processed", "done", "ready"} or "paperless-gpt-auto" in tags:
+                processed += 1
+        return {
+            "pending_documents": pending,
+            "needs_review": needs_review,
+            "processed_documents": processed,
+        }
+
     def fetch(self) -> dict:
-        self._require_config()
+        self._require_base_url()
         try:
             r = httpx.get(
-                f"{self.base_url}/api/queue/summary",
-                headers={"Authorization": f"Bearer {self.api_key}"},
+                f"{self.base_url}/api/documents",
+                headers=self._headers(),
                 timeout=10,
             )
             r.raise_for_status()
             data = _json_or_connector_error(r, "Paperless-GPT")
-            return {
-                "pending_documents": data.get("pending_documents", data.get("pending", 0)),
-                "needs_review": data.get("needs_review", 0),
-                "processed_documents": data.get("processed_documents", data.get("processed", 0)),
-            }
+            if isinstance(data, dict) and any(
+                key in data for key in ("pending_documents", "pending", "needs_review", "processed_documents", "processed")
+            ):
+                return {
+                    "pending_documents": data.get("pending_documents", data.get("pending", 0)),
+                    "needs_review": data.get("needs_review", 0),
+                    "processed_documents": data.get("processed_documents", data.get("processed", 0)),
+                }
+            return self._summarize_documents(data)
         except httpx.HTTPStatusError as exc:
-            raise ConnectorError(f"Paperless-GPT HTTP error: {exc.response.status_code}") from exc
+            _raise_http_status(exc, "Paperless-GPT")
         except httpx.RequestError as exc:
             raise ConnectorError(f"Paperless-GPT request failed: {exc}") from exc
 

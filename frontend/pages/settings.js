@@ -121,7 +121,8 @@ const INTEGRATION_FIELDS = {
     authType: 'api_key',
     fields: [
       { key: 'base_url', label: 'Paperless-GPT Base URL', placeholder: 'http://192.168.1.x:8080', help: 'Your Paperless-GPT service URL on the local network' },
-      { key: 'api_key',  label: 'Paperless-GPT API Key',  placeholder: 'Service API key or token', type: 'password', help: 'Used by processing summaries and document classification flows' },
+      { key: 'auth_mode', label: 'Auth Mode', placeholder: 'none, bearer, token, or x-api-key', help: 'Default is none. Use bearer/token/x-api-key only if your Paperless-GPT deployment or reverse proxy requires it.' },
+      { key: 'api_key',  label: 'Paperless-GPT API Key',  placeholder: 'Optional service API key or token', type: 'password', help: 'Only required when Auth Mode is bearer, token, or x-api-key.' },
     ],
   },
   paperless: {
@@ -317,7 +318,7 @@ function AiProviderSection({ settings, onSave, onTest }) {
   );
 }
 
-function IntegrationSection({ providerKey, meta, integration, integrationsByProvider, onSave, onTest, onDisconnect }) {
+function IntegrationSection({ providerKey, meta, integration, integrationsByProvider, onSave, onTest, onOAuthConnect, onDisconnect }) {
   const buildForm = (intg) => {
     const configFields = intg?.config_fields || {};
     const f = { base_url: intg?.base_url || '' };
@@ -355,6 +356,16 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
     const result = await onTest(providerKey);
     setTestResult(result);
     setTesting(false);
+  };
+
+  const oauthConnect = async () => {
+    setTesting(true);
+    setTestResult(null);
+    const result = await onOAuthConnect(oauthProviderKey);
+    if (!result.ok) {
+      setTestResult(result);
+      setTesting(false);
+    }
   };
 
   const disconnect = async () => {
@@ -444,12 +455,14 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
                 {disconnecting ? 'Disconnecting…' : 'Disconnect'}
               </button>
             ) : (
-              <a
-                href={`/api/integrations/${oauthProviderKey}/oauth/authorize`}
+              <button
+                type="button"
+                onClick={oauthConnect}
                 className={`btn-primary text-sm ${meta.connectStyle || 'bg-brand-600 hover:bg-brand-700'}`}
+                disabled={testing || saving}
               >
-                {meta.connectLabel || `Connect with ${meta.sharedLabel || meta.label}`}
-              </a>
+                {testing ? 'Connecting…' : (meta.connectLabel || `Connect with ${meta.sharedLabel || meta.label}`)}
+              </button>
             )
           ) : (
             <button
@@ -557,6 +570,26 @@ export default function SettingsPage() {
     }
   }, [apiFetch]);
 
+  const startOAuthConnect = useCallback(async (providerKey) => {
+    try {
+      const r = await apiFetch(`/integrations/${providerKey}/oauth/authorize?mode=json`);
+      const data = await parseApiResponse(r, 'OAuth connection failed');
+      if (!r.ok) {
+        const message = data.detail === 'Missing bearer token'
+          ? 'You are not signed in to Bricopro HQ. Log in again before connecting this integration.'
+          : data.detail || 'OAuth connection failed';
+        return { ok: false, message };
+      }
+      if (!data.authorization_url) {
+        return { ok: false, message: 'OAuth provider did not return an authorization URL.' };
+      }
+      window.location.assign(data.authorization_url);
+      return { ok: true, message: 'Redirecting to authorization provider...' };
+    } catch (err) {
+      return { ok: false, message: String(err) };
+    }
+  }, [apiFetch]);
+
   const disconnectIntegration = useCallback(async (providerKey) => {
     await apiFetch(`/integrations/${providerKey}/oauth/disconnect`, { method: 'POST' });
     await loadIntegrations();
@@ -615,6 +648,7 @@ export default function SettingsPage() {
               integrationsByProvider={intMap}
               onSave={saveIntegration}
               onTest={testIntegration}
+              onOAuthConnect={oauthConnectIntegration}
               onDisconnect={disconnectIntegration}
             />
           ))}
