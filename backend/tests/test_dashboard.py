@@ -202,7 +202,10 @@ def test_oauth_authorize_redirects_when_configured():
         )
         r = client.get("/integrations/google_calendar/oauth/authorize", headers=h)
         assert r.status_code in (302, 307)
-        assert "accounts.google.com" in r.headers.get("location", "")
+        loc = r.headers.get("location", "")
+        assert "accounts.google.com" in loc
+        assert "calendar.readonly" in loc
+        assert "business.manage" in loc
 
 
 def test_meta_oauth_authorize_redirects():
@@ -222,13 +225,13 @@ def test_meta_oauth_authorize_redirects():
         assert "pages_manage_posts" in loc
 
 
-def test_google_business_oauth_authorize_redirects():
-    """Google Business authorize should redirect to accounts.google.com."""
+def test_google_business_oauth_authorize_uses_shared_google_config():
+    """Google Business authorize uses the shared Google Calendar OAuth config."""
     app = make_client("test_dash_gbp_auth.db")
     with TestClient(app, follow_redirects=False) as client:
         h = auth(client)
         client.put(
-            "/integrations/google_business",
+            "/integrations/google_calendar",
             headers=h,
             json={"base_url": "", "config_json": '{"client_id":"test-gid","client_secret":"test-gsecret"}'},
         )
@@ -236,7 +239,45 @@ def test_google_business_oauth_authorize_redirects():
         assert r.status_code in (302, 307)
         loc = r.headers.get("location", "")
         assert "accounts.google.com" in loc
+        assert "calendar.readonly" in loc
         assert "business.manage" in loc
+
+
+def test_google_oauth_callback_syncs_google_integrations():
+    """A single Google OAuth callback should mark Calendar and Business connected."""
+    app = make_client("test_dash_google_oauth_shared.db")
+    with TestClient(app, follow_redirects=False) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/google_calendar",
+            headers=h,
+            json={"base_url": "", "config_json": '{"client_id":"test-gid","client_secret":"test-gsecret"}'},
+        )
+        r = client.get("/integrations/google_calendar/oauth/authorize", headers=h)
+        assert r.status_code in (302, 307)
+        loc = r.headers.get("location", "")
+        state = loc.split("state=")[1].split("&")[0]
+
+        token_response = httpx.Response(
+            200,
+            json={"access_token": "google-access", "refresh_token": "google-refresh", "expires_in": 3600},
+            request=httpx.Request("POST", "https://oauth2.googleapis.com/token"),
+        )
+        with patch("httpx.post", return_value=token_response):
+            callback = client.get(
+                f"/integrations/google_calendar/oauth/callback?code=test-code&state={state}"
+            )
+
+        assert callback.status_code in (302, 307)
+        integrations = {i["provider"]: i for i in client.get("/integrations", headers=h).json()}
+        assert integrations["google_calendar"]["oauth_connected"] is True
+        assert integrations["google_business"]["oauth_connected"] is True
+
+        r = client.post("/integrations/google_business/oauth/disconnect", headers=h)
+        assert r.status_code == 200
+        integrations = {i["provider"]: i for i in client.get("/integrations", headers=h).json()}
+        assert integrations["google_calendar"]["oauth_connected"] is False
+        assert integrations["google_business"]["oauth_connected"] is False
 
 
 def test_meta_and_google_business_seeded():

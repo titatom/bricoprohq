@@ -162,6 +162,8 @@ _oauth_states: dict[str, str] = {}
 
 # Secret config keys that are always masked in API responses
 _SECRET_KEYS = {"api_key", "client_secret"}
+_GOOGLE_PROVIDERS = {"google_calendar", "google_business"}
+_GOOGLE_CANONICAL_PROVIDER = "google_calendar"
 
 # ── OAuth provider registry ────────────────────────────────────────────────────
 # Each entry describes how to build an authorization URL and exchange the code.
@@ -177,20 +179,13 @@ OAUTH_PROVIDERS: dict[str, dict] = {
         "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
         "token_url":     "https://oauth2.googleapis.com/token",
         "refresh_url":   "https://oauth2.googleapis.com/token",
-        "scopes":        ["https://www.googleapis.com/auth/calendar.readonly"],
+        "scopes":        [
+            "https://www.googleapis.com/auth/calendar.readonly",
+            "https://www.googleapis.com/auth/business.manage",
+        ],
         # access_type=offline → Google returns a refresh_token
         # prompt=consent → always show consent screen so refresh_token is included
         "extra_params":  {"access_type": "offline", "prompt": "consent"},
-    },
-    "google_business": {
-        "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
-        "token_url":     "https://oauth2.googleapis.com/token",
-        "refresh_url":   "https://oauth2.googleapis.com/token",
-        # Business Profile Management API scope (view + respond to reviews, post updates)
-        "scopes": [
-            "https://www.googleapis.com/auth/business.manage",
-        ],
-        "extra_params": {"access_type": "offline", "prompt": "consent"},
     },
     "meta": {
         "authorize_url": "https://www.facebook.com/v21.0/dialog/oauth",
@@ -209,6 +204,58 @@ OAUTH_PROVIDERS: dict[str, dict] = {
         "long_lived_token": True,
     },
 }
+
+
+def _oauth_registry_provider(provider: str) -> str:
+    """Return the OAuth provider config key used for a logical integration."""
+    if provider in _GOOGLE_PROVIDERS:
+        return _GOOGLE_CANONICAL_PROVIDER
+    return provider
+
+
+def _oauth_config_integration(provider: str, db: Session) -> Integration | None:
+    """Return the integration row that owns OAuth client configuration."""
+    if provider in _GOOGLE_PROVIDERS:
+        canonical = db.query(Integration).filter(Integration.provider == _GOOGLE_CANONICAL_PROVIDER).first()
+        if canonical and canonical.config_json:
+            return canonical
+    return db.query(Integration).filter(Integration.provider == provider).first()
+
+
+def _store_oauth_tokens(
+    provider: str,
+    db: Session,
+    access_token: str,
+    refresh_token: str,
+    expires_in: int | str,
+) -> None:
+    """Persist OAuth tokens, syncing shared Google auth across Google integrations."""
+    providers = sorted(_GOOGLE_PROVIDERS) if provider in _GOOGLE_PROVIDERS else [provider]
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+    for p in providers:
+        i = db.query(Integration).filter(Integration.provider == p).first()
+        if not i:
+            i = Integration(provider=p, status="not_connected")
+            db.add(i)
+        i.oauth_access_token = access_token
+        if refresh_token:
+            i.oauth_refresh_token = refresh_token
+        i.oauth_token_expires_at = expires_at
+        i.status = "ok"
+        i.last_sync_at = datetime.now(timezone.utc)
+
+
+def _clear_oauth_tokens(provider: str, db: Session) -> None:
+    """Clear OAuth tokens, syncing shared Google auth across Google integrations."""
+    providers = sorted(_GOOGLE_PROVIDERS) if provider in _GOOGLE_PROVIDERS else [provider]
+    for p in providers:
+        i = db.query(Integration).filter(Integration.provider == p).first()
+        if not i:
+            continue
+        i.oauth_access_token = None
+        i.oauth_refresh_token = None
+        i.oauth_token_expires_at = None
+        i.status = "not_connected"
 
 
 def _oauth_redirect_uri(provider: str) -> str:
@@ -257,10 +304,11 @@ def integrations(_: User = Depends(auth_user), db: Session = Depends(get_db)):
 @app.get("/integrations/{provider}/oauth/authorize")
 def oauth_authorize(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     """Start OAuth 2.0 authorization flow for any registered OAuth provider."""
-    if provider not in OAUTH_PROVIDERS:
+    registry_provider = _oauth_registry_provider(provider)
+    if registry_provider not in OAUTH_PROVIDERS:
         raise HTTPException(400, f"OAuth not supported for provider '{provider}'")
 
-    i = db.query(Integration).filter(Integration.provider == provider).first()
+    i = _oauth_config_integration(provider, db)
     if not i:
         raise HTTPException(404, f"Integration '{provider}' not configured")
     try:
@@ -275,7 +323,7 @@ def oauth_authorize(provider: str, _: User = Depends(auth_user), db: Session = D
     state = secrets.token_hex(16)
     _oauth_states[state] = provider
 
-    prov = OAUTH_PROVIDERS[provider]
+    prov = OAUTH_PROVIDERS[registry_provider]
     redirect_uri = _oauth_redirect_uri(provider)
     params: dict = {
         "response_type": "code",
@@ -316,10 +364,11 @@ def oauth_callback(
     if not code:
         raise HTTPException(400, "Authorization code missing")
 
-    if provider not in OAUTH_PROVIDERS:
+    registry_provider = _oauth_registry_provider(provider)
+    if registry_provider not in OAUTH_PROVIDERS:
         raise HTTPException(400, f"OAuth not supported for provider '{provider}'")
 
-    i = db.query(Integration).filter(Integration.provider == provider).first()
+    i = _oauth_config_integration(provider, db)
     if not i:
         raise HTTPException(404, f"Integration '{provider}' not found")
     try:
@@ -332,7 +381,7 @@ def oauth_callback(
     if not client_id or not client_secret:
         raise HTTPException(400, f"{provider} client_id/client_secret not configured")
 
-    prov = OAUTH_PROVIDERS[provider]
+    prov = OAUTH_PROVIDERS[registry_provider]
     redirect_uri = _oauth_redirect_uri(provider)
 
     try:
@@ -382,12 +431,7 @@ def oauth_callback(
         except Exception as exc:
             log.warning("Meta long-lived token exchange failed (using short-lived): %s", exc)
 
-    i.oauth_access_token = access_token
-    if refresh_token:
-        i.oauth_refresh_token = refresh_token
-    i.oauth_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
-    i.status = "ok"
-    i.last_sync_at = datetime.now(timezone.utc)
+    _store_oauth_tokens(provider, db, access_token, refresh_token, expires_in)
     db.commit()
 
     return RedirectResponse(f"{frontend_base}/settings?oauth_connected={provider}")
@@ -399,10 +443,7 @@ def oauth_disconnect(provider: str, _: User = Depends(auth_user), db: Session = 
     i = db.query(Integration).filter(Integration.provider == provider).first()
     if not i:
         raise HTTPException(404, f"Integration '{provider}' not found")
-    i.oauth_access_token = None
-    i.oauth_refresh_token = None
-    i.oauth_token_expires_at = None
-    i.status = "not_connected"
+    _clear_oauth_tokens(provider, db)
     db.commit()
     return {"disconnected": True}
 
