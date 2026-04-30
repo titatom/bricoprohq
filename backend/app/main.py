@@ -1,10 +1,14 @@
 import json
 import logging
 import os
+import secrets
 from datetime import datetime, timezone, timedelta, date
+from urllib.parse import urlencode
 
-from fastapi import FastAPI, Depends, HTTPException, Header, Query
+import httpx
+from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from jose import jwt, JWTError
 
@@ -153,17 +157,184 @@ def ql_del(id: int, _: User = Depends(auth_user), db: Session = Depends(get_db))
 
 # ── Integrations ──────────────────────────────────────────────────────────────
 
+JOBBER_OAUTH_AUTHORIZE = "https://api.getjobber.com/api/oauth/authorize"
+JOBBER_OAUTH_TOKEN = "https://api.getjobber.com/api/oauth/token"
+JOBBER_GRAPHQL = "https://api.getjobber.com/api/graphql"
+
+# In-memory state store for CSRF protection (keyed by random state token)
+_oauth_states: dict[str, str] = {}
+
+
+def _integration_out(i: Integration) -> dict:
+    """Serialize an Integration row, returning masked config fields."""
+    try:
+        config = json.loads(i.config_json or "{}")
+    except Exception:
+        config = {}
+    # Return each config key as present/absent bool for secret fields, or the
+    # actual value for non-secret fields like calendar_id.
+    SECRET_KEYS = {"api_key", "client_secret"}
+    config_fields = {}
+    for k, v in config.items():
+        if k in SECRET_KEYS:
+            config_fields[k] = "••••••••" if v else ""
+        else:
+            config_fields[k] = v
+    return {
+        "provider": i.provider,
+        "base_url": i.base_url or "",
+        "status": i.status,
+        "last_sync_at": i.last_sync_at.isoformat() if i.last_sync_at else None,
+        "config_fields": config_fields,
+        "oauth_connected": bool(i.oauth_access_token),
+    }
+
+
 @app.get("/integrations")
 def integrations(_: User = Depends(auth_user), db: Session = Depends(get_db)):
-    return [
-        {
-            "provider": i.provider,
-            "base_url": i.base_url,
-            "status": i.status,
-            "last_sync_at": i.last_sync_at.isoformat() if i.last_sync_at else None,
-        }
-        for i in db.query(Integration).all()
-    ]
+    return [_integration_out(i) for i in db.query(Integration).all()]
+
+
+# ── Jobber OAuth 2.0 — must be before the /{provider} wildcard routes ─────────
+
+@app.get("/integrations/jobber/oauth/authorize")
+def jobber_oauth_authorize(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Redirect the user to Jobber's OAuth authorization page."""
+    i = db.query(Integration).filter(Integration.provider == "jobber").first()
+    if not i:
+        raise HTTPException(404, "Jobber integration not configured")
+    try:
+        config = json.loads(i.config_json or "{}")
+    except Exception:
+        config = {}
+    client_id = config.get("client_id", "")
+    if not client_id:
+        raise HTTPException(400, "Jobber client_id not configured. Save Client ID first.")
+
+    state = secrets.token_hex(16)
+    _oauth_states[state] = "jobber"
+
+    redirect_uri = _jobber_redirect_uri()
+    params = urlencode({
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "state": state,
+    })
+    return RedirectResponse(f"{JOBBER_OAUTH_AUTHORIZE}?{params}")
+
+
+def _jobber_redirect_uri() -> str:
+    """
+    Return the public-facing OAuth callback URL for Jobber.
+
+    Priority:
+      1. JOBBER_REDIRECT_URI env var (explicit override — recommended for production)
+      2. APP_BASE_URL env var + path (e.g. https://yourdomain.com)
+      3. Fallback to localhost:3000 (dev only)
+
+    The callback goes through the Next.js proxy (/api/*) so Jobber's browser redirect
+    lands on the API backend transparently.
+    """
+    explicit = os.getenv("JOBBER_REDIRECT_URI", "").strip()
+    if explicit:
+        return explicit
+    base = os.getenv("APP_BASE_URL", "http://localhost:3000").rstrip("/")
+    return f"{base}/api/integrations/jobber/oauth/callback"
+
+
+@app.get("/integrations/jobber/oauth/callback")
+def jobber_oauth_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Handle Jobber OAuth callback and exchange code for tokens."""
+    if error:
+        return RedirectResponse("/settings?jobber_error=" + error)
+
+    if not state or state not in _oauth_states:
+        raise HTTPException(400, "Invalid or expired OAuth state")
+    _oauth_states.pop(state, None)
+
+    if not code:
+        raise HTTPException(400, "Authorization code missing")
+
+    i = db.query(Integration).filter(Integration.provider == "jobber").first()
+    if not i:
+        raise HTTPException(404, "Jobber integration not found")
+    try:
+        config = json.loads(i.config_json or "{}")
+    except Exception:
+        config = {}
+
+    client_id = config.get("client_id", "")
+    client_secret = config.get("client_secret", "")
+    if not client_id or not client_secret:
+        raise HTTPException(400, "Jobber client_id/client_secret not configured")
+
+    redirect_uri = _jobber_redirect_uri()
+
+    try:
+        resp = httpx.post(
+            JOBBER_OAUTH_TOKEN,
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        token_data = resp.json()
+    except httpx.HTTPStatusError as exc:
+        log.error("Jobber token exchange failed: %s %s", exc.response.status_code, exc.response.text)
+        raise HTTPException(502, f"Jobber token exchange failed: {exc.response.status_code}")
+    except httpx.RequestError as exc:
+        raise HTTPException(502, f"Jobber token exchange request failed: {exc}")
+
+    access_token = token_data.get("access_token", "")
+    refresh_token = token_data.get("refresh_token", "")
+    expires_in = token_data.get("expires_in", 3600)
+
+    i.oauth_access_token = access_token
+    i.oauth_refresh_token = refresh_token
+    i.oauth_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+    i.status = "ok"
+    i.last_sync_at = datetime.now(timezone.utc)
+    db.commit()
+
+    # The Next.js frontend is the user-facing app; redirect to its settings page
+    frontend_base = os.getenv("APP_BASE_URL", "http://localhost:3000").rstrip("/")
+    return RedirectResponse(f"{frontend_base}/settings?jobber_connected=1")
+
+
+@app.post("/integrations/jobber/oauth/disconnect")
+def jobber_oauth_disconnect(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Remove stored Jobber OAuth tokens."""
+    i = db.query(Integration).filter(Integration.provider == "jobber").first()
+    if not i:
+        raise HTTPException(404, "Jobber integration not found")
+    i.oauth_access_token = None
+    i.oauth_refresh_token = None
+    i.oauth_token_expires_at = None
+    i.status = "not_connected"
+    db.commit()
+    return {"disconnected": True}
+
+
+# ── Per-provider CRUD (wildcard — must come after specific /jobber/* routes) ───
+
+@app.get("/integrations/{provider}")
+def get_integration(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    i = db.query(Integration).filter(Integration.provider == provider).first()
+    if not i:
+        raise HTTPException(404, "Integration not found")
+    return _integration_out(i)
 
 
 @app.put("/integrations/{provider}")
@@ -177,9 +348,54 @@ def update_integration(
     if not i:
         i = Integration(provider=provider, status="not_connected")
     i.base_url = payload.base_url
-    i.config_json = payload.config_json
-    db.add(i); db.commit()
-    return {"updated": True}
+
+    # Merge incoming config with existing so that masked values ("••••••••")
+    # do not overwrite real secrets.
+    try:
+        existing_config = json.loads(i.config_json or "{}")
+    except Exception:
+        existing_config = {}
+    try:
+        new_config = json.loads(payload.config_json or "{}")
+    except Exception:
+        new_config = {}
+
+    SECRET_KEYS = {"api_key", "client_secret"}
+    for k, v in new_config.items():
+        if k in SECRET_KEYS and v and all(c == '•' for c in v):
+            # User left the masked placeholder — keep existing value
+            pass
+        else:
+            existing_config[k] = v
+
+    i.config_json = json.dumps(existing_config)
+    db.add(i)
+    db.commit()
+    return _integration_out(i)
+
+
+@app.post("/integrations/{provider}/test")
+def test_integration(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Attempt a live connection test for an integration."""
+    try:
+        from .services.connectors import get_connector, ConnectorNotConfigured, ConnectorError
+        connector = get_connector(provider, db)
+        result = connector.fetch()
+        i = db.query(Integration).filter(Integration.provider == provider).first()
+        if i:
+            i.status = "ok"
+            i.last_sync_at = datetime.now(timezone.utc)
+            db.commit()
+        return {"ok": True, "message": f"Connected successfully. Fetched data from {provider}.", "data": result}
+    except Exception as exc:
+        i = db.query(Integration).filter(Integration.provider == provider).first()
+        if i:
+            i.status = "error"
+            db.commit()
+        from .services.connectors import ConnectorNotConfigured
+        if isinstance(exc, ConnectorNotConfigured):
+            raise HTTPException(400, str(exc))
+        raise HTTPException(502, str(exc))
 
 
 # ── Dashboard cache ───────────────────────────────────────────────────────────

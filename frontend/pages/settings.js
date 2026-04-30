@@ -73,6 +73,7 @@ const INTEGRATION_FIELDS = {
     label: 'Google Calendar',
     icon: '📅',
     description: 'Show upcoming events on the dashboard.',
+    authType: 'api_key',
     fields: [
       { key: 'api_key',     label: 'Google API Key',     placeholder: 'AIza…', type: 'password', help: 'Enable Calendar API at console.cloud.google.com → API Keys' },
       { key: 'calendar_id', label: 'Calendar ID',        placeholder: 'your@gmail.com or id@group.calendar.google.com', help: 'Found in Google Calendar settings → Integrate calendar' },
@@ -82,15 +83,17 @@ const INTEGRATION_FIELDS = {
     label: 'Jobber',
     icon: '🔧',
     description: 'Show upcoming jobs and job status on the dashboard.',
+    authType: 'oauth',
     fields: [
-      { key: 'base_url', label: 'API Base URL', placeholder: 'https://api.getjobber.com/api/graphql', help: 'Usually the default; only change for Jobber Enterprise' },
-      { key: 'api_key',  label: 'API Key / Bearer Token', placeholder: 'Bearer token from Jobber Connected Apps', type: 'password', help: 'Jobber → Settings → Connected Apps → Create API key' },
+      { key: 'client_id',     label: 'Client ID',     placeholder: 'Client ID from Jobber Developer Center', help: 'developer.getjobber.com → Your App → Client ID' },
+      { key: 'client_secret', label: 'Client Secret', placeholder: 'Client Secret from Jobber Developer Center', type: 'password', help: 'developer.getjobber.com → Your App → Client Secret' },
     ],
   },
   immich: {
     label: 'Immich',
     icon: '🖼️',
     description: 'Connect source albums and recent photo context.',
+    authType: 'api_key',
     fields: [
       { key: 'base_url', label: 'Immich Base URL', placeholder: 'http://192.168.1.x:2283', help: 'Your Immich server URL on the local network' },
       { key: 'api_key',  label: 'Immich API Key',  placeholder: 'API key from Immich settings', type: 'password', help: 'Immich → Account → API Keys → New API Key' },
@@ -100,6 +103,7 @@ const INTEGRATION_FIELDS = {
     label: 'Immich-GPT',
     icon: '🤖',
     description: 'Classify photos between personal, business, and social candidates.',
+    authType: 'api_key',
     fields: [
       { key: 'base_url', label: 'Immich-GPT Base URL', placeholder: 'http://192.168.1.x:3000', help: 'Your Immich-GPT service URL on the local network' },
       { key: 'api_key',  label: 'Immich-GPT API Key',  placeholder: 'Service API key or token', type: 'password', help: 'Used by processing summaries and image classification flows' },
@@ -109,6 +113,7 @@ const INTEGRATION_FIELDS = {
     label: 'Paperless-ngx',
     icon: '📄',
     description: 'Show recent documents and pending review queue.',
+    authType: 'api_key',
     fields: [
       { key: 'base_url', label: 'Paperless Base URL', placeholder: 'http://192.168.1.x:8000', help: 'Your Paperless-ngx server URL' },
       { key: 'api_key',  label: 'Auth Token',          placeholder: 'Token from Paperless admin', type: 'password', help: 'Paperless → Admin → Auth Token' },
@@ -265,33 +270,60 @@ function AiProviderSection({ settings, onSave, onTest }) {
   );
 }
 
-function IntegrationSection({ providerKey, meta, integration, onSave }) {
-  const configRaw = integration?.config_json || '{}';
-  const config = (() => { try { return JSON.parse(configRaw); } catch { return {}; } })();
-
-  const initForm = () => {
-    const f = { base_url: integration?.base_url || '' };
-    meta.fields.forEach(({ key }) => { if (key !== 'base_url') f[key] = config[key] || ''; });
+function IntegrationSection({ providerKey, meta, integration, onSave, onTest, onDisconnect }) {
+  const buildForm = (intg) => {
+    const configFields = intg?.config_fields || {};
+    const f = { base_url: intg?.base_url || '' };
+    meta.fields.forEach(({ key }) => {
+      if (key !== 'base_url') f[key] = configFields[key] || '';
+    });
     return f;
   };
 
-  const [form, setForm] = useState(initForm);
+  const [form, setForm] = useState(() => buildForm(integration));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [disconnecting, setDisconnecting] = useState(false);
+
+  // Sync form when integration data loads/changes from parent
+  useEffect(() => {
+    setForm(buildForm(integration));
+  }, [integration]); // eslint-disable-line
 
   const save = async (e) => {
     e.preventDefault();
     setSaving(true);
+    setTestResult(null);
     await onSave(providerKey, form);
     setSaved(true);
     setSaving(false);
     setTimeout(() => setSaved(false), 2000);
   };
 
+  const connect = async () => {
+    setTesting(true);
+    setTestResult(null);
+    const result = await onTest(providerKey);
+    setTestResult(result);
+    setTesting(false);
+  };
+
+  const disconnect = async () => {
+    setDisconnecting(true);
+    await onDisconnect(providerKey);
+    setTestResult(null);
+    setDisconnecting(false);
+  };
+
+  const isOAuth = meta.authType === 'oauth';
+  const oauthConnected = integration?.oauth_connected;
+
   const statusColor =
     integration?.status === 'ok'            ? 'bg-green-100 text-green-700' :
-    integration?.status === 'not_connected'  ? 'bg-red-100 text-red-600'    :
-    integration?.status === 'error'          ? 'bg-red-100 text-red-600'    :
+    integration?.status === 'not_connected'  ? 'bg-gray-100 text-gray-500'   :
+    integration?.status === 'error'          ? 'bg-red-100 text-red-600'     :
     'bg-gray-100 text-gray-500';
 
   return (
@@ -304,11 +336,17 @@ function IntegrationSection({ providerKey, meta, integration, onSave }) {
             <p className="text-xs text-gray-400">{meta.description}</p>
           </div>
         </div>
-        <span className={`badge ${statusColor}`}>
-          {integration?.status || 'unknown'}
-          {integration?.last_sync_at ? ` · ${new Date(integration.last_sync_at).toLocaleDateString()}` : ''}
-        </span>
+        <div className="flex items-center gap-2">
+          {isOAuth && oauthConnected && (
+            <span className="badge bg-green-100 text-green-700">Connected via OAuth</span>
+          )}
+          <span className={`badge ${statusColor}`}>
+            {integration?.status || 'unknown'}
+            {integration?.last_sync_at ? ` · ${new Date(integration.last_sync_at).toLocaleDateString()}` : ''}
+          </span>
+        </div>
       </div>
+
       <form onSubmit={save} className="space-y-3">
         {meta.fields.map(({ key, label, placeholder, type, help }) => (
           <div key={key}>
@@ -324,10 +362,46 @@ function IntegrationSection({ providerKey, meta, integration, onSave }) {
             {help && <p className="text-xs text-gray-400 mt-1">{help}</p>}
           </div>
         ))}
-        <div className="flex gap-2 pt-1">
+
+        {testResult && (
+          <div className={`text-sm rounded-lg px-4 py-2.5 ${testResult.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+            {testResult.ok ? '✓ ' : '✗ '}{testResult.message}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2 pt-1">
           <button type="submit" className="btn-primary text-sm" disabled={saving}>
             {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
           </button>
+
+          {isOAuth ? (
+            oauthConnected ? (
+              <button
+                type="button"
+                className="btn-secondary text-sm text-red-600 border-red-200 hover:bg-red-50"
+                onClick={disconnect}
+                disabled={disconnecting}
+              >
+                {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+              </button>
+            ) : (
+              <a
+                href="/api/integrations/jobber/oauth/authorize"
+                className="btn-primary text-sm bg-orange-500 hover:bg-orange-600 border-orange-500"
+              >
+                Connect with Jobber
+              </a>
+            )
+          ) : (
+            <button
+              type="button"
+              className="btn-secondary text-sm"
+              onClick={connect}
+              disabled={testing || saving}
+            >
+              {testing ? 'Connecting…' : 'Test Connection'}
+            </button>
+          )}
         </div>
       </form>
     </div>
@@ -340,6 +414,7 @@ export default function SettingsPage() {
   const { isLoggedIn, apiFetch } = useAuth();
   const [integrations, setIntegrations] = useState([]);
   const [settings, setSettings] = useState({});
+  const [oauthBanner, setOauthBanner] = useState(null);
 
   const testAiConnection = useCallback(async () => {
     const r = await apiFetch('/ai/test', { method: 'POST' });
@@ -367,6 +442,17 @@ export default function SettingsPage() {
     if (!isLoggedIn) return;
     loadIntegrations();
     loadSettings();
+    // Check for OAuth callback result in query params
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('jobber_connected')) {
+        setOauthBanner({ ok: true, message: 'Jobber connected successfully via OAuth!' });
+        window.history.replaceState({}, '', '/settings');
+      } else if (params.get('jobber_error')) {
+        setOauthBanner({ ok: false, message: `Jobber OAuth error: ${params.get('jobber_error')}` });
+        window.history.replaceState({}, '', '/settings');
+      }
+    }
   }, [isLoggedIn]); // eslint-disable-line
 
   const saveAiSettings = useCallback(async (vals) => {
@@ -376,14 +462,43 @@ export default function SettingsPage() {
     await loadSettings();
   }, [apiFetch, loadSettings]);
 
-  const saveIntegration = async (providerKey, form) => {
+  const saveIntegration = useCallback(async (providerKey, form) => {
     const { base_url, ...rest } = form;
-    await apiFetch(`/integrations/${providerKey}`, {
+    const r = await apiFetch(`/integrations/${providerKey}`, {
       method: 'PUT',
       body: JSON.stringify({ base_url: base_url || '', config_json: JSON.stringify(rest) }),
     });
-    await loadIntegrations();
-  };
+    if (r.ok) {
+      const updated = await r.json();
+      setIntegrations((prev) => prev.map((i) => (i.provider === providerKey ? updated : i)));
+    }
+  }, [apiFetch]);
+
+  const testIntegration = useCallback(async (providerKey) => {
+    try {
+      const r = await apiFetch(`/integrations/${providerKey}/test`, { method: 'POST' });
+      const data = await r.json();
+      if (r.ok) {
+        setIntegrations((prev) =>
+          prev.map((i) => (i.provider === providerKey ? { ...i, status: 'ok' } : i))
+        );
+        return { ok: true, message: data.message || 'Connection successful' };
+      }
+      setIntegrations((prev) =>
+        prev.map((i) => (i.provider === providerKey ? { ...i, status: 'error' } : i))
+      );
+      return { ok: false, message: data.detail || 'Connection test failed' };
+    } catch (err) {
+      return { ok: false, message: String(err) };
+    }
+  }, [apiFetch]);
+
+  const disconnectIntegration = useCallback(async (providerKey) => {
+    if (providerKey === 'jobber') {
+      await apiFetch('/integrations/jobber/oauth/disconnect', { method: 'POST' });
+      await loadIntegrations();
+    }
+  }, [apiFetch, loadIntegrations]);
 
   if (!isLoggedIn) return <LoginForm />;
 
@@ -414,6 +529,14 @@ export default function SettingsPage() {
         <AiProviderSection settings={settings} onSave={saveAiSettings} onTest={testAiConnection} />
       </section>
 
+      {/* OAuth result banner */}
+      {oauthBanner && (
+        <div className={`mb-6 rounded-lg px-4 py-3 flex items-center justify-between ${oauthBanner.ok ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+          <span className="text-sm">{oauthBanner.ok ? '✓ ' : '✗ '}{oauthBanner.message}</span>
+          <button className="text-xs opacity-60 hover:opacity-100 ml-4" onClick={() => setOauthBanner(null)}>Dismiss</button>
+        </div>
+      )}
+
       {/* Integrations */}
       <section>
         <h3 className="text-base font-semibold text-gray-800 mb-3">Integrations</h3>
@@ -428,6 +551,8 @@ export default function SettingsPage() {
               meta={meta}
               integration={intMap[key] || null}
               onSave={saveIntegration}
+              onTest={testIntegration}
+              onDisconnect={disconnectIntegration}
             />
           ))}
         </div>

@@ -48,6 +48,8 @@ class IntegrationOut(BaseModel):
     base_url: str
     status: str
     last_sync_at: str | None = None
+    config_fields: dict = {}
+    oauth_connected: bool = False
     class Config: from_attributes = True
 
 # ── Queues ────────────────────────────────────────────────────────────────────

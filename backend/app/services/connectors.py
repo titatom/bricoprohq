@@ -96,9 +96,19 @@ class GoogleCalendarConnector(BaseConnector):
 class JobberConnector(BaseConnector):
     provider = "jobber"
 
+    def _get_bearer_token(self) -> str:
+        """Return OAuth access token if available, otherwise fall back to legacy api_key."""
+        if self.integration.oauth_access_token:
+            return self.integration.oauth_access_token
+        if self.api_key:
+            return self.api_key
+        raise ConnectorNotConfigured(
+            "jobber: not connected via OAuth. Click 'Connect with Jobber' in Settings."
+        )
+
     def fetch(self) -> dict:
-        self._require_config()
-        # Jobber uses GraphQL; query upcoming jobs
+        bearer = self._get_bearer_token()
+        graphql_url = self.base_url or "https://api.getjobber.com/api/graphql"
         query = """
         query {
           jobs(filter: {status: [ACTIVE, UPCOMING]}, first: 10) {
@@ -113,9 +123,9 @@ class JobberConnector(BaseConnector):
         """
         try:
             r = httpx.post(
-                self.base_url or "https://api.getjobber.com/api/graphql",
+                graphql_url,
                 json={"query": query},
-                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
                 timeout=10,
             )
             r.raise_for_status()

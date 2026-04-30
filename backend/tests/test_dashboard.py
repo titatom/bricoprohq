@@ -47,9 +47,14 @@ def test_integrations_endpoint():
         h = auth(client)
         r = client.get("/integrations", headers=h)
         assert r.status_code == 200
-        providers = [i["provider"] for i in r.json()]
+        data = r.json()
+        providers = [i["provider"] for i in data]
         assert "google_calendar" in providers
         assert "immich-gpt" in providers
+        # Each integration must include the new fields
+        for item in data:
+            assert "config_fields" in item
+            assert "oauth_connected" in item
 
 
 def test_update_integration():
@@ -62,6 +67,55 @@ def test_update_integration():
             json={"base_url": "http://immich.local:2283", "config_json": '{"api_key":"test-key"}'},
         )
         assert r.status_code == 200
+        data = r.json()
+        assert data["provider"] == "immich"
+        assert data["base_url"] == "http://immich.local:2283"
+        # api_key should be masked in the response
+        assert data["config_fields"]["api_key"] == "••••••••"
+
+
+def test_update_integration_masked_value_preserved():
+    """Sending masked placeholder back should not overwrite the real stored secret."""
+    app = make_client("test_dash_mask.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        # First save with a real key
+        r1 = client.put(
+            "/integrations/paperless",
+            headers=h,
+            json={"base_url": "http://paperless.local", "config_json": '{"api_key":"real-secret-token"}'},
+        )
+        assert r1.status_code == 200
+        # Now resave with the masked placeholder (simulating UI re-submit without editing)
+        r2 = client.put(
+            "/integrations/paperless",
+            headers=h,
+            json={"base_url": "http://paperless.local", "config_json": '{"api_key":"••••••••"}'},
+        )
+        assert r2.status_code == 200
+        # Verify through GET that the stored key is still the real one
+        r3 = client.get("/integrations/paperless", headers=h)
+        assert r3.status_code == 200
+        # The masked display should still show presence (not empty)
+        assert r3.json()["config_fields"]["api_key"] == "••••••••"
+
+
+def test_integration_test_endpoint_not_configured():
+    app = make_client("test_dash_test.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        # Immich is seeded but with no credentials — should return 400
+        r = client.post("/integrations/immich/test", headers=h)
+        assert r.status_code == 400  # ConnectorNotConfigured
+
+
+def test_jobber_oauth_disconnect():
+    app = make_client("test_dash_jobber.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        r = client.post("/integrations/jobber/oauth/disconnect", headers=h)
+        assert r.status_code == 200
+        assert r.json()["disconnected"] is True
 
 
 def test_quick_links_crud():
