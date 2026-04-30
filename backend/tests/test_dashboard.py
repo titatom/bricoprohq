@@ -132,6 +132,26 @@ def test_immich_test_endpoint_handles_non_json_response():
         assert r.json()["detail"] == "Immich returned a non-JSON response: Internal Server Error"
 
 
+def test_paperless_test_endpoint_handles_non_json_response():
+    app = make_client("test_dash_paperless_non_json.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        r = client.put(
+            "/integrations/paperless",
+            headers=h,
+            json={"base_url": "http://paperless.local:8000", "config_json": '{"api_key":"test-key"}'},
+        )
+        assert r.status_code == 200
+
+        request = httpx.Request("GET", "http://paperless.local:8000/api/documents/")
+        response = httpx.Response(200, text="Internal Server Error", request=request)
+        with patch("httpx.get", return_value=response):
+            r = client.post("/integrations/paperless/test", headers=h)
+
+        assert r.status_code == 502
+        assert r.json()["detail"] == "Paperless returned a non-JSON response: Internal Server Error"
+
+
 def test_jobber_oauth_disconnect():
     app = make_client("test_dash_jobber.db")
     with TestClient(app) as client:

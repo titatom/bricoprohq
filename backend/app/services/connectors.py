@@ -302,7 +302,7 @@ class PaperlessConnector(BaseConnector):
                 timeout=10,
             )
             r.raise_for_status()
-            data = r.json()
+            data = _json_or_connector_error(r, "Paperless-ngx")
             docs = data.get("results", [])
             return {
                 "recent_documents": [
