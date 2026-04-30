@@ -2,14 +2,18 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import LoginForm from '../components/LoginForm';
 
-const SOURCES = ['google_calendar', 'jobber', 'immich', 'immich-gpt', 'paperless'];
+const SOURCES = ['google_calendar', 'jobber', 'immich', 'paperless'];
 
 const SOURCE_META = {
   google_calendar: { label: 'Google Calendar', icon: '📅', color: 'brand' },
   jobber:          { label: 'Jobber',          icon: '🔧', color: 'brand' },
   immich:          { label: 'Immich / Photos', icon: '🖼️', color: 'brand' },
-  'immich-gpt':    { label: 'Immich-GPT',      icon: '🧠', color: 'brand' },
   paperless:       { label: 'Paperless',       icon: '📄', color: 'brand' },
+};
+
+const DEFAULT_WIDGET_SETTINGS = {
+  paperless: { tag: 'ai-processed', limit: '5' },
+  immich: { album_id: '', limit: '6' },
 };
 
 const DEFAULT_QUICK_LINKS = [
@@ -53,32 +57,188 @@ function logoUrlFor(link) {
   return `https://www.google.com/s2/favicons?domain=${logoDomainFor(link)}&sz=64`;
 }
 
-function WidgetCard({ title, icon, status, stale, data, onRefresh, loading }) {
+function WidgetHeader({ title, icon, status, stale, onRefresh, loading, onConfigure }) {
   const statusColor =
     status === 'ok' ? 'text-green-600' :
     status === 'not_connected' ? 'text-red-500' :
     'text-orange-500';
 
   return (
-    <div className="card flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-lg">{icon}</span>
-          <h3 className="font-semibold text-gray-800">{title}</h3>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={`text-xs font-medium ${statusColor}`}>
-            {status === 'ok' ? (stale ? '⚠ stale' : '● live') : status}
-          </span>
-          <button
-            className="btn-secondary text-xs py-1 px-2"
-            onClick={onRefresh}
-            disabled={loading}
-          >
-            {loading ? '…' : 'Refresh'}
-          </button>
-        </div>
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <span className="text-lg">{icon}</span>
+        <h3 className="font-semibold text-gray-800">{title}</h3>
       </div>
+      <div className="flex items-center gap-2">
+        <span className={`text-xs font-medium ${statusColor}`}>
+          {status === 'ok' ? (stale ? '⚠ stale' : '● live') : status}
+        </span>
+        {onConfigure && (
+          <button
+            className="w-7 h-7 rounded-full border border-gray-200 text-gray-400 hover:text-gray-700 hover:bg-gray-50"
+            onClick={onConfigure}
+            title={`Configure ${title}`}
+            aria-label={`Configure ${title}`}
+          >
+            ⚙
+          </button>
+        )}
+        <button
+          className="btn-secondary text-xs py-1 px-2"
+          onClick={onRefresh}
+          disabled={loading}
+        >
+          {loading ? '…' : 'Refresh'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function WidgetSettingsModal({ source, settings, onClose, onSave }) {
+  const [form, setForm] = useState(settings);
+  const isPaperless = source === 'paperless';
+
+  return (
+    <div className="fixed inset-0 z-50 bg-gray-900/30 flex items-center justify-center p-4">
+      <form
+        className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-md"
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSave(source, form);
+        }}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold text-gray-900">
+            {isPaperless ? 'Paperless dashboard settings' : 'Immich dashboard settings'}
+          </h3>
+          <button type="button" className="text-gray-400 hover:text-gray-700" onClick={onClose}>×</button>
+        </div>
+
+        <div className="space-y-3">
+          {isPaperless ? (
+            <div>
+              <label className="label">Document tag</label>
+              <input
+                className="input"
+                value={form.tag || ''}
+                onChange={(e) => setForm({ ...form, tag: e.target.value })}
+                placeholder="ai-processed"
+              />
+              <p className="text-xs text-gray-400 mt-1">Only latest documents with this tag are shown.</p>
+            </div>
+          ) : (
+            <div>
+              <label className="label">Album ID</label>
+              <input
+                className="input"
+                value={form.album_id || ''}
+                onChange={(e) => setForm({ ...form, album_id: e.target.value })}
+                placeholder="Immich album ID"
+              />
+              <p className="text-xs text-gray-400 mt-1">Leave blank to show the latest assets.</p>
+            </div>
+          )}
+          <div>
+            <label className="label">Items to show</label>
+            <input
+              className="input"
+              type="number"
+              min="1"
+              max="50"
+              value={form.limit || ''}
+              onChange={(e) => setForm({ ...form, limit: e.target.value })}
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 mt-5">
+          <button type="button" className="btn-secondary text-sm" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn-primary text-sm">Save settings</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading, onConfigure }) {
+  const docs = data?.recent_documents || [];
+
+  return (
+    <div className="card flex flex-col gap-3">
+      <WidgetHeader title={title} icon={icon} status={status} stale={stale} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />
+      {status === 'not_connected' ? (
+        <p className="text-sm text-red-500">Integration not connected. Configure in Settings.</p>
+      ) : docs.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-xs text-gray-400">
+            Latest documents tagged <span className="font-medium text-gray-600">{data?.tag || 'ai-processed'}</span>
+          </p>
+          {docs.map((doc) => (
+            <a
+              key={doc.id || doc.title}
+              href={doc.document_url || '#'}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block rounded-lg border border-gray-100 p-3 hover:border-brand-200 hover:bg-brand-50 transition-colors"
+            >
+              <div className="font-medium text-sm text-gray-800">{doc.title || 'Untitled document'}</div>
+              {doc.added && <div className="text-xs text-gray-400 mt-1">{new Date(doc.added).toLocaleString()}</div>}
+            </a>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500">No matching documents found. Use the settings wheel to change the tag.</p>
+      )}
+    </div>
+  );
+}
+
+function ImmichWidget({ title, icon, status, stale, data, onRefresh, loading, onConfigure }) {
+  const assets = data?.recent_assets || [];
+
+  return (
+    <div className="card flex flex-col gap-3">
+      <WidgetHeader title={title} icon={icon} status={status} stale={stale} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />
+      {status === 'not_connected' ? (
+        <p className="text-sm text-red-500">Integration not connected. Configure in Settings.</p>
+      ) : assets.length > 0 ? (
+        <div className="grid grid-cols-3 gap-2">
+          {assets.map((asset) => (
+            <a
+              key={asset.id || asset.filename}
+              href={asset.asset_url || '#'}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={asset.filename}
+              className="aspect-square rounded-xl bg-gray-100 overflow-hidden border border-gray-100 hover:border-brand-200"
+            >
+              {asset.preview_url ? (
+                <img src={asset.preview_url} alt={asset.filename || 'Immich asset'} className="w-full h-full object-cover" loading="lazy" />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-xs text-gray-400 text-center p-2">{asset.filename || 'Photo'}</div>
+              )}
+            </a>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500">No assets found. Use the settings wheel to choose an album.</p>
+      )}
+    </div>
+  );
+}
+
+function WidgetCard({ source, title, icon, status, stale, data, onRefresh, loading, onConfigure }) {
+  if (source === 'paperless') {
+    return <PaperlessWidget title={title} icon={icon} status={status} stale={stale} data={data} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />;
+  }
+  if (source === 'immich') {
+    return <ImmichWidget title={title} icon={icon} status={status} stale={stale} data={data} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />;
+  }
+
+  return (
+    <div className="card flex flex-col gap-3">
+      <WidgetHeader title={title} icon={icon} status={status} stale={stale} onRefresh={onRefresh} loading={loading} />
       {status === 'not_connected' ? (
         <p className="text-sm text-red-500">Integration not connected. Configure in Settings.</p>
       ) : (
@@ -200,9 +360,11 @@ export default function DashboardPage() {
   const { isLoggedIn, apiFetch } = useAuth();
   const [dashboard, setDashboard] = useState({});
   const [integrations, setIntegrations] = useState([]);
+  const [settings, setSettings] = useState({});
   const [quickLinks, setQuickLinks] = useState([]);
   const [processingSummary, setProcessingSummary] = useState(null);
   const [refreshing, setRefreshing] = useState({});
+  const [settingsSource, setSettingsSource] = useState(null);
 
   const loadDashboard = useCallback(async () => {
     const r = await apiFetch('/dashboard');
@@ -212,6 +374,15 @@ export default function DashboardPage() {
   const loadIntegrations = useCallback(async () => {
     const r = await apiFetch('/integrations');
     if (r.ok) setIntegrations(await r.json());
+  }, [apiFetch]);
+
+  const loadSettings = useCallback(async () => {
+    const r = await apiFetch('/settings');
+    if (!r.ok) return;
+    const rows = await r.json();
+    const map = {};
+    rows.forEach((s) => { map[s.key] = s.value; });
+    setSettings(map);
   }, [apiFetch]);
 
   const loadQuickLinks = useCallback(async () => {
@@ -238,6 +409,7 @@ export default function DashboardPage() {
     if (!isLoggedIn) return;
     loadDashboard();
     loadIntegrations();
+    loadSettings();
     loadProcessingSummary();
     loadQuickLinks().then(async () => {
       const r = await apiFetch('/quick-links');
@@ -275,10 +447,50 @@ export default function DashboardPage() {
     await loadQuickLinks();
   };
 
+  const widgetSettingsFor = (source) => {
+    const defaults = DEFAULT_WIDGET_SETTINGS[source] || {};
+    if (source === 'paperless') {
+      return {
+        ...defaults,
+        tag: settings['dashboard.paperless.tag'] || defaults.tag,
+        limit: settings['dashboard.paperless.limit'] || defaults.limit,
+      };
+    }
+    if (source === 'immich') {
+      return {
+        ...defaults,
+        album_id: settings['dashboard.immich.album_id'] || defaults.album_id,
+        limit: settings['dashboard.immich.limit'] || defaults.limit,
+      };
+    }
+    return defaults;
+  };
+
+  const saveWidgetSettings = async (source, form) => {
+    const entries = source === 'paperless'
+      ? { 'dashboard.paperless.tag': form.tag || 'ai-processed', 'dashboard.paperless.limit': form.limit || '5' }
+      : { 'dashboard.immich.album_id': form.album_id || '', 'dashboard.immich.limit': form.limit || '6' };
+    for (const [key, value] of Object.entries(entries)) {
+      await apiFetch(`/settings/${key}`, { method: 'PUT', body: JSON.stringify({ value }) });
+    }
+    setSettingsSource(null);
+    await loadSettings();
+    await refreshSource(source);
+  };
+
   if (!isLoggedIn) return <LoginForm />;
 
   return (
     <div className="p-6">
+      {settingsSource && (
+        <WidgetSettingsModal
+          source={settingsSource}
+          settings={widgetSettingsFor(settingsSource)}
+          onClose={() => setSettingsSource(null)}
+          onSave={saveWidgetSettings}
+        />
+      )}
+
       <QuickLinksWidget
         links={quickLinks.filter((l) => l.is_active)}
         onAdd={addQuickLink}
@@ -318,6 +530,7 @@ export default function DashboardPage() {
           return (
             <WidgetCard
               key={src}
+              source={src}
               title={meta.label}
               icon={meta.icon}
               status={w.status || 'unknown'}
@@ -325,6 +538,7 @@ export default function DashboardPage() {
               data={w.data || {}}
               onRefresh={() => refreshSource(src)}
               loading={refreshing[src]}
+              onConfigure={['paperless', 'immich'].includes(src) ? () => setSettingsSource(src) : null}
             />
           );
         })}

@@ -47,7 +47,7 @@ app.add_middleware(
 
 Base.metadata.create_all(bind=_db_module.engine)
 
-SOURCES = ["google_calendar", "jobber", "immich", "immich-gpt", "paperless", "meta", "google_business"]
+SOURCES = ["google_calendar", "jobber", "immich", "immich-gpt", "paperless", "paperless-gpt", "meta", "google_business"]
 CACHE_TTL_MINUTES = 15
 PENDING_IMAGE_STATUSES = {"new", "pending_ai", "needs_review"}
 PENDING_DOC_STATUSES = {"new", "pending_ai", "needs_review", "missing_tags", "missing_correspondent", "missing_document_type"}
