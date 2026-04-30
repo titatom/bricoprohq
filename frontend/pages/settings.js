@@ -150,6 +150,16 @@ const INTEGRATION_FIELDS = {
   },
 };
 
+async function parseApiResponse(response, fallbackMessage) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    return { detail: text, message: text || fallbackMessage };
+  }
+}
+
 // ── Components ────────────────────────────────────────────────────────────────
 
 function AiProviderSection({ settings, onSave, onTest }) {
@@ -447,7 +457,7 @@ export default function SettingsPage() {
 
   const testAiConnection = useCallback(async () => {
     const r = await apiFetch('/ai/test', { method: 'POST' });
-    const data = await r.json();
+    const data = await parseApiResponse(r, 'Test failed');
     if (r.ok) return { ok: true, message: data.message || 'Connection successful' };
     return { ok: false, message: data.detail || 'Test failed' };
   }, [apiFetch]);
@@ -511,7 +521,7 @@ export default function SettingsPage() {
   const testIntegration = useCallback(async (providerKey) => {
     try {
       const r = await apiFetch(`/integrations/${providerKey}/test`, { method: 'POST' });
-      const data = await r.json();
+      const data = await parseApiResponse(r, 'Connection test failed');
       if (r.ok) {
         setIntegrations((prev) =>
           prev.map((i) => (i.provider === providerKey ? { ...i, status: 'ok' } : i))

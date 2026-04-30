@@ -1,6 +1,9 @@
 import os
 import importlib
 from fastapi.testclient import TestClient
+from unittest.mock import patch
+
+import httpx
 
 
 def make_client(db_name="test_dash.db"):
@@ -107,6 +110,25 @@ def test_integration_test_endpoint_not_configured():
         # Immich is seeded but with no credentials — should return 400
         r = client.post("/integrations/immich/test", headers=h)
         assert r.status_code == 400  # ConnectorNotConfigured
+
+
+def test_immich_test_endpoint_handles_non_json_response():
+    app = make_client("test_dash_immich_non_json.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        r = client.put(
+            "/integrations/immich",
+            headers=h,
+            json={"base_url": "http://immich.local:2283", "config_json": '{"api_key":"test-key"}'},
+        )
+        assert r.status_code == 200
+
+        response = httpx.Response(200, text="Internal Server Error")
+        with patch("httpx.get", return_value=response):
+            r = client.post("/integrations/immich/test", headers=h)
+
+        assert r.status_code == 502
+        assert r.json()["detail"] == "Immich returned a non-JSON response: Internal Server Error"
 
 
 def test_jobber_oauth_disconnect():

@@ -58,6 +58,15 @@ class BaseConnector:
         raise NotImplementedError
 
 
+def _json_or_connector_error(response: httpx.Response, service_name: str):
+    try:
+        return response.json()
+    except ValueError as exc:
+        body = response.text.strip()
+        snippet = body[:120] if body else "<empty response>"
+        raise ConnectorError(f"{service_name} returned a non-JSON response: {snippet}") from exc
+
+
 # ── Google Calendar ───────────────────────────────────────────────────────────
 
 class GoogleCalendarConnector(BaseConnector):
@@ -241,7 +250,7 @@ class ImmichConnector(BaseConnector):
                 timeout=10,
             )
             r.raise_for_status()
-            assets = r.json()
+            assets = _json_or_connector_error(r, "Immich")
             if isinstance(assets, list):
                 recent = [{"id": a.get("id"), "filename": a.get("originalFileName"), "type": a.get("type")} for a in assets[:5]]
                 return {"recent_assets": recent, "returned": len(assets)}
@@ -264,7 +273,7 @@ class ImmichGptConnector(BaseConnector):
                 timeout=10,
             )
             r.raise_for_status()
-            data = r.json()
+            data = _json_or_connector_error(r, "Immich-GPT")
             return {
                 "pending_images": data.get("pending_images", data.get("pending", 0)),
                 "needs_review": data.get("needs_review", 0),
