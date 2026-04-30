@@ -308,6 +308,170 @@ class PaperlessConnector(BaseConnector):
             raise ConnectorError(f"Paperless request failed: {exc}") from exc
 
 
+# ── Meta (Facebook + Instagram) ───────────────────────────────────────────────
+
+GRAPH_API_BASE = "https://graph.facebook.com/v21.0"
+
+
+class MetaConnector(BaseConnector):
+    provider = "meta"
+
+    def _get_access_token(self) -> str:
+        if not self.integration.oauth_access_token:
+            raise ConnectorNotConfigured(
+                "meta: not connected via OAuth. Click 'Connect with Meta' in Settings."
+            )
+        return self.integration.oauth_access_token
+
+    def fetch(self) -> dict:
+        token = self._get_access_token()
+        try:
+            # Fetch connected pages the user manages
+            r = httpx.get(
+                f"{GRAPH_API_BASE}/me/accounts",
+                params={"access_token": token, "fields": "id,name,fan_count,instagram_business_account"},
+                timeout=10,
+            )
+            r.raise_for_status()
+            data = r.json()
+            pages = data.get("data", [])
+            result: dict = {
+                "pages": [
+                    {
+                        "id": p.get("id"),
+                        "name": p.get("name"),
+                        "fans": p.get("fan_count", 0),
+                        "has_instagram": bool(p.get("instagram_business_account")),
+                    }
+                    for p in pages
+                ],
+                "page_count": len(pages),
+            }
+            # Optionally surface the first Instagram account
+            for p in pages:
+                ig = p.get("instagram_business_account")
+                if ig:
+                    ig_id = ig.get("id") if isinstance(ig, dict) else ig
+                    ig_r = httpx.get(
+                        f"{GRAPH_API_BASE}/{ig_id}",
+                        params={"access_token": token, "fields": "id,username,followers_count,media_count"},
+                        timeout=10,
+                    )
+                    if ig_r.is_success:
+                        ig_data = ig_r.json()
+                        result["instagram"] = {
+                            "id": ig_data.get("id"),
+                            "username": ig_data.get("username"),
+                            "followers": ig_data.get("followers_count", 0),
+                            "media_count": ig_data.get("media_count", 0),
+                        }
+                    break
+            return result
+        except httpx.HTTPStatusError as exc:
+            raise ConnectorError(f"Meta Graph API error: {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise ConnectorError(f"Meta request failed: {exc}") from exc
+
+
+# ── Google Business Profile ────────────────────────────────────────────────────
+
+GOOGLE_MYBUSINESS_BASE = "https://mybusinessaccountmanagement.googleapis.com/v1"
+GOOGLE_MYBUSINESS_INFO_BASE = "https://mybusinessinformation.googleapis.com/v1"
+
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+
+class GoogleBusinessConnector(BaseConnector):
+    provider = "google_business"
+
+    def _get_access_token(self) -> str:
+        intg = self.integration
+        if not intg.oauth_access_token:
+            raise ConnectorNotConfigured(
+                "google_business: not connected via OAuth. Click 'Connect with Google' in Settings."
+            )
+        now = datetime.now(timezone.utc)
+        expires_at = intg.oauth_token_expires_at
+        if expires_at and expires_at.replace(tzinfo=timezone.utc) <= now + timedelta(seconds=60):
+            self._refresh_token()
+        return intg.oauth_access_token
+
+    def _refresh_token(self) -> None:
+        intg = self.integration
+        if not intg.oauth_refresh_token:
+            raise ConnectorNotConfigured(
+                "google_business: access token expired and no refresh token. Reconnect via Settings."
+            )
+        config = self.config
+        try:
+            resp = httpx.post(
+                GOOGLE_TOKEN_URL,
+                data={
+                    "client_id": config.get("client_id", ""),
+                    "client_secret": config.get("client_secret", ""),
+                    "refresh_token": intg.oauth_refresh_token,
+                    "grant_type": "refresh_token",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            td = resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise ConnectorError(f"Google Business token refresh failed: {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise ConnectorError(f"Google Business token refresh request failed: {exc}") from exc
+
+        intg.oauth_access_token = td["access_token"]
+        intg.oauth_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(td.get("expires_in", 3600)))
+        if "refresh_token" in td:
+            intg.oauth_refresh_token = td["refresh_token"]
+        from sqlalchemy.orm import object_session
+        session = object_session(intg)
+        if session:
+            session.commit()
+
+    def fetch(self) -> dict:
+        token = self._get_access_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            # List accounts the user manages
+            r = httpx.get(
+                f"{GOOGLE_MYBUSINESS_BASE}/accounts",
+                headers=headers,
+                timeout=10,
+            )
+            r.raise_for_status()
+            accounts = r.json().get("accounts", [])
+            result: dict = {
+                "accounts": [
+                    {"name": a.get("name"), "accountName": a.get("accountName"), "type": a.get("type")}
+                    for a in accounts[:5]
+                ],
+                "account_count": len(accounts),
+            }
+            # Fetch locations for the first account
+            if accounts:
+                acct_name = accounts[0].get("name", "")
+                loc_r = httpx.get(
+                    f"{GOOGLE_MYBUSINESS_INFO_BASE}/{acct_name}/locations",
+                    params={"readMask": "name,title,storefrontAddress,websiteUri"},
+                    headers=headers,
+                    timeout=10,
+                )
+                if loc_r.is_success:
+                    locs = loc_r.json().get("locations", [])
+                    result["locations"] = [
+                        {"name": l.get("name"), "title": l.get("title"), "website": l.get("websiteUri", "")}
+                        for l in locs[:5]
+                    ]
+            return result
+        except httpx.HTTPStatusError as exc:
+            raise ConnectorError(f"Google Business API error: {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise ConnectorError(f"Google Business request failed: {exc}") from exc
+
+
 # ── Factory ───────────────────────────────────────────────────────────────────
 
 _CONNECTORS = {
@@ -316,6 +480,8 @@ _CONNECTORS = {
     "immich": ImmichConnector,
     "immich-gpt": ImmichGptConnector,
     "paperless": PaperlessConnector,
+    "meta": MetaConnector,
+    "google_business": GoogleBusinessConnector,
 }
 
 

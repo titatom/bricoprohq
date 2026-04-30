@@ -124,6 +124,30 @@ const INTEGRATION_FIELDS = {
       { key: 'api_key',  label: 'Auth Token',          placeholder: 'Token from Paperless admin', type: 'password', help: 'Paperless → Admin → Auth Token' },
     ],
   },
+  meta: {
+    label: 'Meta (Facebook & Instagram)',
+    icon: '📘',
+    description: 'Connect your Facebook Page and Instagram Business account for publishing.',
+    authType: 'oauth',
+    connectLabel: 'Connect with Meta',
+    connectStyle: 'bg-[#1877F2] hover:bg-[#166FE5] border-[#1877F2]',
+    fields: [
+      { key: 'client_id',     label: 'App ID',     placeholder: 'Meta App ID from developers.facebook.com', help: 'developers.facebook.com → Your App → Settings → Basic → App ID' },
+      { key: 'client_secret', label: 'App Secret', placeholder: 'App Secret from developers.facebook.com', type: 'password', help: 'developers.facebook.com → Your App → Settings → Basic → App Secret' },
+    ],
+  },
+  google_business: {
+    label: 'Google Business Profile',
+    icon: '🗺️',
+    description: 'Connect your Google Business Profile to post updates and view reviews.',
+    authType: 'oauth',
+    connectLabel: 'Connect with Google',
+    connectStyle: 'bg-blue-600 hover:bg-blue-700 border-blue-600',
+    fields: [
+      { key: 'client_id',     label: 'Client ID',     placeholder: 'From Google Cloud Console → OAuth 2.0 Client IDs', help: 'console.cloud.google.com → APIs & Services → Credentials → OAuth 2.0 Client IDs (can reuse the same credential as Google Calendar)' },
+      { key: 'client_secret', label: 'Client Secret', placeholder: 'Client Secret from Google Cloud Console', type: 'password', help: 'Same credential as Client ID above' },
+    ],
+  },
 };
 
 // ── Components ────────────────────────────────────────────────────────────────

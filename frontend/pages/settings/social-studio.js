@@ -116,27 +116,33 @@ export default function SocialStudioSettingsPage() {
         </section>
 
         <section className="card">
-          <h3 className="font-semibold text-gray-800 mb-4">Social accounts</h3>
+          <h3 className="font-semibold text-gray-800 mb-3">Social account connections</h3>
+          <div className="flex items-start gap-3 p-3 bg-blue-50 border border-blue-100 rounded-lg mb-4">
+            <span className="text-blue-500 mt-0.5">ℹ</span>
+            <p className="text-sm text-blue-700">
+              Facebook, Instagram, and Google Business Profile connections are now managed via OAuth in{' '}
+              <Link href="/settings" className="underline font-medium">Settings → Integrations</Link>.
+              Connect there first, then the account details will be pulled automatically.
+            </p>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="label">Facebook Page / account</label>
-              <input className="input" value={form.facebook_account} onChange={(e) => setForm({ ...form, facebook_account: e.target.value })} placeholder="Facebook page reference" />
+              <label className="label">Default Facebook Page name / ID <span className="text-gray-400 font-normal">(optional override)</span></label>
+              <input className="input" value={form.facebook_account} onChange={(e) => setForm({ ...form, facebook_account: e.target.value })} placeholder="Leave blank to use first connected page" />
             </div>
             <div>
-              <label className="label">Instagram account</label>
+              <label className="label">Default Instagram handle <span className="text-gray-400 font-normal">(optional override)</span></label>
               <input className="input" value={form.instagram_account} onChange={(e) => setForm({ ...form, instagram_account: e.target.value })} placeholder="@bricopro" />
             </div>
             <div>
-              <label className="label">Google Business account</label>
-              <input className="input" value={form.google_business_account} onChange={(e) => setForm({ ...form, google_business_account: e.target.value })} placeholder="Business Profile reference" />
-            </div>
-            <div>
               <label className="label">Meta Ads account ID</label>
-              <input className="input" value={form.meta_ads_account || form.meta_account_id} onChange={(e) => setForm({ ...form, meta_ads_account: e.target.value, meta_account_id: e.target.value })} placeholder="Business / ad account reference" />
+              <input className="input" value={form.meta_ads_account || form.meta_account_id} onChange={(e) => setForm({ ...form, meta_ads_account: e.target.value, meta_account_id: e.target.value })} placeholder="act_XXXXXXXXXX" />
+              <p className="text-xs text-gray-400 mt-1">Business Manager → Ad Accounts → Account ID</p>
             </div>
             <div>
-              <label className="label">Google Ads account ID</label>
-              <input className="input" value={form.google_ads_account || form.google_ads_account_id} onChange={(e) => setForm({ ...form, google_ads_account: e.target.value, google_ads_account_id: e.target.value })} placeholder="Customer ID" />
+              <label className="label">Google Ads customer ID</label>
+              <input className="input" value={form.google_ads_account || form.google_ads_account_id} onChange={(e) => setForm({ ...form, google_ads_account: e.target.value, google_ads_account_id: e.target.value })} placeholder="XXX-XXX-XXXX" />
+              <p className="text-xs text-gray-400 mt-1">Google Ads → Account → Customer ID</p>
             </div>
           </div>
         </section>

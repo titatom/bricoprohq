@@ -47,7 +47,7 @@ app.add_middleware(
 
 Base.metadata.create_all(bind=_db_module.engine)
 
-SOURCES = ["google_calendar", "jobber", "immich", "immich-gpt", "paperless"]
+SOURCES = ["google_calendar", "jobber", "immich", "immich-gpt", "paperless", "meta", "google_business"]
 CACHE_TTL_MINUTES = 15
 PENDING_IMAGE_STATUSES = {"new", "pending_ai", "needs_review"}
 PENDING_DOC_STATUSES = {"new", "pending_ai", "needs_review", "missing_tags", "missing_correspondent", "missing_document_type"}
@@ -181,6 +181,32 @@ OAUTH_PROVIDERS: dict[str, dict] = {
         # access_type=offline → Google returns a refresh_token
         # prompt=consent → always show consent screen so refresh_token is included
         "extra_params":  {"access_type": "offline", "prompt": "consent"},
+    },
+    "google_business": {
+        "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url":     "https://oauth2.googleapis.com/token",
+        "refresh_url":   "https://oauth2.googleapis.com/token",
+        # Business Profile Management API scope (view + respond to reviews, post updates)
+        "scopes": [
+            "https://www.googleapis.com/auth/business.manage",
+        ],
+        "extra_params": {"access_type": "offline", "prompt": "consent"},
+    },
+    "meta": {
+        "authorize_url": "https://www.facebook.com/v21.0/dialog/oauth",
+        "token_url":     "https://graph.facebook.com/v21.0/oauth/access_token",
+        # Pages permissions: manage posts + read page insights; Instagram requires pages_show_list
+        "scopes": [
+            "pages_show_list",
+            "pages_read_engagement",
+            "pages_manage_posts",
+            "instagram_basic",
+            "instagram_content_publish",
+            "business_management",
+        ],
+        "extra_params": {},
+        # Meta does not use standard refresh tokens; we exchange for a long-lived token post-callback.
+        "long_lived_token": True,
     },
 }
 
@@ -333,6 +359,28 @@ def oauth_callback(
     access_token = token_data.get("access_token", "")
     refresh_token = token_data.get("refresh_token", "")
     expires_in = token_data.get("expires_in", 3600)
+
+    # Meta does not use standard refresh tokens. Exchange the short-lived token
+    # (valid ~1 hour) for a long-lived token (~60 days) immediately.
+    if prov.get("long_lived_token") and access_token:
+        try:
+            ll_resp = httpx.get(
+                "https://graph.facebook.com/v21.0/oauth/access_token",
+                params={
+                    "grant_type": "fb_exchange_token",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "fb_exchange_token": access_token,
+                },
+                timeout=15,
+            )
+            ll_resp.raise_for_status()
+            ll_data = ll_resp.json()
+            access_token = ll_data.get("access_token", access_token)
+            expires_in = ll_data.get("expires_in", 5183944)  # ~60 days default
+            log.info("Meta: short-lived token exchanged for long-lived token (expires_in=%s)", expires_in)
+        except Exception as exc:
+            log.warning("Meta long-lived token exchange failed (using short-lived): %s", exc)
 
     i.oauth_access_token = access_token
     if refresh_token:

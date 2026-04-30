@@ -162,6 +162,61 @@ def test_oauth_authorize_redirects_when_configured():
         assert "accounts.google.com" in r.headers.get("location", "")
 
 
+def test_meta_oauth_authorize_redirects():
+    """Meta authorize should redirect to facebook.com with correct scopes."""
+    app = make_client("test_dash_meta_auth.db")
+    with TestClient(app, follow_redirects=False) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/meta",
+            headers=h,
+            json={"base_url": "", "config_json": '{"client_id":"test-meta-id","client_secret":"test-meta-secret"}'},
+        )
+        r = client.get("/integrations/meta/oauth/authorize", headers=h)
+        assert r.status_code in (302, 307)
+        loc = r.headers.get("location", "")
+        assert "facebook.com" in loc
+        assert "pages_manage_posts" in loc
+
+
+def test_google_business_oauth_authorize_redirects():
+    """Google Business authorize should redirect to accounts.google.com."""
+    app = make_client("test_dash_gbp_auth.db")
+    with TestClient(app, follow_redirects=False) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/google_business",
+            headers=h,
+            json={"base_url": "", "config_json": '{"client_id":"test-gid","client_secret":"test-gsecret"}'},
+        )
+        r = client.get("/integrations/google_business/oauth/authorize", headers=h)
+        assert r.status_code in (302, 307)
+        loc = r.headers.get("location", "")
+        assert "accounts.google.com" in loc
+        assert "business.manage" in loc
+
+
+def test_meta_and_google_business_seeded():
+    """meta and google_business should appear in the integrations list after startup."""
+    app = make_client("test_dash_social_seed.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        r = client.get("/integrations", headers=h)
+        assert r.status_code == 200
+        providers = [i["provider"] for i in r.json()]
+        assert "meta" in providers
+        assert "google_business" in providers
+
+
+def test_meta_oauth_disconnect():
+    app = make_client("test_dash_meta_disc.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        r = client.post("/integrations/meta/oauth/disconnect", headers=h)
+        assert r.status_code == 200
+        assert r.json()["disconnected"] is True
+
+
 def test_quick_links_crud():
     app = make_client("test_dash_ql.db")
     with TestClient(app) as client:
