@@ -138,6 +138,7 @@ def test_integrations_endpoint():
         providers = [i["provider"] for i in data]
         assert "google_calendar" in providers
         assert "immich-gpt" in providers
+        assert "paperless-gpt" in providers
         # Each integration must include the new fields
         for item in data:
             assert "config_fields" in item
@@ -234,6 +235,76 @@ def test_paperless_test_endpoint_handles_non_json_response():
 
         assert r.status_code == 502
         assert r.json()["detail"] == "Paperless-ngx returned a non-JSON response: Internal Server Error"
+
+
+def test_paperless_dashboard_filters_ai_processed_documents():
+    app = make_client("test_dash_paperless_tag.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/paperless",
+            headers=h,
+            json={"base_url": "http://paperless.local:8000", "config_json": '{"api_key":"test-key"}'},
+        )
+
+        tag_request = httpx.Request("GET", "http://paperless.local:8000/api/tags/")
+        docs_request = httpx.Request("GET", "http://paperless.local:8000/api/documents/")
+        responses = [
+            httpx.Response(200, json={"results": [{"id": 7, "name": "ai-processed"}]}, request=tag_request),
+            httpx.Response(
+                200,
+                json={
+                    "count": 1,
+                    "results": [{"id": 42, "title": "Invoice ABC", "added": "2026-04-30T12:00:00Z"}],
+                },
+                request=docs_request,
+            ),
+        ]
+
+        with patch("httpx.get", side_effect=responses) as mock_get:
+            r = client.post("/dashboard/refresh/paperless", headers=h)
+
+        assert r.status_code == 200
+        params = mock_get.call_args_list[1].kwargs["params"]
+        assert params["tags__id__all"] == 7
+        payload = client.get("/dashboard", headers=h).json()
+        docs = payload["paperless"]["data"]["recent_documents"]
+        assert docs == [
+            {
+                "id": 42,
+                "title": "Invoice ABC",
+                "added": "2026-04-30T12:00:00Z",
+                "document_url": "http://paperless.local:8000/documents/42/details",
+            }
+        ]
+        assert payload["paperless"]["data"]["tag"] == "ai-processed"
+
+
+def test_paperless_dashboard_tag_setting_is_customizable():
+    app = make_client("test_dash_paperless_tag_setting.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/paperless",
+            headers=h,
+            json={"base_url": "http://paperless.local:8000", "config_json": '{"api_key":"test-key"}'},
+        )
+        client.put("/settings/dashboard.paperless.tag", headers=h, json={"value": "tax"})
+
+        tag_request = httpx.Request("GET", "http://paperless.local:8000/api/tags/")
+        docs_request = httpx.Request("GET", "http://paperless.local:8000/api/documents/")
+        responses = [
+            httpx.Response(200, json={"results": [{"id": 9, "name": "tax"}]}, request=tag_request),
+            httpx.Response(200, json={"count": 0, "results": []}, request=docs_request),
+        ]
+
+        with patch("httpx.get", side_effect=responses) as mock_get:
+            r = client.post("/dashboard/refresh/paperless", headers=h)
+
+        assert r.status_code == 200
+        assert mock_get.call_args_list[0].kwargs["params"]["query"] == "tax"
+        assert mock_get.call_args_list[1].kwargs["params"]["tags__id__all"] == 9
+        assert client.get("/dashboard", headers=h).json()["paperless"]["data"]["tag"] == "tax"
 
 
 def test_jobber_oauth_disconnect():

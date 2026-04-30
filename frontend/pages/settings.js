@@ -114,6 +114,16 @@ const INTEGRATION_FIELDS = {
       { key: 'api_key',  label: 'Immich-GPT API Key',  placeholder: 'Service API key or token', type: 'password', help: 'Used by processing summaries and image classification flows' },
     ],
   },
+  'paperless-gpt': {
+    label: 'Paperless-GPT',
+    icon: '🤖',
+    description: 'Process documents with AI and surface pending document work.',
+    authType: 'api_key',
+    fields: [
+      { key: 'base_url', label: 'Paperless-GPT Base URL', placeholder: 'http://192.168.1.x:8080', help: 'Your Paperless-GPT service URL on the local network' },
+      { key: 'api_key',  label: 'Paperless-GPT API Key',  placeholder: 'Service API key or token', type: 'password', help: 'Used by processing summaries and document classification flows' },
+    ],
+  },
   paperless: {
     label: 'Paperless-ngx',
     icon: '📄',

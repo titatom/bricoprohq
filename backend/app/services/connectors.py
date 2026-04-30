@@ -13,9 +13,10 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 import httpx
+from sqlalchemy.orm import object_session
 from sqlalchemy.orm import Session
 
-from ..models import Integration
+from ..models import Integration, Setting
 
 log = logging.getLogger("bricopro.connectors")
 
@@ -39,12 +40,25 @@ class BaseConnector:
 
     def __init__(self, integration: Integration):
         self.integration = integration
+        self.session = object_session(integration)
         try:
             self.config = json.loads(integration.config_json or "{}")
         except Exception:
             self.config = {}
         self.base_url = (integration.base_url or "").rstrip("/")
         self.api_key = self.config.get("api_key", "")
+
+    def _setting(self, key: str, default: str = "") -> str:
+        if not self.session:
+            return default
+        setting = self.session.query(Setting).filter(Setting.key == key).first()
+        return setting.value if setting and setting.value != "" else default
+
+    def _int_setting(self, key: str, default: int) -> int:
+        try:
+            return max(1, min(50, int(self._setting(key, str(default)))))
+        except (TypeError, ValueError):
+            return default
 
     def _require_config(self):
         if not self.base_url:
@@ -277,19 +291,38 @@ class ImmichConnector(BaseConnector):
         self._require_config()
         try:
             headers = {"x-api-key": self.api_key}
-            # Get recent assets count
-            r = httpx.get(
-                f"{self.base_url}/api/asset",
-                params={"take": 10, "skip": 0},
-                headers=headers,
-                timeout=10,
-            )
+            album_id = self._setting("dashboard.immich.album_id", self.config.get("dashboard_album_id", "")).strip()
+            limit = self._int_setting("dashboard.immich.limit", 6)
+            if album_id:
+                r = httpx.get(
+                    f"{self.base_url}/api/albums/{album_id}",
+                    headers=headers,
+                    timeout=10,
+                )
+            else:
+                r = httpx.get(
+                    f"{self.base_url}/api/asset",
+                    params={"take": limit, "skip": 0},
+                    headers=headers,
+                    timeout=10,
+                )
             r.raise_for_status()
             assets = _json_or_connector_error(r, "Immich")
-            if isinstance(assets, list):
-                recent = [{"id": a.get("id"), "filename": a.get("originalFileName"), "type": a.get("type")} for a in assets[:5]]
-                return {"recent_assets": recent, "returned": len(assets)}
-            return {"recent_assets": [], "returned": 0}
+            if isinstance(assets, dict):
+                assets = assets.get("assets", [])
+            if not isinstance(assets, list):
+                return {"recent_assets": [], "returned": 0, "album_id": album_id}
+            recent = [
+                {
+                    "id": a.get("id"),
+                    "filename": a.get("originalFileName") or a.get("originalPath") or "Untitled photo",
+                    "type": a.get("type"),
+                    "preview_url": f"{self.base_url}/api/assets/{a.get('id')}/thumbnail?size=preview" if a.get("id") else "",
+                    "asset_url": f"{self.base_url}/photos/{a.get('id')}" if a.get("id") else self.base_url,
+                }
+                for a in assets[:limit]
+            ]
+            return {"recent_assets": recent, "returned": len(assets), "album_id": album_id}
         except httpx.HTTPStatusError as exc:
             raise ConnectorError(f"Immich HTTP error: {exc.response.status_code}") from exc
         except httpx.RequestError as exc:
@@ -326,13 +359,41 @@ class ImmichGptConnector(BaseConnector):
 class PaperlessConnector(BaseConnector):
     provider = "paperless"
 
+    def _tag_id_for_name(self, tag_name: str, headers: dict) -> int | None:
+        if not tag_name:
+            return None
+        r = httpx.get(
+            f"{self.base_url}/api/tags/",
+            params={"page_size": 100, "query": tag_name},
+            headers=headers,
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = _json_or_connector_error(r, "Paperless-ngx")
+        tags = data if isinstance(data, list) else data.get("results", [])
+        if not tags:
+            return None
+        normalized = tag_name.casefold()
+        for tag in tags:
+            if str(tag.get("name", "")).casefold() == normalized:
+                return tag.get("id")
+        return tags[0].get("id")
+
     def fetch(self) -> dict:
         self._require_config()
         try:
             headers = {"Authorization": f"Token {self.api_key}"}
+            tag_name = self._setting("dashboard.paperless.tag", self.config.get("dashboard_tag", "ai-processed")).strip()
+            limit = self._int_setting("dashboard.paperless.limit", 5)
+            params = {"page_size": limit, "ordering": "-added"}
+            if tag_name:
+                tag_id = self._tag_id_for_name(tag_name, headers)
+                if tag_id is None:
+                    return {"recent_documents": [], "count": 0, "tag": tag_name}
+                params["tags__id__all"] = tag_id
             r = httpx.get(
                 f"{self.base_url}/api/documents/",
-                params={"page_size": 10, "ordering": "-added"},
+                params=params,
                 headers=headers,
                 timeout=10,
             )
@@ -341,15 +402,45 @@ class PaperlessConnector(BaseConnector):
             docs = data.get("results", [])
             return {
                 "recent_documents": [
-                    {"id": d.get("id"), "title": d.get("title"), "added": d.get("added")}
-                    for d in docs[:5]
+                    {
+                        "id": d.get("id"),
+                        "title": d.get("title") or d.get("original_file_name") or "Untitled document",
+                        "added": d.get("added"),
+                        "document_url": f"{self.base_url}/documents/{d.get('id')}/details" if d.get("id") else self.base_url,
+                    }
+                    for d in docs[:limit]
                 ],
                 "count": data.get("count", 0),
+                "tag": tag_name,
             }
         except httpx.HTTPStatusError as exc:
             raise ConnectorError(f"Paperless HTTP error: {exc.response.status_code}") from exc
         except httpx.RequestError as exc:
             raise ConnectorError(f"Paperless request failed: {exc}") from exc
+
+
+class PaperlessGptConnector(BaseConnector):
+    provider = "paperless-gpt"
+
+    def fetch(self) -> dict:
+        self._require_config()
+        try:
+            r = httpx.get(
+                f"{self.base_url}/api/queue/summary",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=10,
+            )
+            r.raise_for_status()
+            data = _json_or_connector_error(r, "Paperless-GPT")
+            return {
+                "pending_documents": data.get("pending_documents", data.get("pending", 0)),
+                "needs_review": data.get("needs_review", 0),
+                "processed_documents": data.get("processed_documents", data.get("processed", 0)),
+            }
+        except httpx.HTTPStatusError as exc:
+            raise ConnectorError(f"Paperless-GPT HTTP error: {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise ConnectorError(f"Paperless-GPT request failed: {exc}") from exc
 
 
 # ── Meta (Facebook + Instagram) ───────────────────────────────────────────────
@@ -523,6 +614,7 @@ _CONNECTORS = {
     "immich": ImmichConnector,
     "immich-gpt": ImmichGptConnector,
     "paperless": PaperlessConnector,
+    "paperless-gpt": PaperlessGptConnector,
     "meta": MetaConnector,
     "google_business": GoogleBusinessConnector,
 }
