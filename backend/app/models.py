@@ -36,6 +36,9 @@ class Integration(Base):
     status: Mapped[str] = mapped_column(String(50), default="unknown")
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     config_json: Mapped[str] = mapped_column(Text, default="{}")
+    oauth_access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    oauth_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    oauth_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 class DashboardCache(Base):
     __tablename__ = "dashboard_cache"

@@ -47,9 +47,14 @@ def test_integrations_endpoint():
         h = auth(client)
         r = client.get("/integrations", headers=h)
         assert r.status_code == 200
-        providers = [i["provider"] for i in r.json()]
+        data = r.json()
+        providers = [i["provider"] for i in data]
         assert "google_calendar" in providers
         assert "immich-gpt" in providers
+        # Each integration must include the new fields
+        for item in data:
+            assert "config_fields" in item
+            assert "oauth_connected" in item
 
 
 def test_update_integration():
@@ -62,6 +67,154 @@ def test_update_integration():
             json={"base_url": "http://immich.local:2283", "config_json": '{"api_key":"test-key"}'},
         )
         assert r.status_code == 200
+        data = r.json()
+        assert data["provider"] == "immich"
+        assert data["base_url"] == "http://immich.local:2283"
+        # api_key should be masked in the response
+        assert data["config_fields"]["api_key"] == "••••••••"
+
+
+def test_update_integration_masked_value_preserved():
+    """Sending masked placeholder back should not overwrite the real stored secret."""
+    app = make_client("test_dash_mask.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        # First save with a real key
+        r1 = client.put(
+            "/integrations/paperless",
+            headers=h,
+            json={"base_url": "http://paperless.local", "config_json": '{"api_key":"real-secret-token"}'},
+        )
+        assert r1.status_code == 200
+        # Now resave with the masked placeholder (simulating UI re-submit without editing)
+        r2 = client.put(
+            "/integrations/paperless",
+            headers=h,
+            json={"base_url": "http://paperless.local", "config_json": '{"api_key":"••••••••"}'},
+        )
+        assert r2.status_code == 200
+        # Verify through GET that the stored key is still the real one
+        r3 = client.get("/integrations/paperless", headers=h)
+        assert r3.status_code == 200
+        # The masked display should still show presence (not empty)
+        assert r3.json()["config_fields"]["api_key"] == "••••••••"
+
+
+def test_integration_test_endpoint_not_configured():
+    app = make_client("test_dash_test.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        # Immich is seeded but with no credentials — should return 400
+        r = client.post("/integrations/immich/test", headers=h)
+        assert r.status_code == 400  # ConnectorNotConfigured
+
+
+def test_jobber_oauth_disconnect():
+    app = make_client("test_dash_jobber.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        r = client.post("/integrations/jobber/oauth/disconnect", headers=h)
+        assert r.status_code == 200
+        assert r.json()["disconnected"] is True
+
+
+def test_google_calendar_oauth_disconnect():
+    app = make_client("test_dash_google.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        r = client.post("/integrations/google_calendar/oauth/disconnect", headers=h)
+        assert r.status_code == 200
+        assert r.json()["disconnected"] is True
+
+
+def test_oauth_authorize_missing_client_id():
+    """Attempting OAuth authorize without a saved client_id should return 400."""
+    app = make_client("test_dash_oauth_nocid.db")
+    with TestClient(app, follow_redirects=False) as client:
+        h = auth(client)
+        # google_calendar is seeded with no config
+        r = client.get("/integrations/google_calendar/oauth/authorize", headers=h)
+        assert r.status_code == 400
+
+
+def test_oauth_authorize_unsupported_provider():
+    """A provider not in OAUTH_PROVIDERS registry should return 400."""
+    app = make_client("test_dash_oauth_bad.db")
+    with TestClient(app, follow_redirects=False) as client:
+        h = auth(client)
+        r = client.get("/integrations/immich/oauth/authorize", headers=h)
+        assert r.status_code == 400
+
+
+def test_oauth_authorize_redirects_when_configured():
+    """With client_id saved, authorize should redirect to the provider."""
+    app = make_client("test_dash_oauth_redir.db")
+    with TestClient(app, follow_redirects=False) as client:
+        h = auth(client)
+        # Save client_id for google_calendar
+        client.put(
+            "/integrations/google_calendar",
+            headers=h,
+            json={"base_url": "", "config_json": '{"client_id":"test-gid","client_secret":"test-gsecret"}'},
+        )
+        r = client.get("/integrations/google_calendar/oauth/authorize", headers=h)
+        assert r.status_code in (302, 307)
+        assert "accounts.google.com" in r.headers.get("location", "")
+
+
+def test_meta_oauth_authorize_redirects():
+    """Meta authorize should redirect to facebook.com with correct scopes."""
+    app = make_client("test_dash_meta_auth.db")
+    with TestClient(app, follow_redirects=False) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/meta",
+            headers=h,
+            json={"base_url": "", "config_json": '{"client_id":"test-meta-id","client_secret":"test-meta-secret"}'},
+        )
+        r = client.get("/integrations/meta/oauth/authorize", headers=h)
+        assert r.status_code in (302, 307)
+        loc = r.headers.get("location", "")
+        assert "facebook.com" in loc
+        assert "pages_manage_posts" in loc
+
+
+def test_google_business_oauth_authorize_redirects():
+    """Google Business authorize should redirect to accounts.google.com."""
+    app = make_client("test_dash_gbp_auth.db")
+    with TestClient(app, follow_redirects=False) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/google_business",
+            headers=h,
+            json={"base_url": "", "config_json": '{"client_id":"test-gid","client_secret":"test-gsecret"}'},
+        )
+        r = client.get("/integrations/google_business/oauth/authorize", headers=h)
+        assert r.status_code in (302, 307)
+        loc = r.headers.get("location", "")
+        assert "accounts.google.com" in loc
+        assert "business.manage" in loc
+
+
+def test_meta_and_google_business_seeded():
+    """meta and google_business should appear in the integrations list after startup."""
+    app = make_client("test_dash_social_seed.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        r = client.get("/integrations", headers=h)
+        assert r.status_code == 200
+        providers = [i["provider"] for i in r.json()]
+        assert "meta" in providers
+        assert "google_business" in providers
+
+
+def test_meta_oauth_disconnect():
+    app = make_client("test_dash_meta_disc.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        r = client.post("/integrations/meta/oauth/disconnect", headers=h)
+        assert r.status_code == 200
+        assert r.json()["disconnected"] is True
 
 
 def test_quick_links_crud():

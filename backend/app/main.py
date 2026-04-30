@@ -1,10 +1,14 @@
 import json
 import logging
 import os
+import secrets
 from datetime import datetime, timezone, timedelta, date
+from urllib.parse import urlencode
 
-from fastapi import FastAPI, Depends, HTTPException, Header, Query
+import httpx
+from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from jose import jwt, JWTError
 
@@ -43,7 +47,7 @@ app.add_middleware(
 
 Base.metadata.create_all(bind=_db_module.engine)
 
-SOURCES = ["google_calendar", "jobber", "immich", "immich-gpt", "paperless"]
+SOURCES = ["google_calendar", "jobber", "immich", "immich-gpt", "paperless", "meta", "google_business"]
 CACHE_TTL_MINUTES = 15
 PENDING_IMAGE_STATUSES = {"new", "pending_ai", "needs_review"}
 PENDING_DOC_STATUSES = {"new", "pending_ai", "needs_review", "missing_tags", "missing_correspondent", "missing_document_type"}
@@ -153,17 +157,264 @@ def ql_del(id: int, _: User = Depends(auth_user), db: Session = Depends(get_db))
 
 # ── Integrations ──────────────────────────────────────────────────────────────
 
+# In-memory CSRF state store: state_token → provider name
+_oauth_states: dict[str, str] = {}
+
+# Secret config keys that are always masked in API responses
+_SECRET_KEYS = {"api_key", "client_secret"}
+
+# ── OAuth provider registry ────────────────────────────────────────────────────
+# Each entry describes how to build an authorization URL and exchange the code.
+
+OAUTH_PROVIDERS: dict[str, dict] = {
+    "jobber": {
+        "authorize_url": "https://api.getjobber.com/api/oauth/authorize",
+        "token_url":     "https://api.getjobber.com/api/oauth/token",
+        "scopes":        [],  # Jobber scopes are configured in the Developer Center app
+        "extra_params":  {},
+    },
+    "google_calendar": {
+        "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url":     "https://oauth2.googleapis.com/token",
+        "refresh_url":   "https://oauth2.googleapis.com/token",
+        "scopes":        ["https://www.googleapis.com/auth/calendar.readonly"],
+        # access_type=offline → Google returns a refresh_token
+        # prompt=consent → always show consent screen so refresh_token is included
+        "extra_params":  {"access_type": "offline", "prompt": "consent"},
+    },
+    "google_business": {
+        "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url":     "https://oauth2.googleapis.com/token",
+        "refresh_url":   "https://oauth2.googleapis.com/token",
+        # Business Profile Management API scope (view + respond to reviews, post updates)
+        "scopes": [
+            "https://www.googleapis.com/auth/business.manage",
+        ],
+        "extra_params": {"access_type": "offline", "prompt": "consent"},
+    },
+    "meta": {
+        "authorize_url": "https://www.facebook.com/v21.0/dialog/oauth",
+        "token_url":     "https://graph.facebook.com/v21.0/oauth/access_token",
+        # Pages permissions: manage posts + read page insights; Instagram requires pages_show_list
+        "scopes": [
+            "pages_show_list",
+            "pages_read_engagement",
+            "pages_manage_posts",
+            "instagram_basic",
+            "instagram_content_publish",
+            "business_management",
+        ],
+        "extra_params": {},
+        # Meta does not use standard refresh tokens; we exchange for a long-lived token post-callback.
+        "long_lived_token": True,
+    },
+}
+
+
+def _oauth_redirect_uri(provider: str) -> str:
+    """
+    Return the public-facing OAuth callback URL for a given provider.
+    Priority:
+      1. {PROVIDER_UPPER}_REDIRECT_URI env var (e.g. JOBBER_REDIRECT_URI)
+      2. APP_BASE_URL env var + /api/integrations/{provider}/oauth/callback
+      3. localhost:3000 fallback (dev only)
+    The callback is served by the backend through the Next.js /api/* proxy.
+    """
+    env_key = f"{provider.upper().replace('-', '_')}_REDIRECT_URI"
+    explicit = os.getenv(env_key, "").strip()
+    if explicit:
+        return explicit
+    base = os.getenv("APP_BASE_URL", "http://localhost:3000").rstrip("/")
+    return f"{base}/api/integrations/{provider}/oauth/callback"
+
+
+def _integration_out(i: Integration) -> dict:
+    """Serialize an Integration row, returning masked config fields."""
+    try:
+        config = json.loads(i.config_json or "{}")
+    except Exception:
+        config = {}
+    config_fields = {}
+    for k, v in config.items():
+        config_fields[k] = "••••••••" if (k in _SECRET_KEYS and v) else v
+    return {
+        "provider": i.provider,
+        "base_url": i.base_url or "",
+        "status": i.status,
+        "last_sync_at": i.last_sync_at.isoformat() if i.last_sync_at else None,
+        "config_fields": config_fields,
+        "oauth_connected": bool(i.oauth_access_token),
+    }
+
+
 @app.get("/integrations")
 def integrations(_: User = Depends(auth_user), db: Session = Depends(get_db)):
-    return [
-        {
-            "provider": i.provider,
-            "base_url": i.base_url,
-            "status": i.status,
-            "last_sync_at": i.last_sync_at.isoformat() if i.last_sync_at else None,
-        }
-        for i in db.query(Integration).all()
-    ]
+    return [_integration_out(i) for i in db.query(Integration).all()]
+
+
+# ── Generic OAuth routes — must come before the /{provider} wildcard ──────────
+
+@app.get("/integrations/{provider}/oauth/authorize")
+def oauth_authorize(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Start OAuth 2.0 authorization flow for any registered OAuth provider."""
+    if provider not in OAUTH_PROVIDERS:
+        raise HTTPException(400, f"OAuth not supported for provider '{provider}'")
+
+    i = db.query(Integration).filter(Integration.provider == provider).first()
+    if not i:
+        raise HTTPException(404, f"Integration '{provider}' not configured")
+    try:
+        config = json.loads(i.config_json or "{}")
+    except Exception:
+        config = {}
+
+    client_id = config.get("client_id", "")
+    if not client_id:
+        raise HTTPException(400, f"{provider} client_id not configured. Save Client ID first.")
+
+    state = secrets.token_hex(16)
+    _oauth_states[state] = provider
+
+    prov = OAUTH_PROVIDERS[provider]
+    redirect_uri = _oauth_redirect_uri(provider)
+    params: dict = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "state": state,
+        **prov.get("extra_params", {}),
+    }
+    scopes = prov.get("scopes", [])
+    if scopes:
+        params["scope"] = " ".join(scopes)
+
+    return RedirectResponse(f"{prov['authorize_url']}?{urlencode(params)}")
+
+
+@app.get("/integrations/{provider}/oauth/callback")
+def oauth_callback(
+    provider: str,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Handle OAuth 2.0 callback for any registered OAuth provider."""
+    frontend_base = os.getenv("APP_BASE_URL", "http://localhost:3000").rstrip("/")
+
+    if error:
+        log.warning("OAuth error for %s: %s — %s", provider, error, error_description)
+        return RedirectResponse(
+            f"{frontend_base}/settings?oauth_error={error}&oauth_provider={provider}"
+        )
+
+    if not state or _oauth_states.get(state) != provider:
+        raise HTTPException(400, "Invalid or expired OAuth state")
+    _oauth_states.pop(state, None)
+
+    if not code:
+        raise HTTPException(400, "Authorization code missing")
+
+    if provider not in OAUTH_PROVIDERS:
+        raise HTTPException(400, f"OAuth not supported for provider '{provider}'")
+
+    i = db.query(Integration).filter(Integration.provider == provider).first()
+    if not i:
+        raise HTTPException(404, f"Integration '{provider}' not found")
+    try:
+        config = json.loads(i.config_json or "{}")
+    except Exception:
+        config = {}
+
+    client_id = config.get("client_id", "")
+    client_secret = config.get("client_secret", "")
+    if not client_id or not client_secret:
+        raise HTTPException(400, f"{provider} client_id/client_secret not configured")
+
+    prov = OAUTH_PROVIDERS[provider]
+    redirect_uri = _oauth_redirect_uri(provider)
+
+    try:
+        resp = httpx.post(
+            prov["token_url"],
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        token_data = resp.json()
+    except httpx.HTTPStatusError as exc:
+        log.error("%s token exchange failed: %s %s", provider, exc.response.status_code, exc.response.text)
+        raise HTTPException(502, f"{provider} token exchange failed: {exc.response.status_code}")
+    except httpx.RequestError as exc:
+        raise HTTPException(502, f"{provider} token exchange request failed: {exc}")
+
+    access_token = token_data.get("access_token", "")
+    refresh_token = token_data.get("refresh_token", "")
+    expires_in = token_data.get("expires_in", 3600)
+
+    # Meta does not use standard refresh tokens. Exchange the short-lived token
+    # (valid ~1 hour) for a long-lived token (~60 days) immediately.
+    if prov.get("long_lived_token") and access_token:
+        try:
+            ll_resp = httpx.get(
+                "https://graph.facebook.com/v21.0/oauth/access_token",
+                params={
+                    "grant_type": "fb_exchange_token",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "fb_exchange_token": access_token,
+                },
+                timeout=15,
+            )
+            ll_resp.raise_for_status()
+            ll_data = ll_resp.json()
+            access_token = ll_data.get("access_token", access_token)
+            expires_in = ll_data.get("expires_in", 5183944)  # ~60 days default
+            log.info("Meta: short-lived token exchanged for long-lived token (expires_in=%s)", expires_in)
+        except Exception as exc:
+            log.warning("Meta long-lived token exchange failed (using short-lived): %s", exc)
+
+    i.oauth_access_token = access_token
+    if refresh_token:
+        i.oauth_refresh_token = refresh_token
+    i.oauth_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+    i.status = "ok"
+    i.last_sync_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return RedirectResponse(f"{frontend_base}/settings?oauth_connected={provider}")
+
+
+@app.post("/integrations/{provider}/oauth/disconnect")
+def oauth_disconnect(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Remove stored OAuth tokens for a provider."""
+    i = db.query(Integration).filter(Integration.provider == provider).first()
+    if not i:
+        raise HTTPException(404, f"Integration '{provider}' not found")
+    i.oauth_access_token = None
+    i.oauth_refresh_token = None
+    i.oauth_token_expires_at = None
+    i.status = "not_connected"
+    db.commit()
+    return {"disconnected": True}
+
+
+# ── Per-provider CRUD (wildcard — must come after specific oauth/* routes) ─────
+
+@app.get("/integrations/{provider}")
+def get_integration(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    i = db.query(Integration).filter(Integration.provider == provider).first()
+    if not i:
+        raise HTTPException(404, "Integration not found")
+    return _integration_out(i)
 
 
 @app.put("/integrations/{provider}")
@@ -177,9 +428,54 @@ def update_integration(
     if not i:
         i = Integration(provider=provider, status="not_connected")
     i.base_url = payload.base_url
-    i.config_json = payload.config_json
-    db.add(i); db.commit()
-    return {"updated": True}
+
+    # Merge incoming config with existing so that masked values ("••••••••")
+    # do not overwrite real secrets.
+    try:
+        existing_config = json.loads(i.config_json or "{}")
+    except Exception:
+        existing_config = {}
+    try:
+        new_config = json.loads(payload.config_json or "{}")
+    except Exception:
+        new_config = {}
+
+    SECRET_KEYS = {"api_key", "client_secret"}
+    for k, v in new_config.items():
+        if k in SECRET_KEYS and v and all(c == '•' for c in v):
+            # User left the masked placeholder — keep existing value
+            pass
+        else:
+            existing_config[k] = v
+
+    i.config_json = json.dumps(existing_config)
+    db.add(i)
+    db.commit()
+    return _integration_out(i)
+
+
+@app.post("/integrations/{provider}/test")
+def test_integration(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Attempt a live connection test for an integration."""
+    try:
+        from .services.connectors import get_connector, ConnectorNotConfigured, ConnectorError
+        connector = get_connector(provider, db)
+        result = connector.fetch()
+        i = db.query(Integration).filter(Integration.provider == provider).first()
+        if i:
+            i.status = "ok"
+            i.last_sync_at = datetime.now(timezone.utc)
+            db.commit()
+        return {"ok": True, "message": f"Connected successfully. Fetched data from {provider}.", "data": result}
+    except Exception as exc:
+        i = db.query(Integration).filter(Integration.provider == provider).first()
+        if i:
+            i.status = "error"
+            db.commit()
+        from .services.connectors import ConnectorNotConfigured
+        if isinstance(exc, ConnectorNotConfigured):
+            raise HTTPException(400, str(exc))
+        raise HTTPException(502, str(exc))
 
 
 # ── Dashboard cache ───────────────────────────────────────────────────────────
