@@ -338,7 +338,12 @@ def integrations(_: User = Depends(auth_user), db: Session = Depends(get_db)):
 # ── Generic OAuth routes — must come before the /{provider} wildcard ──────────
 
 @app.get("/integrations/{provider}/oauth/authorize")
-def oauth_authorize(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+def oauth_authorize(
+    provider: str,
+    mode: str = Query(default="redirect"),
+    _: User = Depends(auth_user),
+    db: Session = Depends(get_db),
+):
     """Start OAuth 2.0 authorization flow for any registered OAuth provider."""
     registry_provider = _oauth_registry_provider(provider)
     if registry_provider not in OAUTH_PROVIDERS:
@@ -372,7 +377,10 @@ def oauth_authorize(provider: str, _: User = Depends(auth_user), db: Session = D
     if scopes:
         params["scope"] = " ".join(scopes)
 
-    return RedirectResponse(f"{prov['authorize_url']}?{urlencode(params)}")
+    authorization_url = f"{prov['authorize_url']}?{urlencode(params)}"
+    if mode == "json":
+        return {"authorization_url": authorization_url}
+    return RedirectResponse(authorization_url)
 
 
 @app.get("/integrations/{provider}/oauth/callback")

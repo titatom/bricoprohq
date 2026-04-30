@@ -208,13 +208,58 @@ def test_immich_test_endpoint_handles_non_json_response():
         )
         assert r.status_code == 200
 
-        request = httpx.Request("GET", "http://immich.local:2283/api/asset")
+        request = httpx.Request("POST", "http://immich.local:2283/api/search/metadata")
         response = httpx.Response(200, text="Internal Server Error", request=request)
-        with patch("httpx.get", return_value=response):
+        with patch("httpx.post", return_value=response):
             r = client.post("/integrations/immich/test", headers=h)
 
         assert r.status_code == 502
         assert r.json()["detail"] == "Immich returned a non-JSON response: Internal Server Error"
+
+
+def test_immich_test_endpoint_uses_search_metadata():
+    app = make_client("test_dash_immich_search.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/immich",
+            headers=h,
+            json={"base_url": "http://immich.local:2283", "config_json": '{"api_key":"test-key"}'},
+        )
+
+        request = httpx.Request("POST", "http://immich.local:2283/api/search/metadata")
+        response = httpx.Response(
+            200,
+            json={"assets": {"items": [{"id": "asset-1", "originalFileName": "photo.jpg", "type": "IMAGE"}]}},
+            request=request,
+        )
+        with patch("httpx.post", return_value=response) as mock_post:
+            r = client.post("/integrations/immich/test", headers=h)
+
+        assert r.status_code == 200
+        assert mock_post.call_args.kwargs["json"] == {"page": 1, "size": 6}
+        assert mock_post.call_args.kwargs["headers"]["x-api-key"] == "test-key"
+        assert r.json()["data"]["recent_assets"][0]["filename"] == "photo.jpg"
+
+
+def test_immich_404_has_actionable_error():
+    app = make_client("test_dash_immich_404.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/immich",
+            headers=h,
+            json={"base_url": "http://immich.local:2283", "config_json": '{"api_key":"test-key"}'},
+        )
+
+        request = httpx.Request("POST", "http://immich.local:2283/api/search/metadata")
+        response = httpx.Response(404, json={"message": "Not Found"}, request=request)
+        with patch("httpx.post", return_value=response):
+            r = client.post("/integrations/immich/test", headers=h)
+
+        assert r.status_code == 502
+        assert "Immich HTTP error 404 at /api/search/metadata" in r.json()["detail"]
+        assert "check the base URL and service API version" in r.json()["detail"]
 
 
 def test_paperless_test_endpoint_handles_non_json_response():
@@ -235,6 +280,99 @@ def test_paperless_test_endpoint_handles_non_json_response():
 
         assert r.status_code == 502
         assert r.json()["detail"] == "Paperless-ngx returned a non-JSON response: Internal Server Error"
+
+
+def test_paperless_gpt_defaults_to_no_auth_documents_endpoint():
+    app = make_client("test_dash_paperless_gpt_no_auth.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={"base_url": "http://paperless-gpt.local:8080", "config_json": "{}"},
+        )
+
+        request = httpx.Request("GET", "http://paperless-gpt.local:8080/api/documents")
+        response = httpx.Response(
+            200,
+            json={"documents": [{"id": 1, "title": "Invoice", "tags": ["paperless-gpt"]}]},
+            request=request,
+        )
+        with patch("httpx.get", return_value=response) as mock_get:
+            r = client.post("/integrations/paperless-gpt/test", headers=h)
+
+        assert r.status_code == 200
+        assert "Authorization" not in mock_get.call_args.kwargs["headers"]
+        assert r.json()["data"] == {
+            "pending_documents": 1,
+            "needs_review": 1,
+            "processed_documents": 0,
+        }
+
+
+def test_paperless_gpt_supports_bearer_auth_mode():
+    app = make_client("test_dash_paperless_gpt_bearer.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={
+                "base_url": "http://paperless-gpt.local:8080",
+                "config_json": '{"auth_mode":"bearer","api_key":"secret-token"}',
+            },
+        )
+
+        request = httpx.Request("GET", "http://paperless-gpt.local:8080/api/documents")
+        response = httpx.Response(200, json={"documents": []}, request=request)
+        with patch("httpx.get", return_value=response) as mock_get:
+            r = client.post("/integrations/paperless-gpt/test", headers=h)
+
+        assert r.status_code == 200
+        assert mock_get.call_args.kwargs["headers"]["Authorization"] == "Bearer secret-token"
+
+
+def test_paperless_gpt_401_has_actionable_error():
+    app = make_client("test_dash_paperless_gpt_401.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={
+                "base_url": "http://paperless-gpt.local:8080",
+                "config_json": '{"auth_mode":"bearer","api_key":"bad-token"}',
+            },
+        )
+
+        request = httpx.Request("GET", "http://paperless-gpt.local:8080/api/documents")
+        response = httpx.Response(401, json={"message": "Unauthorized"}, request=request)
+        with patch("httpx.get", return_value=response):
+            r = client.post("/integrations/paperless-gpt/test", headers=h)
+
+        assert r.status_code == 502
+        assert "Paperless-GPT HTTP error 401 at /api/documents" in r.json()["detail"]
+        assert "check the API key/auth mode" in r.json()["detail"]
+
+
+def test_paperless_gpt_404_has_actionable_error():
+    app = make_client("test_dash_paperless_gpt_404.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={"base_url": "http://paperless-gpt.local:8080", "config_json": "{}"},
+        )
+
+        request = httpx.Request("GET", "http://paperless-gpt.local:8080/api/documents")
+        response = httpx.Response(404, json={"message": "Not Found"}, request=request)
+        with patch("httpx.get", return_value=response):
+            r = client.post("/integrations/paperless-gpt/test", headers=h)
+
+        assert r.status_code == 502
+        assert "Paperless-GPT HTTP error 404 at /api/documents" in r.json()["detail"]
+        assert "check the base URL and service API version" in r.json()["detail"]
 
 
 def test_paperless_dashboard_filters_ai_processed_documents():
@@ -361,6 +499,24 @@ def test_oauth_authorize_redirects_when_configured():
         assert "accounts.google.com" in loc
         assert "calendar.readonly" in loc
         assert "business.manage" in loc
+
+
+def test_oauth_authorize_json_mode_returns_authorization_url():
+    """Settings UI can fetch the OAuth URL with bearer auth before browser redirect."""
+    app = make_client("test_dash_oauth_json.db")
+    with TestClient(app, follow_redirects=False) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/jobber",
+            headers=h,
+            json={"base_url": "", "config_json": '{"client_id":"test-jobber-id","client_secret":"test-jobber-secret"}'},
+        )
+        r = client.get("/integrations/jobber/oauth/authorize?mode=json", headers=h)
+        assert r.status_code == 200
+        url = r.json()["authorization_url"]
+        assert "api.getjobber.com/api/oauth/authorize" in url
+        assert "client_id=test-jobber-id" in url
+        assert "state=" in url
 
 
 def test_meta_oauth_authorize_redirects():
