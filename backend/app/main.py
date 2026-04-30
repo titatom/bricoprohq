@@ -70,14 +70,22 @@ def auth_user(authorization: str = Header(default=""), db: Session = Depends(get
 
 # ── Startup seed ──────────────────────────────────────────────────────────────
 
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
 @app.on_event("startup")
 def startup_seed():
     db = next(get_db())
-    email = os.getenv("ADMIN_EMAIL", "admin@bricopro.local")
+    email = _normalize_email(os.getenv("ADMIN_EMAIL", "admin@bricopro.local"))
     pwd = os.getenv("ADMIN_PASSWORD", "admin1234")
-    if not db.query(User).filter(User.email == email).first():
+    admin = db.query(User).filter(User.email == email).first()
+    if not admin:
         db.add(User(email=email, password_hash=hash_password(pwd), role="admin"))
         log.info("Seeded admin user %s", email)
+    elif not verify_password(pwd, admin.password_hash):
+        admin.password_hash = hash_password(pwd)
+        log.info("Updated admin password from ADMIN_PASSWORD for %s", email)
     for s in SOURCES:
         if not db.query(Integration).filter(Integration.provider == s).first():
             db.add(Integration(provider=s, status="not_connected"))
@@ -95,7 +103,7 @@ def health():
 
 @app.post("/auth/login", response_model=LoginResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    u = db.query(User).filter(User.email == payload.email).first()
+    u = db.query(User).filter(User.email == _normalize_email(payload.email)).first()
     if not u or not verify_password(payload.password, u.password_hash):
         raise HTTPException(401, "Invalid credentials")
     return LoginResponse(access_token=create_access_token(u.email))
