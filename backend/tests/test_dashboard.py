@@ -149,7 +149,7 @@ def test_paperless_test_endpoint_handles_non_json_response():
             r = client.post("/integrations/paperless/test", headers=h)
 
         assert r.status_code == 502
-        assert r.json()["detail"] == "Paperless returned a non-JSON response: Internal Server Error"
+        assert r.json()["detail"] == "Paperless-ngx returned a non-JSON response: Internal Server Error"
 
 
 def test_jobber_oauth_disconnect():
