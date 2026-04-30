@@ -8,9 +8,11 @@ __pycache__/
 dist/
 build/
 .env
+.venv/
 
 # Testing
 backend/test*.db
+test*.db
 data/
 
 # Node
