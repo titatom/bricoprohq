@@ -648,7 +648,7 @@ export default function SettingsPage() {
               integrationsByProvider={intMap}
               onSave={saveIntegration}
               onTest={testIntegration}
-              onOAuthConnect={oauthConnectIntegration}
+              onOAuthConnect={startOAuthConnect}
               onDisconnect={disconnectIntegration}
             />
           ))}
