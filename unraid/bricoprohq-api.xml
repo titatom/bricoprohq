@@ -14,7 +14,7 @@
   <WebUI>http://[IP]:[PORT:8000]/docs</WebUI>
   <TemplateURL/>
   <Icon>https://raw.githubusercontent.com/titatom/bricoprohq/main/docs/icon.png</Icon>
-  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <ExtraParams>--restart=unless-stopped --health-cmd="python -c 'import urllib.request,sys; sys.exit(0) if urllib.request.urlopen(\"http://127.0.0.1:8000/health\", timeout=3).status == 200 else sys.exit(1)'" --health-interval=10s --health-timeout=5s --health-retries=12 --health-start-period=30s</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>

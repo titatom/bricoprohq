@@ -36,6 +36,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    healthcheck:
+      # Use a Python one-liner so we don't depend on curl/wget being installed
+      # in the slim image. Hits the FastAPI /health endpoint locally.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else sys.exit(1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   web:
     image: ghcr.io/titatom/bricoprohq-web:latest
@@ -46,7 +54,10 @@ services:
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:
-      - api
+      api:
+        # Wait for the API to actually answer /health so the proxy
+        # never sees ENOTFOUND/ECONNREFUSED on first page load.
+        condition: service_healthy
 
 volumes:
   db_data:
