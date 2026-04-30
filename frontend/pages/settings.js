@@ -70,9 +70,9 @@ const AI_PROVIDERS = [
 
 const INTEGRATION_FIELDS = {
   google_calendar: {
-    label: 'Google Calendar',
+    label: 'Google',
     icon: '📅',
-    description: 'Show upcoming events on the dashboard.',
+    description: 'Connect once for Calendar and Business Profile.',
     authType: 'oauth',
     connectLabel: 'Connect with Google',
     connectStyle: 'bg-blue-600 hover:bg-blue-700 border-blue-600',
@@ -139,16 +139,24 @@ const INTEGRATION_FIELDS = {
   google_business: {
     label: 'Google Business Profile',
     icon: '🗺️',
-    description: 'Connect your Google Business Profile to post updates and view reviews.',
-    authType: 'oauth',
-    connectLabel: 'Connect with Google',
-    connectStyle: 'bg-blue-600 hover:bg-blue-700 border-blue-600',
+    description: 'Uses the shared Google OAuth connection above.',
+    authType: 'shared_oauth',
+    sharedProvider: 'google_calendar',
+    sharedLabel: 'Google',
     fields: [
-      { key: 'client_id',     label: 'Client ID',     placeholder: 'From Google Cloud Console → OAuth 2.0 Client IDs', help: 'console.cloud.google.com → APIs & Services → Credentials → OAuth 2.0 Client IDs (can reuse the same credential as Google Calendar)' },
-      { key: 'client_secret', label: 'Client Secret', placeholder: 'Client Secret from Google Cloud Console', type: 'password', help: 'Same credential as Client ID above' },
     ],
   },
 };
+
+async function parseApiResponse(response, fallbackMessage) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    return { detail: text, message: text || fallbackMessage };
+  }
+}
 
 // ── Components ────────────────────────────────────────────────────────────────
 
@@ -299,7 +307,7 @@ function AiProviderSection({ settings, onSave, onTest }) {
   );
 }
 
-function IntegrationSection({ providerKey, meta, integration, onSave, onTest, onDisconnect }) {
+function IntegrationSection({ providerKey, meta, integration, integrationsByProvider, onSave, onTest, onDisconnect }) {
   const buildForm = (intg) => {
     const configFields = intg?.config_fields || {};
     const f = { base_url: intg?.base_url || '' };
@@ -347,7 +355,10 @@ function IntegrationSection({ providerKey, meta, integration, onSave, onTest, on
   };
 
   const isOAuth = meta.authType === 'oauth';
-  const oauthConnected = integration?.oauth_connected;
+  const isSharedOAuth = meta.authType === 'shared_oauth';
+  const sharedIntegration = isSharedOAuth ? integrationsByProvider?.[meta.sharedProvider] : null;
+  const oauthConnected = isSharedOAuth ? sharedIntegration?.oauth_connected : integration?.oauth_connected;
+  const oauthProviderKey = isSharedOAuth ? meta.sharedProvider : providerKey;
 
   const statusColor =
     integration?.status === 'ok'            ? 'bg-green-100 text-green-700' :
@@ -366,7 +377,7 @@ function IntegrationSection({ providerKey, meta, integration, onSave, onTest, on
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {isOAuth && oauthConnected && (
+          {(isOAuth || isSharedOAuth) && oauthConnected && (
             <span className="badge bg-green-100 text-green-700">Connected via OAuth</span>
           )}
           <span className={`badge ${statusColor}`}>
@@ -377,6 +388,13 @@ function IntegrationSection({ providerKey, meta, integration, onSave, onTest, on
       </div>
 
       <form onSubmit={save} className="space-y-3">
+        {isSharedOAuth && (
+          <div className="rounded-lg bg-blue-50 text-blue-700 px-4 py-3 text-sm">
+            Uses the shared {meta.sharedLabel || 'OAuth'} connection. Connect or disconnect Google once to enable both
+            Calendar and Business Profile.
+          </div>
+        )}
+
         {meta.fields.map(({ key, label, placeholder, type, help }) => (
           <div key={key}>
             <label className="label">{label}</label>
@@ -399,11 +417,13 @@ function IntegrationSection({ providerKey, meta, integration, onSave, onTest, on
         )}
 
         <div className="flex flex-wrap gap-2 pt-1">
-          <button type="submit" className="btn-primary text-sm" disabled={saving}>
-            {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
-          </button>
+          {!isSharedOAuth && (
+            <button type="submit" className="btn-primary text-sm" disabled={saving}>
+              {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
+            </button>
+          )}
 
-          {isOAuth ? (
+          {(isOAuth || isSharedOAuth) ? (
             oauthConnected ? (
               <button
                 type="button"
@@ -415,10 +435,10 @@ function IntegrationSection({ providerKey, meta, integration, onSave, onTest, on
               </button>
             ) : (
               <a
-                href={`/api/integrations/${providerKey}/oauth/authorize`}
+                href={`/api/integrations/${oauthProviderKey}/oauth/authorize`}
                 className={`btn-primary text-sm ${meta.connectStyle || 'bg-brand-600 hover:bg-brand-700'}`}
               >
-                {meta.connectLabel || `Connect with ${meta.label}`}
+                {meta.connectLabel || `Connect with ${meta.sharedLabel || meta.label}`}
               </a>
             )
           ) : (
@@ -447,7 +467,7 @@ export default function SettingsPage() {
 
   const testAiConnection = useCallback(async () => {
     const r = await apiFetch('/ai/test', { method: 'POST' });
-    const data = await r.json();
+    const data = await parseApiResponse(r, 'Test failed');
     if (r.ok) return { ok: true, message: data.message || 'Connection successful' };
     return { ok: false, message: data.detail || 'Test failed' };
   }, [apiFetch]);
@@ -511,7 +531,7 @@ export default function SettingsPage() {
   const testIntegration = useCallback(async (providerKey) => {
     try {
       const r = await apiFetch(`/integrations/${providerKey}/test`, { method: 'POST' });
-      const data = await r.json();
+      const data = await parseApiResponse(r, 'Connection test failed');
       if (r.ok) {
         setIntegrations((prev) =>
           prev.map((i) => (i.provider === providerKey ? { ...i, status: 'ok' } : i))
@@ -582,6 +602,7 @@ export default function SettingsPage() {
               providerKey={key}
               meta={meta}
               integration={intMap[key] || null}
+              integrationsByProvider={intMap}
               onSave={saveIntegration}
               onTest={testIntegration}
               onDisconnect={disconnectIntegration}

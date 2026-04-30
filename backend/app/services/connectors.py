@@ -20,6 +20,8 @@ from ..models import Integration
 log = logging.getLogger("bricopro.connectors")
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_PROVIDERS = {"google_calendar", "google_business"}
+GOOGLE_CANONICAL_PROVIDER = "google_calendar"
 
 
 class ConnectorNotConfigured(Exception):
@@ -58,6 +60,59 @@ class BaseConnector:
         raise NotImplementedError
 
 
+def _json_or_connector_error(response: httpx.Response, service_name: str):
+    try:
+        return response.json()
+    except ValueError as exc:
+        body = response.text.strip()
+        snippet = body[:120] if body else "<empty response>"
+        raise ConnectorError(f"{service_name} returned a non-JSON response: {snippet}") from exc
+
+
+def _google_oauth_config(integration: Integration) -> dict:
+    try:
+        config = json.loads(integration.config_json or "{}")
+    except Exception:
+        config = {}
+    if config.get("client_id") and config.get("client_secret"):
+        return config
+
+    from sqlalchemy.orm import object_session
+    session = object_session(integration)
+    if not session:
+        return config
+    canonical = session.query(Integration).filter(
+        Integration.provider == GOOGLE_CANONICAL_PROVIDER
+    ).first()
+    if not canonical:
+        return config
+    try:
+        canonical_config = json.loads(canonical.config_json or "{}")
+    except Exception:
+        return config
+    return {**canonical_config, **config}
+
+
+def _sync_google_tokens(integration: Integration, token_data: dict) -> None:
+    from sqlalchemy.orm import object_session
+    session = object_session(integration)
+    integrations = [integration]
+    if session:
+        integrations = session.query(Integration).filter(
+            Integration.provider.in_(GOOGLE_PROVIDERS)
+        ).all()
+
+    expires_in = token_data.get("expires_in", 3600)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+    for intg in integrations:
+        intg.oauth_access_token = token_data["access_token"]
+        intg.oauth_token_expires_at = expires_at
+        if "refresh_token" in token_data:
+            intg.oauth_refresh_token = token_data["refresh_token"]
+    if session:
+        session.commit()
+
+
 # ── Google Calendar ───────────────────────────────────────────────────────────
 
 class GoogleCalendarConnector(BaseConnector):
@@ -90,7 +145,7 @@ class GoogleCalendarConnector(BaseConnector):
                 "google_calendar: access token expired and no refresh token stored. "
                 "Reconnect via Settings."
             )
-        config = self.config
+        config = _google_oauth_config(intg)
         client_id = config.get("client_id", "")
         client_secret = config.get("client_secret", "")
         if not client_id or not client_secret:
@@ -116,18 +171,7 @@ class GoogleCalendarConnector(BaseConnector):
         except httpx.RequestError as exc:
             raise ConnectorError(f"Google token refresh request failed: {exc}") from exc
 
-        intg.oauth_access_token = token_data["access_token"]
-        expires_in = token_data.get("expires_in", 3600)
-        intg.oauth_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
-        # Google may return a new refresh_token in some configurations
-        if "refresh_token" in token_data:
-            intg.oauth_refresh_token = token_data["refresh_token"]
-        # Persist without needing a full db session here — caller must commit if using ORM session
-        # The integration object is already bound to a session managed by FastAPI's get_db().
-        from sqlalchemy.orm import object_session
-        session = object_session(intg)
-        if session:
-            session.commit()
+        _sync_google_tokens(intg, token_data)
 
     def fetch(self) -> dict:
         access_token = self._get_access_token()
@@ -241,7 +285,7 @@ class ImmichConnector(BaseConnector):
                 timeout=10,
             )
             r.raise_for_status()
-            assets = r.json()
+            assets = _json_or_connector_error(r, "Immich")
             if isinstance(assets, list):
                 recent = [{"id": a.get("id"), "filename": a.get("originalFileName"), "type": a.get("type")} for a in assets[:5]]
                 return {"recent_assets": recent, "returned": len(assets)}
@@ -264,7 +308,7 @@ class ImmichGptConnector(BaseConnector):
                 timeout=10,
             )
             r.raise_for_status()
-            data = r.json()
+            data = _json_or_connector_error(r, "Immich-GPT")
             return {
                 "pending_images": data.get("pending_images", data.get("pending", 0)),
                 "needs_review": data.get("needs_review", 0),
@@ -293,7 +337,7 @@ class PaperlessConnector(BaseConnector):
                 timeout=10,
             )
             r.raise_for_status()
-            data = r.json()
+            data = _json_or_connector_error(r, "Paperless-ngx")
             docs = data.get("results", [])
             return {
                 "recent_documents": [
@@ -402,13 +446,19 @@ class GoogleBusinessConnector(BaseConnector):
             raise ConnectorNotConfigured(
                 "google_business: access token expired and no refresh token. Reconnect via Settings."
             )
-        config = self.config
+        config = _google_oauth_config(intg)
+        client_id = config.get("client_id", "")
+        client_secret = config.get("client_secret", "")
+        if not client_id or not client_secret:
+            raise ConnectorNotConfigured(
+                "google_business: client_id/client_secret missing for token refresh."
+            )
         try:
             resp = httpx.post(
                 GOOGLE_TOKEN_URL,
                 data={
-                    "client_id": config.get("client_id", ""),
-                    "client_secret": config.get("client_secret", ""),
+                    "client_id": client_id,
+                    "client_secret": client_secret,
                     "refresh_token": intg.oauth_refresh_token,
                     "grant_type": "refresh_token",
                 },
@@ -422,14 +472,7 @@ class GoogleBusinessConnector(BaseConnector):
         except httpx.RequestError as exc:
             raise ConnectorError(f"Google Business token refresh request failed: {exc}") from exc
 
-        intg.oauth_access_token = td["access_token"]
-        intg.oauth_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(td.get("expires_in", 3600)))
-        if "refresh_token" in td:
-            intg.oauth_refresh_token = td["refresh_token"]
-        from sqlalchemy.orm import object_session
-        session = object_session(intg)
-        if session:
-            session.commit()
+        _sync_google_tokens(intg, td)
 
     def fetch(self) -> dict:
         token = self._get_access_token()
