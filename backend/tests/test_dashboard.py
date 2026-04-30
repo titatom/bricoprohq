@@ -50,6 +50,36 @@ def test_admin_password_env_change_updates_seeded_user():
         ).status_code == 200
 
 
+def test_default_admin_password_does_not_reset_existing_custom_password():
+    db_name = "test_dash_admin_password_default_guard.db"
+    os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///./{db_name}"
+    os.environ["ADMIN_EMAIL"] = "admin@bricopro.local"
+    os.environ["ADMIN_PASSWORD"] = "custom-admin-password"
+    from app import main
+    importlib.reload(main)
+
+    with TestClient(main.app) as client:
+        assert client.post(
+            "/auth/login",
+            json={"email": "admin@bricopro.local", "password": "custom-admin-password"},
+        ).status_code == 200
+
+    os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///./{db_name}"
+    os.environ["ADMIN_EMAIL"] = "admin@bricopro.local"
+    os.environ["ADMIN_PASSWORD"] = "admin1234"
+    importlib.reload(main)
+
+    with TestClient(main.app) as client:
+        assert client.post(
+            "/auth/login",
+            json={"email": "admin@bricopro.local", "password": "admin1234"},
+        ).status_code == 401
+        assert client.post(
+            "/auth/login",
+            json={"email": "admin@bricopro.local", "password": "custom-admin-password"},
+        ).status_code == 200
+
+
 def test_dashboard_requires_auth():
     app = make_client("test_dash_auth.db")
     with TestClient(app) as client:
