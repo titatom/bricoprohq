@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 150" role="img" aria-labelledby="title">
+  <title id="title">Bricopro</title>
+  <rect width="1000" height="150" fill="#f7941d"/>
+  <rect x="12" y="13" width="976" height="124" fill="#000"/>
+  <g fill="#fff" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="124" font-weight="900">
+    <text x="30" y="120">BRICOPRO</text>
+  </g>
+</svg>

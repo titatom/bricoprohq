@@ -24,11 +24,13 @@ export default function LoginForm() {
     <div className="min-h-screen bg-brand-600 flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
 
-        {/* Logo mark only. */}
+        {/* Logo asset only. */}
         <div className="flex flex-col items-center mb-8">
-          <div className="w-20 h-20 bg-accent-500 rounded-2xl flex items-center justify-center shadow-xl ring-4 ring-white/10">
-            <span className="text-white font-black text-3xl tracking-tighter leading-none">BP</span>
-          </div>
+          <img
+            src="/logos/bricopro-mark.svg"
+            alt="Bricopro"
+            className="h-24 w-24"
+          />
         </div>
 
         {/* Login card */}
