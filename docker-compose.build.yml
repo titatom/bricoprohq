@@ -1,12 +1,7 @@
 # Use this to build images locally instead of pulling from ghcr.io:
 #   docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 services:
-  api:
+  bricoprohq:
     build:
-      context: ./backend
-    image: ghcr.io/titatom/bricoprohq-api:local
-
-  web:
-    build:
-      context: ./frontend
-    image: ghcr.io/titatom/bricoprohq-web:local
+      context: .
+    image: ghcr.io/titatom/bricoprohq:local

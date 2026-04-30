@@ -1,11 +1,19 @@
 import os
+from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
 
+def _default_database_url() -> str:
+    data_dir = Path(os.getenv("DATA_DIR", "/data"))
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return f"sqlite+pysqlite:///{data_dir / 'bricoprohq.db'}"
+
+
 def _make_engine():
-    url = os.getenv("DATABASE_URL", "postgresql+psycopg://bricopro:bricopro@db:5432/bricoprohq")
-    return create_engine(url, future=True)
+    url = os.getenv("DATABASE_URL") or _default_database_url()
+    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+    return create_engine(url, future=True, connect_args=connect_args)
 
 
 # Module-level singletons — re-assigned on reload via _reinit()

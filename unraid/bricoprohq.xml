@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>bricoprohq</Name>
+  <Repository>ghcr.io/titatom/bricoprohq:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project>https://github.com/titatom/bricoprohq</Project>
+  <Overview>Bricopro HQ — single-container Next.js and FastAPI app with SQLite persistence.</Overview>
+  <Category>Tools:</Category>
+  <WebUI>http://[IP]:[PORT:3000]</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/titatom/bricoprohq/main/docs/icon.png</Icon>
+  <ExtraParams>--restart=unless-stopped --health-cmd="python -c 'import urllib.request,sys; sys.exit(0) if urllib.request.urlopen(\"http://127.0.0.1:8000/health\", timeout=3).status == 200 else sys.exit(1)'" --health-interval=10s --health-timeout=5s --health-retries=12 --health-start-period=30s</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+
+  <Config Name="Web Port" Target="3000" Default="3000" Mode="tcp" Description="Bricopro HQ web interface port." Type="Port" Display="always" Required="true" Mask="false">3000</Config>
+
+  <Config Name="App Data" Target="/data" Default="/mnt/user/appdata/bricoprohq/data" Description="Persistent storage for SQLite database and uploaded logos. Must survive container updates." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/bricoprohq/data</Config>
+
+  <Config Name="Secret Key" Target="SECRET_KEY" Default="" Description="Random secret for JWT signing. Generate: python3 -c &quot;import secrets; print(secrets.token_hex(32))&quot;" Type="Variable" Display="always" Required="true" Mask="true"></Config>
+
+  <Config Name="Admin Email" Target="ADMIN_EMAIL" Default="admin@bricopro.local" Description="Login email for the admin account created on first startup." Type="Variable" Display="always" Required="true" Mask="false">admin@bricopro.local</Config>
+
+  <Config Name="Admin Password" Target="ADMIN_PASSWORD" Default="admin1234" Description="Login password used when creating the first admin account. Change this before first startup." Type="Variable" Display="always" Required="true" Mask="true">admin1234</Config>
+
+  <Config Name="App Base URL" Target="APP_BASE_URL" Default="http://localhost:3000" Description="Public base URL used for OAuth callback URLs." Type="Variable" Display="advanced" Required="false" Mask="false">http://localhost:3000</Config>
+</Container>

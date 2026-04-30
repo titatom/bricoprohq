@@ -52,11 +52,11 @@ docker compose up -d
 ```
 
 The app will be available at:
-- **Frontend:** http://localhost:3000
-- **API:** http://localhost:8000
-- **API docs:** http://localhost:8000/docs
+- **Web UI:** http://localhost:3000
+- **API docs:** http://localhost:3000/api/docs
 
-Default login: `admin@bricopro.local` / `admin1234` (change after first login)
+On first startup the app creates an admin user from `ADMIN_EMAIL` and
+`ADMIN_PASSWORD`. Change these before exposing the app.
 
 ---
 
@@ -71,12 +71,17 @@ ADMIN_EMAIL=admin@bricopro.local
 ADMIN_PASSWORD=your-secure-password
 
 # Optional
-POSTGRES_PASSWORD=bricopro
 APP_ENV=production
-NEXT_PUBLIC_API_URL=http://localhost:8000
+WEB_PORT=3000
+APP_BASE_URL=http://localhost:3000
+DATA_DIR=/data
 ```
 
 For Unraid, set these in the Docker template environment fields.
+
+By default Bricopro HQ stores its SQLite database at `/data/bricoprohq.db`.
+Map `/data` to persistent storage so users, settings, integrations, drafts,
+campaigns, and cached dashboard state survive container updates.
 
 ---
 
