@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect } from 'react';
 
 const AuthContext = createContext(null);
 
@@ -7,10 +7,12 @@ const AuthContext = createContext(null);
 export const API = '/api';
 
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(() =>
-    typeof window !== 'undefined' ? localStorage.getItem('hq_token') || '' : ''
-  );
+  const [token, setToken] = useState('');
   const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    setToken(localStorage.getItem('hq_token') || '');
+  }, []);
 
   const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
 
