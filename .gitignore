@@ -11,6 +11,7 @@ build/
 
 # Testing
 backend/test*.db
+data/
 
 # Node
 node_modules/

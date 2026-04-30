@@ -1,64 +1,23 @@
 services:
-  db:
-    image: postgres:16-alpine
+  bricoprohq:
+    image: ghcr.io/titatom/bricoprohq:latest
     restart: unless-stopped
     environment:
-      POSTGRES_DB: bricoprohq
-      POSTGRES_USER: bricopro
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bricopro}
-    volumes:
-      - db_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bricopro -d bricoprohq"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    volumes:
-      - redis_data:/data
-
-  api:
-    image: ghcr.io/titatom/bricoprohq-api:latest
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql+psycopg://bricopro:${POSTGRES_PASSWORD:-bricopro}@db:5432/bricoprohq
-      REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@bricopro.local}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin1234}
+      DATA_DIR: /data
+      DATABASE_URL: ${DATABASE_URL:-sqlite+pysqlite:////data/bricoprohq.db}
+      REDIS_URL: ${REDIS_URL:-}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      API_URL: http://127.0.0.1:8000
     ports:
-      - "${API_PORT:-8000}:8000"
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
+      - "${WEB_PORT:-3000}:3000"
+    volumes:
+      - ${APPDATA_PATH:-./data}:/data
     healthcheck:
-      # Use a Python one-liner so we don't depend on curl/wget being installed
-      # in the slim image. Hits the FastAPI /health endpoint locally.
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else sys.exit(1)"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 30s
-
-  web:
-    image: ghcr.io/titatom/bricoprohq-web:latest
-    restart: unless-stopped
-    environment:
-      # Runtime — tells the Next.js server where to proxy /api/* requests
-      API_URL: http://api:8000
-    ports:
-      - "${WEB_PORT:-3000}:3000"
-    depends_on:
-      api:
-        # Wait for the API to actually answer /health so the proxy
-        # never sees ENOTFOUND/ECONNREFUSED on first page load.
-        condition: service_healthy
-
-volumes:
-  db_data:
-  redis_data:

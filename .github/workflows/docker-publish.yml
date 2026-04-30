@@ -7,8 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_API: ghcr.io/titatom/bricoprohq-api
-  IMAGE_WEB: ghcr.io/titatom/bricoprohq-web
+  IMAGE: ghcr.io/titatom/bricoprohq
 
 jobs:
   build-and-push:
@@ -28,36 +27,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata for API image
-        id: meta-api
+      - name: Extract metadata for app image
+        id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_API }}
+          images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
 
-      - name: Extract metadata for Web image
-        id: meta-web
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_WEB }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=sha-
-
-      - name: Build and push API image
+      - name: Build and push app image
         uses: docker/build-push-action@v5
         with:
-          context: ./backend
+          context: .
           push: true
-          tags: ${{ steps.meta-api.outputs.tags }}
-          labels: ${{ steps.meta-api.outputs.labels }}
-
-      - name: Build and push Web image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./frontend
-          push: true
-          tags: ${{ steps.meta-web.outputs.tags }}
-          labels: ${{ steps.meta-web.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
