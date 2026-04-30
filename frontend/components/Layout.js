@@ -10,15 +10,13 @@ const NAV = [
   { href: '/settings', label: 'Settings', icon: '⚙️' },
 ];
 
-function BrandMark({ size = 'md' }) {
-  const dimensions = size === 'lg' ? 'w-20 h-20 text-2xl' : 'w-11 h-11 text-base';
-
+function BrandMark() {
   return (
-    <div className={`${dimensions} bg-accent-500 rounded-2xl flex items-center justify-center shadow-sm`}>
-      <div className="w-3/4 h-3/4 bg-brand-600 rounded-xl flex items-center justify-center border-2 border-white/85">
-        <span className="text-white font-black tracking-tighter leading-none">BP</span>
-      </div>
-    </div>
+    <img
+      src="/logos/bricopro-mark.svg"
+      alt="Bricopro"
+      className="block w-12 h-12"
+    />
   );
 }
 

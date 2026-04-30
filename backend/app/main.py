@@ -51,6 +51,8 @@ SOURCES = ["google_calendar", "jobber", "immich", "immich-gpt", "paperless", "me
 CACHE_TTL_MINUTES = 15
 PENDING_IMAGE_STATUSES = {"new", "pending_ai", "needs_review"}
 PENDING_DOC_STATUSES = {"new", "pending_ai", "needs_review", "missing_tags", "missing_correspondent", "missing_document_type"}
+DEFAULT_ADMIN_EMAIL = "admin@bricopro.local"
+DEFAULT_ADMIN_PASSWORD = "admin1234"
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -70,14 +72,22 @@ def auth_user(authorization: str = Header(default=""), db: Session = Depends(get
 
 # ── Startup seed ──────────────────────────────────────────────────────────────
 
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
 @app.on_event("startup")
 def startup_seed():
     db = next(get_db())
-    email = os.getenv("ADMIN_EMAIL", "admin@bricopro.local")
-    pwd = os.getenv("ADMIN_PASSWORD", "admin1234")
-    if not db.query(User).filter(User.email == email).first():
+    email = _normalize_email(os.getenv("ADMIN_EMAIL", DEFAULT_ADMIN_EMAIL))
+    pwd = os.getenv("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD)
+    admin = db.query(User).filter(User.email == email).first()
+    if not admin:
         db.add(User(email=email, password_hash=hash_password(pwd), role="admin"))
         log.info("Seeded admin user %s", email)
+    elif pwd != DEFAULT_ADMIN_PASSWORD and not verify_password(pwd, admin.password_hash):
+        admin.password_hash = hash_password(pwd)
+        log.info("Updated admin password from ADMIN_PASSWORD for %s", email)
     for s in SOURCES:
         if not db.query(Integration).filter(Integration.provider == s).first():
             db.add(Integration(provider=s, status="not_connected"))
@@ -95,7 +105,7 @@ def health():
 
 @app.post("/auth/login", response_model=LoginResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    u = db.query(User).filter(User.email == payload.email).first()
+    u = db.query(User).filter(User.email == _normalize_email(payload.email)).first()
     if not u or not verify_password(payload.password, u.password_hash):
         raise HTTPException(401, "Invalid credentials")
     return LoginResponse(access_token=create_access_token(u.email))
