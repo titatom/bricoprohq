@@ -83,6 +83,19 @@ By default Bricopro HQ stores its SQLite database at `/data/bricoprohq.db`.
 Map `/data` to persistent storage so users, settings, integrations, drafts,
 campaigns, and cached dashboard state survive container updates.
 
+### Custom logos
+
+In Docker/Unraid, upload logos to the mapped app data folder:
+
+```text
+/mnt/user/appdata/bricoprohq/data/logos/
+```
+
+Use `bricopro-mark.png` for the login/sidebar logo. If that PNG is missing,
+the app falls back to the bundled `bricopro-mark.svg`. You can also keep a
+`bricopro-wordmark.png` or `bricopro-wordmark.svg` there for future wider UI
+branding.
+
 ---
 
 ## Configuring Integrations
@@ -231,40 +244,26 @@ docker compose pull
 docker compose up -d
 ```
 
-### Option B — Unraid Docker Templates (GUI)
+### Option B — Unraid Docker Template (GUI)
 
-Four XML templates are in the `unraid/` folder. Add them one at a time in Unraid → Docker → Add Container → Advanced.
-
-**Start order:**
-1. `bricoprohq-db` (Postgres)
-2. `bricoprohq-redis`
-3. `bricoprohq-api`
-4. `bricoprohq-web`
-
-All four must be on the same **custom Docker network** named `bricoprohq`. Create it once:
-
-```bash
-docker network create bricoprohq
-```
+One XML template is in the `unraid/` folder: `bricoprohq.xml`. Add it in
+Unraid → Docker → Add Container → Advanced.
 
 **Key settings to fill in:**
 
-| Container | Setting | Value |
-|-----------|---------|-------|
-| db | POSTGRES_PASSWORD | your-db-password |
-| api | SECRET_KEY | random 32-char hex |
-| api | ADMIN_PASSWORD | your login password |
-| api | DATABASE_URL | `postgresql+psycopg://bricopro:your-db-password@bricoprohq-db:5432/bricoprohq` |
-| web | API_URL | `http://bricoprohq-api:8000` |
-
-The web container reaches the API through the internal Docker network — no IP addresses needed.
+| Setting | Value |
+|---------|-------|
+| App Data | `/mnt/user/appdata/bricoprohq/data` |
+| SECRET_KEY | random 32-char hex |
+| ADMIN_EMAIL | your login email |
+| ADMIN_PASSWORD | your login password |
+| APP_BASE_URL | `http://your-unraid-ip:3000` or your public URL |
 
 ### Persistent data paths
 
 | Volume | Suggested Unraid path |
 |--------|-----------------------|
-| Postgres data | `/mnt/user/appdata/bricoprohq/db` |
-| Redis data | `/mnt/user/appdata/bricoprohq/redis` |
+| App data, SQLite DB, logos | `/mnt/user/appdata/bricoprohq/data` |
 
 ### Updating to a new version
 
@@ -273,15 +272,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Or in Unraid GUI: click each container → **Force Update**.
-
-> **Tip:** If the web container logs show `Failed to proxy http://api:8000/...`
-> with `ENOTFOUND api` or `ECONNREFUSED`, the web container is either running an
-> outdated image or it started before the API container finished booting.
-> Run `docker compose pull && docker compose up -d` (or **Force Update** the
-> `bricoprohq-web` and `bricoprohq-api` containers in Unraid). The API now
-> exposes a `/health` endpoint and the web container waits for it to pass
-> before starting.
+Or in Unraid GUI: click the `bricoprohq` container → **Force Update**.
 
 ---
 

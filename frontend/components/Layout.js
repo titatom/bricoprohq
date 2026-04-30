@@ -13,9 +13,13 @@ const NAV = [
 function BrandMark() {
   return (
     <img
-      src="/logos/bricopro-mark.svg"
+      src="/logos/bricopro-mark.png"
       alt="Bricopro"
       className="block w-12 h-12"
+      onError={(event) => {
+        event.currentTarget.onerror = null;
+        event.currentTarget.src = '/logos/bricopro-mark.svg';
+      }}
     />
   );
 }

@@ -27,9 +27,13 @@ export default function LoginForm() {
         {/* Logo asset only. */}
         <div className="flex flex-col items-center mb-8">
           <img
-            src="/logos/bricopro-mark.svg"
+            src="/logos/bricopro-mark.png"
             alt="Bricopro"
             className="h-24 w-24"
+            onError={(event) => {
+              event.currentTarget.onerror = null;
+              event.currentTarget.src = '/logos/bricopro-mark.svg';
+            }}
           />
         </div>
 
