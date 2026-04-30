@@ -80,6 +80,34 @@ def test_default_admin_password_does_not_reset_existing_custom_password():
         ).status_code == 200
 
 
+def test_login_repairs_stale_configured_admin_password_without_startup():
+    db_name = "test_dash_admin_password_login_repair.db"
+    app = make_client(db_name)
+    with TestClient(app) as client:
+        assert client.post(
+            "/auth/login",
+            json={"email": "admin@bricopro.local", "password": "admin1234"},
+        ).status_code == 200
+
+    os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///./{db_name}"
+    os.environ["ADMIN_EMAIL"] = "admin@bricopro.local"
+    os.environ["ADMIN_PASSWORD"] = "new-admin-password"
+    from app import main
+    importlib.reload(main)
+
+    # Do not enter TestClient as a context manager here. That intentionally skips
+    # startup so this verifies login can repair a stale admin row by itself.
+    client = TestClient(main.app)
+    assert client.post(
+        "/auth/login",
+        json={"email": "admin@bricopro.local", "password": "new-admin-password"},
+    ).status_code == 200
+    assert client.post(
+        "/auth/login",
+        json={"email": "admin@bricopro.local", "password": "admin1234"},
+    ).status_code == 401
+
+
 def test_dashboard_requires_auth():
     app = make_client("test_dash_auth.db")
     with TestClient(app) as client:
