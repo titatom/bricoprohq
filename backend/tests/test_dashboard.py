@@ -118,6 +118,50 @@ def test_jobber_oauth_disconnect():
         assert r.json()["disconnected"] is True
 
 
+def test_google_calendar_oauth_disconnect():
+    app = make_client("test_dash_google.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        r = client.post("/integrations/google_calendar/oauth/disconnect", headers=h)
+        assert r.status_code == 200
+        assert r.json()["disconnected"] is True
+
+
+def test_oauth_authorize_missing_client_id():
+    """Attempting OAuth authorize without a saved client_id should return 400."""
+    app = make_client("test_dash_oauth_nocid.db")
+    with TestClient(app, follow_redirects=False) as client:
+        h = auth(client)
+        # google_calendar is seeded with no config
+        r = client.get("/integrations/google_calendar/oauth/authorize", headers=h)
+        assert r.status_code == 400
+
+
+def test_oauth_authorize_unsupported_provider():
+    """A provider not in OAUTH_PROVIDERS registry should return 400."""
+    app = make_client("test_dash_oauth_bad.db")
+    with TestClient(app, follow_redirects=False) as client:
+        h = auth(client)
+        r = client.get("/integrations/immich/oauth/authorize", headers=h)
+        assert r.status_code == 400
+
+
+def test_oauth_authorize_redirects_when_configured():
+    """With client_id saved, authorize should redirect to the provider."""
+    app = make_client("test_dash_oauth_redir.db")
+    with TestClient(app, follow_redirects=False) as client:
+        h = auth(client)
+        # Save client_id for google_calendar
+        client.put(
+            "/integrations/google_calendar",
+            headers=h,
+            json={"base_url": "", "config_json": '{"client_id":"test-gid","client_secret":"test-gsecret"}'},
+        )
+        r = client.get("/integrations/google_calendar/oauth/authorize", headers=h)
+        assert r.status_code in (302, 307)
+        assert "accounts.google.com" in r.headers.get("location", "")
+
+
 def test_quick_links_crud():
     app = make_client("test_dash_ql.db")
     with TestClient(app) as client:

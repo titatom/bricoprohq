@@ -10,7 +10,7 @@ Raise ConnectorError for connectivity / auth failures.
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import httpx
 from sqlalchemy.orm import Session
@@ -18,6 +18,8 @@ from sqlalchemy.orm import Session
 from ..models import Integration
 
 log = logging.getLogger("bricopro.connectors")
+
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 
 class ConnectorNotConfigured(Exception):
@@ -61,19 +63,103 @@ class BaseConnector:
 class GoogleCalendarConnector(BaseConnector):
     provider = "google_calendar"
 
+    def _get_access_token(self) -> str:
+        """
+        Return a valid OAuth access token, refreshing automatically when expired.
+        Falls back to a legacy API key for backward compatibility.
+        """
+        intg = self.integration
+        if not intg.oauth_access_token:
+            raise ConnectorNotConfigured(
+                "google_calendar: not connected via OAuth. "
+                "Click 'Connect with Google' in Settings."
+            )
+
+        # Refresh if expired (or within 60 s of expiry)
+        now = datetime.now(timezone.utc)
+        expires_at = intg.oauth_token_expires_at
+        if expires_at and expires_at.replace(tzinfo=timezone.utc) <= now + timedelta(seconds=60):
+            self._refresh_token()
+
+        return intg.oauth_access_token
+
+    def _refresh_token(self) -> None:
+        intg = self.integration
+        if not intg.oauth_refresh_token:
+            raise ConnectorNotConfigured(
+                "google_calendar: access token expired and no refresh token stored. "
+                "Reconnect via Settings."
+            )
+        config = self.config
+        client_id = config.get("client_id", "")
+        client_secret = config.get("client_secret", "")
+        if not client_id or not client_secret:
+            raise ConnectorNotConfigured(
+                "google_calendar: client_id/client_secret missing for token refresh."
+            )
+        try:
+            resp = httpx.post(
+                GOOGLE_TOKEN_URL,
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "refresh_token": intg.oauth_refresh_token,
+                    "grant_type": "refresh_token",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            token_data = resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise ConnectorError(f"Google token refresh failed: {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise ConnectorError(f"Google token refresh request failed: {exc}") from exc
+
+        intg.oauth_access_token = token_data["access_token"]
+        expires_in = token_data.get("expires_in", 3600)
+        intg.oauth_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+        # Google may return a new refresh_token in some configurations
+        if "refresh_token" in token_data:
+            intg.oauth_refresh_token = token_data["refresh_token"]
+        # Persist without needing a full db session here — caller must commit if using ORM session
+        # The integration object is already bound to a session managed by FastAPI's get_db().
+        from sqlalchemy.orm import object_session
+        session = object_session(intg)
+        if session:
+            session.commit()
+
     def fetch(self) -> dict:
-        self._require_config()
-        # Minimal implementation: list next 5 events from Google Calendar API
-        url = "https://www.googleapis.com/calendar/v3/calendars/{cal}/events".format(
-            cal=self.config.get("calendar_id", "primary")
-        )
+        access_token = self._get_access_token()
+        calendar_id = self.config.get("calendar_id", "primary")
+        url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
         now = datetime.now(timezone.utc).isoformat()
         try:
             r = httpx.get(
                 url,
-                params={"key": self.api_key, "timeMin": now, "maxResults": 5, "orderBy": "startTime", "singleEvents": "true"},
+                params={
+                    "timeMin": now,
+                    "maxResults": 10,
+                    "orderBy": "startTime",
+                    "singleEvents": "true",
+                },
+                headers={"Authorization": f"Bearer {access_token}"},
                 timeout=10,
             )
+            if r.status_code == 401:
+                # Token may have been revoked; try one refresh then retry
+                self._refresh_token()
+                r = httpx.get(
+                    url,
+                    params={
+                        "timeMin": now,
+                        "maxResults": 10,
+                        "orderBy": "startTime",
+                        "singleEvents": "true",
+                    },
+                    headers={"Authorization": f"Bearer {self.integration.oauth_access_token}"},
+                    timeout=10,
+                )
             r.raise_for_status()
             items = r.json().get("items", [])
             events = [

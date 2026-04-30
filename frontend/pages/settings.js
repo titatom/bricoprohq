@@ -73,10 +73,13 @@ const INTEGRATION_FIELDS = {
     label: 'Google Calendar',
     icon: '📅',
     description: 'Show upcoming events on the dashboard.',
-    authType: 'api_key',
+    authType: 'oauth',
+    connectLabel: 'Connect with Google',
+    connectStyle: 'bg-blue-600 hover:bg-blue-700 border-blue-600',
     fields: [
-      { key: 'api_key',     label: 'Google API Key',     placeholder: 'AIza…', type: 'password', help: 'Enable Calendar API at console.cloud.google.com → API Keys' },
-      { key: 'calendar_id', label: 'Calendar ID',        placeholder: 'your@gmail.com or id@group.calendar.google.com', help: 'Found in Google Calendar settings → Integrate calendar' },
+      { key: 'client_id',     label: 'Client ID',     placeholder: 'From Google Cloud Console → OAuth 2.0 Client IDs', help: 'console.cloud.google.com → APIs & Services → Credentials → OAuth 2.0 Client IDs' },
+      { key: 'client_secret', label: 'Client Secret', placeholder: 'Client Secret from Google Cloud Console', type: 'password', help: 'Same credential as the Client ID above' },
+      { key: 'calendar_id',   label: 'Calendar ID (optional)', placeholder: 'primary or your@gmail.com', help: 'Leave blank to use your primary calendar. Found in Google Calendar settings → Integrate calendar.' },
     ],
   },
   jobber: {
@@ -84,6 +87,8 @@ const INTEGRATION_FIELDS = {
     icon: '🔧',
     description: 'Show upcoming jobs and job status on the dashboard.',
     authType: 'oauth',
+    connectLabel: 'Connect with Jobber',
+    connectStyle: 'bg-orange-500 hover:bg-orange-600 border-orange-500',
     fields: [
       { key: 'client_id',     label: 'Client ID',     placeholder: 'Client ID from Jobber Developer Center', help: 'developer.getjobber.com → Your App → Client ID' },
       { key: 'client_secret', label: 'Client Secret', placeholder: 'Client Secret from Jobber Developer Center', type: 'password', help: 'developer.getjobber.com → Your App → Client Secret' },
@@ -386,10 +391,10 @@ function IntegrationSection({ providerKey, meta, integration, onSave, onTest, on
               </button>
             ) : (
               <a
-                href="/api/integrations/jobber/oauth/authorize"
-                className="btn-primary text-sm bg-orange-500 hover:bg-orange-600 border-orange-500"
+                href={`/api/integrations/${providerKey}/oauth/authorize`}
+                className={`btn-primary text-sm ${meta.connectStyle || 'bg-brand-600 hover:bg-brand-700'}`}
               >
-                Connect with Jobber
+                {meta.connectLabel || `Connect with ${meta.label}`}
               </a>
             )
           ) : (
@@ -445,11 +450,16 @@ export default function SettingsPage() {
     // Check for OAuth callback result in query params
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      if (params.get('jobber_connected')) {
-        setOauthBanner({ ok: true, message: 'Jobber connected successfully via OAuth!' });
+      const connectedProvider = params.get('oauth_connected');
+      const oauthError = params.get('oauth_error');
+      const oauthProvider = params.get('oauth_provider');
+      if (connectedProvider) {
+        const label = INTEGRATION_FIELDS[connectedProvider]?.label || connectedProvider;
+        setOauthBanner({ ok: true, message: `${label} connected successfully via OAuth!` });
         window.history.replaceState({}, '', '/settings');
-      } else if (params.get('jobber_error')) {
-        setOauthBanner({ ok: false, message: `Jobber OAuth error: ${params.get('jobber_error')}` });
+      } else if (oauthError) {
+        const label = INTEGRATION_FIELDS[oauthProvider]?.label || oauthProvider || 'Integration';
+        setOauthBanner({ ok: false, message: `${label} OAuth error: ${oauthError}` });
         window.history.replaceState({}, '', '/settings');
       }
     }
@@ -494,10 +504,8 @@ export default function SettingsPage() {
   }, [apiFetch]);
 
   const disconnectIntegration = useCallback(async (providerKey) => {
-    if (providerKey === 'jobber') {
-      await apiFetch('/integrations/jobber/oauth/disconnect', { method: 'POST' });
-      await loadIntegrations();
-    }
+    await apiFetch(`/integrations/${providerKey}/oauth/disconnect`, { method: 'POST' });
+    await loadIntegrations();
   }, [apiFetch, loadIntegrations]);
 
   if (!isLoggedIn) return <LoginForm />;

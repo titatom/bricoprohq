@@ -157,12 +157,49 @@ def ql_del(id: int, _: User = Depends(auth_user), db: Session = Depends(get_db))
 
 # ── Integrations ──────────────────────────────────────────────────────────────
 
-JOBBER_OAUTH_AUTHORIZE = "https://api.getjobber.com/api/oauth/authorize"
-JOBBER_OAUTH_TOKEN = "https://api.getjobber.com/api/oauth/token"
-JOBBER_GRAPHQL = "https://api.getjobber.com/api/graphql"
-
-# In-memory state store for CSRF protection (keyed by random state token)
+# In-memory CSRF state store: state_token → provider name
 _oauth_states: dict[str, str] = {}
+
+# Secret config keys that are always masked in API responses
+_SECRET_KEYS = {"api_key", "client_secret"}
+
+# ── OAuth provider registry ────────────────────────────────────────────────────
+# Each entry describes how to build an authorization URL and exchange the code.
+
+OAUTH_PROVIDERS: dict[str, dict] = {
+    "jobber": {
+        "authorize_url": "https://api.getjobber.com/api/oauth/authorize",
+        "token_url":     "https://api.getjobber.com/api/oauth/token",
+        "scopes":        [],  # Jobber scopes are configured in the Developer Center app
+        "extra_params":  {},
+    },
+    "google_calendar": {
+        "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url":     "https://oauth2.googleapis.com/token",
+        "refresh_url":   "https://oauth2.googleapis.com/token",
+        "scopes":        ["https://www.googleapis.com/auth/calendar.readonly"],
+        # access_type=offline → Google returns a refresh_token
+        # prompt=consent → always show consent screen so refresh_token is included
+        "extra_params":  {"access_type": "offline", "prompt": "consent"},
+    },
+}
+
+
+def _oauth_redirect_uri(provider: str) -> str:
+    """
+    Return the public-facing OAuth callback URL for a given provider.
+    Priority:
+      1. {PROVIDER_UPPER}_REDIRECT_URI env var (e.g. JOBBER_REDIRECT_URI)
+      2. APP_BASE_URL env var + /api/integrations/{provider}/oauth/callback
+      3. localhost:3000 fallback (dev only)
+    The callback is served by the backend through the Next.js /api/* proxy.
+    """
+    env_key = f"{provider.upper().replace('-', '_')}_REDIRECT_URI"
+    explicit = os.getenv(env_key, "").strip()
+    if explicit:
+        return explicit
+    base = os.getenv("APP_BASE_URL", "http://localhost:3000").rstrip("/")
+    return f"{base}/api/integrations/{provider}/oauth/callback"
 
 
 def _integration_out(i: Integration) -> dict:
@@ -171,15 +208,9 @@ def _integration_out(i: Integration) -> dict:
         config = json.loads(i.config_json or "{}")
     except Exception:
         config = {}
-    # Return each config key as present/absent bool for secret fields, or the
-    # actual value for non-secret fields like calendar_id.
-    SECRET_KEYS = {"api_key", "client_secret"}
     config_fields = {}
     for k, v in config.items():
-        if k in SECRET_KEYS:
-            config_fields[k] = "••••••••" if v else ""
-        else:
-            config_fields[k] = v
+        config_fields[k] = "••••••••" if (k in _SECRET_KEYS and v) else v
     return {
         "provider": i.provider,
         "base_url": i.base_url or "",
@@ -195,75 +226,76 @@ def integrations(_: User = Depends(auth_user), db: Session = Depends(get_db)):
     return [_integration_out(i) for i in db.query(Integration).all()]
 
 
-# ── Jobber OAuth 2.0 — must be before the /{provider} wildcard routes ─────────
+# ── Generic OAuth routes — must come before the /{provider} wildcard ──────────
 
-@app.get("/integrations/jobber/oauth/authorize")
-def jobber_oauth_authorize(_: User = Depends(auth_user), db: Session = Depends(get_db)):
-    """Redirect the user to Jobber's OAuth authorization page."""
-    i = db.query(Integration).filter(Integration.provider == "jobber").first()
+@app.get("/integrations/{provider}/oauth/authorize")
+def oauth_authorize(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Start OAuth 2.0 authorization flow for any registered OAuth provider."""
+    if provider not in OAUTH_PROVIDERS:
+        raise HTTPException(400, f"OAuth not supported for provider '{provider}'")
+
+    i = db.query(Integration).filter(Integration.provider == provider).first()
     if not i:
-        raise HTTPException(404, "Jobber integration not configured")
+        raise HTTPException(404, f"Integration '{provider}' not configured")
     try:
         config = json.loads(i.config_json or "{}")
     except Exception:
         config = {}
+
     client_id = config.get("client_id", "")
     if not client_id:
-        raise HTTPException(400, "Jobber client_id not configured. Save Client ID first.")
+        raise HTTPException(400, f"{provider} client_id not configured. Save Client ID first.")
 
     state = secrets.token_hex(16)
-    _oauth_states[state] = "jobber"
+    _oauth_states[state] = provider
 
-    redirect_uri = _jobber_redirect_uri()
-    params = urlencode({
+    prov = OAUTH_PROVIDERS[provider]
+    redirect_uri = _oauth_redirect_uri(provider)
+    params: dict = {
         "response_type": "code",
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "state": state,
-    })
-    return RedirectResponse(f"{JOBBER_OAUTH_AUTHORIZE}?{params}")
+        **prov.get("extra_params", {}),
+    }
+    scopes = prov.get("scopes", [])
+    if scopes:
+        params["scope"] = " ".join(scopes)
+
+    return RedirectResponse(f"{prov['authorize_url']}?{urlencode(params)}")
 
 
-def _jobber_redirect_uri() -> str:
-    """
-    Return the public-facing OAuth callback URL for Jobber.
-
-    Priority:
-      1. JOBBER_REDIRECT_URI env var (explicit override — recommended for production)
-      2. APP_BASE_URL env var + path (e.g. https://yourdomain.com)
-      3. Fallback to localhost:3000 (dev only)
-
-    The callback goes through the Next.js proxy (/api/*) so Jobber's browser redirect
-    lands on the API backend transparently.
-    """
-    explicit = os.getenv("JOBBER_REDIRECT_URI", "").strip()
-    if explicit:
-        return explicit
-    base = os.getenv("APP_BASE_URL", "http://localhost:3000").rstrip("/")
-    return f"{base}/api/integrations/jobber/oauth/callback"
-
-
-@app.get("/integrations/jobber/oauth/callback")
-def jobber_oauth_callback(
+@app.get("/integrations/{provider}/oauth/callback")
+def oauth_callback(
+    provider: str,
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
+    error_description: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """Handle Jobber OAuth callback and exchange code for tokens."""
-    if error:
-        return RedirectResponse("/settings?jobber_error=" + error)
+    """Handle OAuth 2.0 callback for any registered OAuth provider."""
+    frontend_base = os.getenv("APP_BASE_URL", "http://localhost:3000").rstrip("/")
 
-    if not state or state not in _oauth_states:
+    if error:
+        log.warning("OAuth error for %s: %s — %s", provider, error, error_description)
+        return RedirectResponse(
+            f"{frontend_base}/settings?oauth_error={error}&oauth_provider={provider}"
+        )
+
+    if not state or _oauth_states.get(state) != provider:
         raise HTTPException(400, "Invalid or expired OAuth state")
     _oauth_states.pop(state, None)
 
     if not code:
         raise HTTPException(400, "Authorization code missing")
 
-    i = db.query(Integration).filter(Integration.provider == "jobber").first()
+    if provider not in OAUTH_PROVIDERS:
+        raise HTTPException(400, f"OAuth not supported for provider '{provider}'")
+
+    i = db.query(Integration).filter(Integration.provider == provider).first()
     if not i:
-        raise HTTPException(404, "Jobber integration not found")
+        raise HTTPException(404, f"Integration '{provider}' not found")
     try:
         config = json.loads(i.config_json or "{}")
     except Exception:
@@ -272,13 +304,14 @@ def jobber_oauth_callback(
     client_id = config.get("client_id", "")
     client_secret = config.get("client_secret", "")
     if not client_id or not client_secret:
-        raise HTTPException(400, "Jobber client_id/client_secret not configured")
+        raise HTTPException(400, f"{provider} client_id/client_secret not configured")
 
-    redirect_uri = _jobber_redirect_uri()
+    prov = OAUTH_PROVIDERS[provider]
+    redirect_uri = _oauth_redirect_uri(provider)
 
     try:
         resp = httpx.post(
-            JOBBER_OAUTH_TOKEN,
+            prov["token_url"],
             data={
                 "client_id": client_id,
                 "client_secret": client_secret,
@@ -292,33 +325,32 @@ def jobber_oauth_callback(
         resp.raise_for_status()
         token_data = resp.json()
     except httpx.HTTPStatusError as exc:
-        log.error("Jobber token exchange failed: %s %s", exc.response.status_code, exc.response.text)
-        raise HTTPException(502, f"Jobber token exchange failed: {exc.response.status_code}")
+        log.error("%s token exchange failed: %s %s", provider, exc.response.status_code, exc.response.text)
+        raise HTTPException(502, f"{provider} token exchange failed: {exc.response.status_code}")
     except httpx.RequestError as exc:
-        raise HTTPException(502, f"Jobber token exchange request failed: {exc}")
+        raise HTTPException(502, f"{provider} token exchange request failed: {exc}")
 
     access_token = token_data.get("access_token", "")
     refresh_token = token_data.get("refresh_token", "")
     expires_in = token_data.get("expires_in", 3600)
 
     i.oauth_access_token = access_token
-    i.oauth_refresh_token = refresh_token
+    if refresh_token:
+        i.oauth_refresh_token = refresh_token
     i.oauth_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
     i.status = "ok"
     i.last_sync_at = datetime.now(timezone.utc)
     db.commit()
 
-    # The Next.js frontend is the user-facing app; redirect to its settings page
-    frontend_base = os.getenv("APP_BASE_URL", "http://localhost:3000").rstrip("/")
-    return RedirectResponse(f"{frontend_base}/settings?jobber_connected=1")
+    return RedirectResponse(f"{frontend_base}/settings?oauth_connected={provider}")
 
 
-@app.post("/integrations/jobber/oauth/disconnect")
-def jobber_oauth_disconnect(_: User = Depends(auth_user), db: Session = Depends(get_db)):
-    """Remove stored Jobber OAuth tokens."""
-    i = db.query(Integration).filter(Integration.provider == "jobber").first()
+@app.post("/integrations/{provider}/oauth/disconnect")
+def oauth_disconnect(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Remove stored OAuth tokens for a provider."""
+    i = db.query(Integration).filter(Integration.provider == provider).first()
     if not i:
-        raise HTTPException(404, "Jobber integration not found")
+        raise HTTPException(404, f"Integration '{provider}' not found")
     i.oauth_access_token = None
     i.oauth_refresh_token = None
     i.oauth_token_expires_at = None
@@ -327,7 +359,7 @@ def jobber_oauth_disconnect(_: User = Depends(auth_user), db: Session = Depends(
     return {"disconnected": True}
 
 
-# ── Per-provider CRUD (wildcard — must come after specific /jobber/* routes) ───
+# ── Per-provider CRUD (wildcard — must come after specific oauth/* routes) ─────
 
 @app.get("/integrations/{provider}")
 def get_integration(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
