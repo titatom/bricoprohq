@@ -270,6 +270,14 @@ docker compose up -d
 
 Or in Unraid GUI: click each container → **Force Update**.
 
+> **Tip:** If the web container logs show `Failed to proxy http://api:8000/...`
+> with `ENOTFOUND api` or `ECONNREFUSED`, the web container is either running an
+> outdated image or it started before the API container finished booting.
+> Run `docker compose pull && docker compose up -d` (or **Force Update** the
+> `bricoprohq-web` and `bricoprohq-api` containers in Unraid). The API now
+> exposes a `/health` endpoint and the web container waits for it to pass
+> before starting.
+
 ---
 
 ## MVP Acceptance Checklist
