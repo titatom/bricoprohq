@@ -340,6 +340,12 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
     setForm(buildForm(integration));
   }, [integration]); // eslint-disable-line
 
+  const isOAuth = meta.authType === 'oauth';
+  const isSharedOAuth = meta.authType === 'shared_oauth';
+  const sharedIntegration = isSharedOAuth ? integrationsByProvider?.[meta.sharedProvider] : null;
+  const oauthConnected = isSharedOAuth ? sharedIntegration?.oauth_connected : integration?.oauth_connected;
+  const oauthProviderKey = isSharedOAuth ? meta.sharedProvider : providerKey;
+
   const save = async (e) => {
     e.preventDefault();
     setSaving(true);
@@ -374,12 +380,6 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
     setTestResult(null);
     setDisconnecting(false);
   };
-
-  const isOAuth = meta.authType === 'oauth';
-  const isSharedOAuth = meta.authType === 'shared_oauth';
-  const sharedIntegration = isSharedOAuth ? integrationsByProvider?.[meta.sharedProvider] : null;
-  const oauthConnected = isSharedOAuth ? sharedIntegration?.oauth_connected : integration?.oauth_connected;
-  const oauthProviderKey = isSharedOAuth ? meta.sharedProvider : providerKey;
 
   const statusColor =
     integration?.status === 'ok'            ? 'bg-green-100 text-green-700' :
