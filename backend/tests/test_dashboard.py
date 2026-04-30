@@ -123,7 +123,8 @@ def test_immich_test_endpoint_handles_non_json_response():
         )
         assert r.status_code == 200
 
-        response = httpx.Response(200, text="Internal Server Error")
+        request = httpx.Request("GET", "http://immich.local:2283/api/asset")
+        response = httpx.Response(200, text="Internal Server Error", request=request)
         with patch("httpx.get", return_value=response):
             r = client.post("/integrations/immich/test", headers=h)
 
