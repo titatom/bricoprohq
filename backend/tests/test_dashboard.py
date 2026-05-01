@@ -240,6 +240,38 @@ def test_immich_test_endpoint_uses_search_metadata():
         assert mock_post.call_args.kwargs["json"] == {"page": 1, "size": 6}
         assert mock_post.call_args.kwargs["headers"]["x-api-key"] == "test-key"
         assert r.json()["data"]["recent_assets"][0]["filename"] == "photo.jpg"
+        assert r.json()["data"]["recent_assets"][0]["preview_url"] == "/integrations/immich/assets/asset-1/thumbnail"
+
+
+def test_immich_thumbnail_proxy_uses_api_key():
+    app = make_client("test_dash_immich_thumbnail_proxy.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/immich",
+            headers=h,
+            json={"base_url": "http://immich.local:2283", "config_json": '{"api_key":"test-key"}'},
+        )
+
+        request = httpx.Request(
+            "GET",
+            "http://immich.local:2283/api/assets/asset-1/thumbnail?size=preview",
+        )
+        response = httpx.Response(
+            200,
+            content=b"fake-image",
+            headers={"content-type": "image/jpeg"},
+            request=request,
+        )
+        with patch("httpx.get", return_value=response) as mock_get:
+            r = client.get("/integrations/immich/assets/asset-1/thumbnail", headers=h)
+
+        assert r.status_code == 200
+        assert r.content == b"fake-image"
+        assert r.headers["content-type"] == "image/jpeg"
+        assert str(mock_get.call_args.args[0]) == "http://immich.local:2283/api/assets/asset-1/thumbnail"
+        assert mock_get.call_args.kwargs["params"] == {"size": "preview"}
+        assert mock_get.call_args.kwargs["headers"]["x-api-key"] == "test-key"
 
 
 def test_immich_404_has_actionable_error():

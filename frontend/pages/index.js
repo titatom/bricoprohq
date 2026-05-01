@@ -194,6 +194,52 @@ function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading,
   );
 }
 
+function ImmichThumbnail({ asset }) {
+  const { apiFetch } = useAuth();
+  const [src, setSrc] = useState('');
+  const [failed, setFailed] = useState(false);
+  const assetId = asset?.id;
+
+  useEffect(() => {
+    let objectUrl = '';
+    let cancelled = false;
+
+    async function loadThumbnail() {
+      if (!assetId) return;
+      setFailed(false);
+      setSrc('');
+      try {
+        const response = await apiFetch(`/integrations/immich/assets/${encodeURIComponent(assetId)}/thumbnail`, {
+          headers: {},
+        });
+        if (!response.ok) throw new Error('thumbnail failed');
+        const blob = await response.blob();
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setSrc(objectUrl);
+      } catch (err) {
+        if (!cancelled) setFailed(true);
+      }
+    }
+
+    loadThumbnail();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [apiFetch, assetId]);
+
+  if (src && !failed) {
+    return <img src={src} alt={asset.filename || 'Immich asset'} className="w-full h-full object-cover" loading="lazy" />;
+  }
+
+  return (
+    <div className="w-full h-full flex items-center justify-center text-xs text-gray-400 text-center p-2">
+      {failed ? 'Preview unavailable' : asset.filename || 'Photo'}
+    </div>
+  );
+}
+
 function ImmichWidget({ title, icon, status, stale, data, onRefresh, loading, onConfigure }) {
   const assets = data?.recent_assets || [];
 
@@ -213,11 +259,7 @@ function ImmichWidget({ title, icon, status, stale, data, onRefresh, loading, on
               title={asset.filename}
               className="aspect-square rounded-xl bg-gray-100 overflow-hidden border border-gray-100 hover:border-brand-200"
             >
-              {asset.preview_url ? (
-                <img src={asset.preview_url} alt={asset.filename || 'Immich asset'} className="w-full h-full object-cover" loading="lazy" />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-xs text-gray-400 text-center p-2">{asset.filename || 'Photo'}</div>
-              )}
+              <ImmichThumbnail asset={asset} />
             </a>
           ))}
         </div>

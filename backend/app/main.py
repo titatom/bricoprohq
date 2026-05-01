@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session
 from jose import jwt, JWTError
 
@@ -596,6 +596,40 @@ def refresh(source: str, _: User = Depends(auth_user), db: Session = Depends(get
         i.last_sync_at = now
     db.commit()
     return {"status": "ok", "source": source}
+
+
+@app.get("/integrations/immich/assets/{asset_id}/thumbnail")
+def immich_asset_thumbnail(asset_id: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    i = db.query(Integration).filter(Integration.provider == "immich").first()
+    if not i or not i.base_url:
+        raise HTTPException(400, "Immich base_url not configured")
+    try:
+        config = json.loads(i.config_json or "{}")
+    except Exception:
+        config = {}
+    api_key = config.get("api_key", "")
+    if not api_key or all(c == '•' for c in api_key):
+        raise HTTPException(400, "Immich api_key not configured")
+
+    try:
+        upstream = httpx.get(
+            f"{i.base_url.rstrip('/')}/api/assets/{asset_id}/thumbnail",
+            params={"size": "preview"},
+            headers={"x-api-key": api_key},
+            timeout=20,
+        )
+        upstream.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(exc.response.status_code, "Immich thumbnail request failed") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(502, f"Immich thumbnail request failed: {exc}") from exc
+
+    content_type = upstream.headers.get("content-type", "image/jpeg")
+    return Response(
+        content=upstream.content,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 @app.get("/dashboard")

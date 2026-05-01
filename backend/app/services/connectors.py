@@ -361,7 +361,7 @@ class ImmichConnector(BaseConnector):
                     "id": a.get("id"),
                     "filename": a.get("originalFileName") or a.get("originalPath") or "Untitled photo",
                     "type": a.get("type"),
-                    "preview_url": f"{self.base_url}/api/assets/{a.get('id')}/thumbnail?size=preview" if a.get("id") else "",
+                    "preview_url": f"/integrations/immich/assets/{a.get('id')}/thumbnail" if a.get("id") else "",
                     "asset_url": f"{self.base_url}/photos/{a.get('id')}" if a.get("id") else self.base_url,
                 }
                 for a in assets[:limit]
