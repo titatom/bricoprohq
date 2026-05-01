@@ -472,7 +472,7 @@ def test_jobber_dashboard_limit_setting_controls_query_size():
             db.close()
 
         request = httpx.Request("POST", "https://api.getjobber.com/api/graphql")
-        response = httpx.Response(
+        jobs_response = httpx.Response(
             200,
             json={
                 "data": {
@@ -486,7 +486,30 @@ def test_jobber_dashboard_limit_setting_controls_query_size():
             },
             request=request,
         )
-        with patch("httpx.post", side_effect=[response, response, response, response]) as mock_post:
+        requests_response = httpx.Response(200, json={"data": {"requests": {"nodes": []}}}, request=request)
+        quotes_response = httpx.Response(200, json={"data": {"quotes": {"nodes": []}}}, request=request)
+        invoices_response = httpx.Response(
+            200,
+            json={
+                "data": {
+                    "invoices": {
+                        "nodes": [
+                            {
+                                "invoiceNumber": "1001",
+                                "subject": "Deck deposit",
+                                "invoiceStatus": "AWAITING_PAYMENT",
+                                "jobberWebUri": "https://app.getjobber.com/invoices/1001",
+                                "amounts": {"balance": 1250.5, "total": 1500},
+                                "dueDate": "2026-05-10T00:00:00Z",
+                                "client": {"name": "Alice"},
+                            }
+                        ]
+                    }
+                }
+            },
+            request=request,
+        )
+        with patch("httpx.post", side_effect=[jobs_response, requests_response, quotes_response, invoices_response]) as mock_post:
             r = client.post("/dashboard/refresh/jobber", headers=h)
 
         assert r.status_code == 200
@@ -498,6 +521,7 @@ def test_jobber_dashboard_limit_setting_controls_query_size():
         assert "pending_requests" in payload["jobber"]["data"]
         assert "pending_quotes" in payload["jobber"]["data"]
         assert "pending_invoices" in payload["jobber"]["data"]
+        assert payload["jobber"]["data"]["pending_invoices"][0]["amounts"]["balance"] == 1250.5
 
 
 def test_jobber_502_reports_actionable_error_without_html_dump():
