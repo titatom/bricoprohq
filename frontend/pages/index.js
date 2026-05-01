@@ -26,7 +26,6 @@ const DEFAULT_QUICK_LINKS = [
   { title: 'Meta Business Suite',  icon: '📣', url: 'https://business.facebook.com',        category: 'Marketing'  },
   { title: 'Google Business',      icon: '⭐', url: 'https://business.google.com',           category: 'Marketing'  },
   { title: 'Canva',                icon: '🎨', url: 'https://canva.com',                    category: 'Marketing'  },
-  { title: 'Actual Budget',        icon: '💸', url: 'http://actual.local',                  category: 'Finance'    },
 ];
 
 const QUICK_LINK_LOGO_DOMAINS = {
@@ -40,7 +39,6 @@ const QUICK_LINK_LOGO_DOMAINS = {
   'meta business suite': 'facebook.com',
   'google business': 'business.google.com',
   canva: 'canva.com',
-  'actual budget': 'actualbudget.org',
 };
 
 function logoDomainFor(link) {
@@ -55,6 +53,25 @@ function logoDomainFor(link) {
 
 function logoUrlFor(link) {
   return `https://www.google.com/s2/favicons?domain=${logoDomainFor(link)}&sz=64`;
+}
+
+function QuickLinkIcon({ link }) {
+  const icon = (link.icon || '').trim();
+  if (icon && icon !== 'link') {
+    if (/^https?:\/\//i.test(icon)) {
+      return <img src={icon} alt="" className="w-6 h-6 object-contain" loading="lazy" referrerPolicy="no-referrer" />;
+    }
+    return <span className="text-xl leading-none">{icon}</span>;
+  }
+  return (
+    <img
+      src={logoUrlFor(link)}
+      alt=""
+      className="w-6 h-6 object-contain"
+      loading="lazy"
+      referrerPolicy="no-referrer"
+    />
+  );
 }
 
 function WidgetHeader({ title, icon, status, stale, onRefresh, loading, onConfigure }) {
@@ -292,31 +309,79 @@ function WidgetCard({ source, title, icon, status, stale, data, onRefresh, loadi
   );
 }
 
-function QuickLinksWidget({ links, onAdd, onDelete }) {
-  const [form, setForm] = useState({ title: '', url: '', category: 'Operations' });
+function QuickLinkForm({ form, setForm, onSubmit, onCancel, submitLabel }) {
+  return (
+    <form
+      className="flex flex-wrap justify-center gap-2 mb-4 p-3 bg-gray-50 rounded-lg"
+      onSubmit={onSubmit}
+    >
+      <input className="input w-20" placeholder="Icon" value={form.icon} onChange={(e) => setForm({ ...form, icon: e.target.value })} />
+      <input className="input flex-1 min-w-32" placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required />
+      <input className="input flex-1 min-w-48" placeholder="https://..." value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} required />
+      <input className="input w-36" placeholder="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
+      <button type="submit" className="btn-primary text-sm">{submitLabel}</button>
+      <button type="button" className="btn-secondary text-sm" onClick={onCancel}>Cancel</button>
+    </form>
+  );
+}
+
+function QuickLinksWidget({ links, onAdd, onUpdate, onDelete }) {
+  const emptyForm = { title: '', url: '', category: 'Operations', icon: '' };
+  const [form, setForm] = useState(emptyForm);
+  const [editing, setEditing] = useState(null);
   const [adding, setAdding] = useState(false);
+
+  const resetForm = () => {
+    setForm(emptyForm);
+    setEditing(null);
+    setAdding(false);
+  };
+
+  const startAdd = () => {
+    setForm(emptyForm);
+    setEditing(null);
+    setAdding((v) => !v);
+  };
+
+  const startEdit = (link) => {
+    setForm({
+      title: link.title || '',
+      url: link.url || '',
+      category: link.category || 'Operations',
+      icon: link.icon === 'link' ? '' : (link.icon || ''),
+    });
+    setEditing(link);
+    setAdding(false);
+  };
+
+  const submitAdd = async (e) => {
+    e.preventDefault();
+    await onAdd(form);
+    resetForm();
+  };
+
+  const submitEdit = async (e) => {
+    e.preventDefault();
+    await onUpdate(editing, form);
+    resetForm();
+  };
 
   return (
     <div className="card col-span-full py-3 mb-6">
       <div className="flex items-center justify-between gap-3 mb-3">
         <h3 className="font-semibold text-gray-800 text-sm">Quick Links</h3>
-        <button className="btn-secondary text-xs py-1 px-3" onClick={() => setAdding((v) => !v)}>
+        <button className="btn-secondary text-xs py-1 px-3" onClick={startAdd}>
           {adding ? 'Cancel' : '+ Add Link'}
         </button>
       </div>
       {adding && (
-        <form
-          className="flex flex-wrap gap-2 mb-4 p-3 bg-gray-50 rounded-lg"
-          onSubmit={(e) => { e.preventDefault(); onAdd(form); setAdding(false); setForm({ title: '', url: '', category: 'Operations' }); }}
-        >
-          <input className="input flex-1 min-w-32" placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required />
-          <input className="input flex-1 min-w-48" placeholder="https://..." value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} required />
-          <input className="input w-36" placeholder="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
-          <button type="submit" className="btn-primary text-sm">Save</button>
-        </form>
+        <QuickLinkForm form={form} setForm={setForm} onSubmit={submitAdd} onCancel={resetForm} submitLabel="Add" />
+      )}
+      {editing && (
+        <QuickLinkForm form={form} setForm={setForm} onSubmit={submitEdit} onCancel={resetForm} submitLabel="Save" />
       )}
       {links.length > 0 ? (
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        <div className="flex items-center justify-center gap-2 flex-wrap pb-1">
           {links.map((link) => (
             <div key={link.id} className="relative group flex-shrink-0">
               <a
@@ -327,14 +392,16 @@ function QuickLinksWidget({ links, onAdd, onDelete }) {
                 aria-label={link.title}
                 className="w-11 h-11 rounded-xl border border-gray-100 bg-white hover:bg-brand-50 hover:border-brand-200 shadow-sm flex items-center justify-center transition-colors"
               >
-                <img
-                  src={logoUrlFor(link)}
-                  alt=""
-                  className="w-6 h-6 object-contain"
-                  loading="lazy"
-                  referrerPolicy="no-referrer"
-                />
+                <QuickLinkIcon link={link} />
               </a>
+              <button
+                className="absolute -left-1 -top-1 w-4 h-4 rounded-full bg-white border border-gray-200 text-gray-400 hover:text-brand-600 text-[10px] leading-none opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={() => startEdit(link)}
+                title={`Edit ${link.title}`}
+                aria-label={`Edit ${link.title}`}
+              >
+                ✎
+              </button>
               <button
                 className="absolute -right-1 -top-1 w-4 h-4 rounded-full bg-white border border-gray-200 text-gray-300 hover:text-red-400 text-xs leading-none opacity-0 group-hover:opacity-100 transition-opacity"
                 onClick={() => onDelete(link.id)}
@@ -401,7 +468,6 @@ function ProcessingSummary({ summary }) {
 export default function DashboardPage() {
   const { isLoggedIn, apiFetch } = useAuth();
   const [dashboard, setDashboard] = useState({});
-  const [integrations, setIntegrations] = useState([]);
   const [settings, setSettings] = useState({});
   const [quickLinks, setQuickLinks] = useState([]);
   const [processingSummary, setProcessingSummary] = useState(null);
@@ -411,11 +477,6 @@ export default function DashboardPage() {
   const loadDashboard = useCallback(async () => {
     const r = await apiFetch('/dashboard');
     if (r.ok) setDashboard(await r.json());
-  }, [apiFetch]);
-
-  const loadIntegrations = useCallback(async () => {
-    const r = await apiFetch('/integrations');
-    if (r.ok) setIntegrations(await r.json());
   }, [apiFetch]);
 
   const loadSettings = useCallback(async () => {
@@ -450,7 +511,6 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!isLoggedIn) return;
     loadDashboard();
-    loadIntegrations();
     loadSettings();
     loadProcessingSummary();
     loadQuickLinks().then(async () => {
@@ -466,7 +526,6 @@ export default function DashboardPage() {
     setRefreshing((p) => ({ ...p, [source]: true }));
     await apiFetch(`/dashboard/refresh/${source}`, { method: 'POST' });
     await loadDashboard();
-    await loadIntegrations();
     await loadProcessingSummary();
     setRefreshing((p) => ({ ...p, [source]: false }));
   };
@@ -476,8 +535,21 @@ export default function DashboardPage() {
       method: 'POST',
       body: JSON.stringify({
         ...form,
-        icon: 'link',
+        icon: form.icon || '🔗',
         sort_order: 0,
+        is_active: true,
+      }),
+    });
+    await loadQuickLinks();
+  };
+
+  const updateQuickLink = async (link, form) => {
+    await apiFetch(`/quick-links/${link.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        ...link,
+        ...form,
+        icon: form.icon || '🔗',
         is_active: true,
       }),
     });
@@ -522,6 +594,10 @@ export default function DashboardPage() {
 
   if (!isLoggedIn) return <LoginForm />;
 
+  const visibleQuickLinks = quickLinks.filter(
+    (link) => link.is_active && link.title?.toLowerCase() !== 'actual budget'
+  );
+
   return (
     <div className="p-6">
       {settingsSource && (
@@ -534,8 +610,9 @@ export default function DashboardPage() {
       )}
 
       <QuickLinksWidget
-        links={quickLinks.filter((l) => l.is_active)}
+        links={visibleQuickLinks}
         onAdd={addQuickLink}
+        onUpdate={updateQuickLink}
         onDelete={deleteQuickLink}
       />
 
@@ -553,16 +630,6 @@ export default function DashboardPage() {
       </div>
 
       <ProcessingSummary summary={processingSummary} />
-
-      {/* Integration status bar */}
-      <div className="flex gap-3 flex-wrap mb-6">
-        {integrations.map((i) => (
-          <div key={i.provider} className="flex items-center gap-1.5 bg-white border border-gray-100 rounded-full px-3 py-1 shadow-sm">
-            <span className={`w-2 h-2 rounded-full ${i.status === 'ok' ? 'bg-green-400' : i.status === 'not_connected' ? 'bg-red-400' : 'bg-yellow-400'}`} />
-            <span className="text-xs text-gray-600">{i.provider.replace('_', ' ')}</span>
-          </div>
-        ))}
-      </div>
 
       {/* Integration widgets */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
