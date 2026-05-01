@@ -443,6 +443,7 @@ def test_jobber_base_url_update_takes_effect_with_masked_oauth_secret():
         assert r.status_code == 200
         assert str(mock_post.call_args.args[0]) == "https://new-jobber-proxy.local/graphql"
         assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer jobber-access-token"
+        assert mock_post.call_args.kwargs["headers"]["X-JOBBER-GRAPHQL-VERSION"] == "2025-04-16"
 
 
 def test_jobber_dashboard_limit_setting_controls_query_size():
@@ -490,6 +491,7 @@ def test_jobber_dashboard_limit_setting_controls_query_size():
 
         assert r.status_code == 200
         assert "first: 3" in mock_post.call_args.kwargs["json"]["query"]
+        assert mock_post.call_args.kwargs["headers"]["X-JOBBER-GRAPHQL-VERSION"] == "2025-04-16"
         payload = client.get("/dashboard", headers=h).json()
         assert payload["jobber"]["data"]["limit"] == 3
         assert payload["jobber"]["data"]["upcoming_jobs"][0]["client"]["name"] == "Alice"
