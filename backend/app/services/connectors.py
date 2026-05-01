@@ -24,6 +24,7 @@ log = logging.getLogger("bricopro.connectors")
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_PROVIDERS = {"google_calendar", "google_business"}
 GOOGLE_CANONICAL_PROVIDER = "google_calendar"
+JOBBER_GRAPHQL_VERSION = "2025-04-16"
 
 
 class ConnectorNotConfigured(Exception):
@@ -289,7 +290,11 @@ class JobberConnector(BaseConnector):
             r = httpx.post(
                 graphql_url,
                 json={"query": query},
-                headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {bearer}",
+                    "Content-Type": "application/json",
+                    "X-JOBBER-GRAPHQL-VERSION": JOBBER_GRAPHQL_VERSION,
+                },
                 timeout=10,
             )
             r.raise_for_status()
