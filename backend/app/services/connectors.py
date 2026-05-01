@@ -268,11 +268,32 @@ class JobberConnector(BaseConnector):
             "jobber: not connected via OAuth. Click 'Connect with Jobber' in Settings."
         )
 
+    def _post_graphql(self, graphql_url: str, bearer: str, query: str) -> dict:
+        r = httpx.post(
+            graphql_url,
+            json={"query": query},
+            headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if data.get("errors"):
+            raise ConnectorError(f"Jobber GraphQL error: {data['errors']}")
+        return data.get("data", {})
+
+    def _optional_collection(self, graphql_url: str, bearer: str, query: str, key: str) -> list:
+        try:
+            data = self._post_graphql(graphql_url, bearer, query)
+            return data.get(key, {}).get("nodes", [])
+        except Exception as exc:
+            log.warning("Jobber optional collection %s failed: %s", key, exc)
+            return []
+
     def fetch(self) -> dict:
         bearer = self._get_bearer_token()
         graphql_url = self.base_url or "https://api.getjobber.com/api/graphql"
         limit = self._int_setting("dashboard.jobber.limit", 5)
-        query = f"""
+        jobs_query = f"""
         query {{
           jobs(filter: {{status: [ACTIVE, UPCOMING]}}, first: {limit}) {{
             nodes {{
@@ -285,16 +306,60 @@ class JobberConnector(BaseConnector):
         }}
         """
         try:
-            r = httpx.post(
-                graphql_url,
-                json={"query": query},
-                headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
-                timeout=10,
-            )
-            r.raise_for_status()
-            data = r.json()
-            jobs = data.get("data", {}).get("jobs", {}).get("nodes", [])
-            return {"upcoming_jobs": jobs, "count": len(jobs), "limit": limit}
+            data = self._post_graphql(graphql_url, bearer, jobs_query)
+            jobs = data.get("jobs", {}).get("nodes", [])
+
+            requests_query = f"""
+            query {{
+              requests(first: {limit}) {{
+                nodes {{
+                  title
+                  requestStatus
+                  createdAt
+                  client {{ name }}
+                }}
+              }}
+            }}
+            """
+            quotes_query = f"""
+            query {{
+              quotes(first: {limit}) {{
+                nodes {{
+                  title
+                  quoteStatus
+                  createdAt
+                  client {{ name }}
+                }}
+              }}
+            }}
+            """
+            invoices_query = f"""
+            query {{
+              invoices(first: {limit}) {{
+                nodes {{
+                  invoiceNumber
+                  invoiceStatus
+                  dueDate
+                  client {{ name }}
+                }}
+              }}
+            }}
+            """
+            requests = self._optional_collection(graphql_url, bearer, requests_query, "requests")
+            quotes = self._optional_collection(graphql_url, bearer, quotes_query, "quotes")
+            invoices = self._optional_collection(graphql_url, bearer, invoices_query, "invoices")
+
+            return {
+                "upcoming_jobs": jobs,
+                "pending_requests": requests,
+                "pending_quotes": quotes,
+                "pending_invoices": invoices,
+                "count": len(jobs),
+                "requests_count": len(requests),
+                "quotes_count": len(quotes),
+                "invoices_count": len(invoices),
+                "limit": limit,
+            }
         except httpx.HTTPStatusError as exc:
             raise ConnectorError(f"Jobber HTTP error: {exc.response.status_code}") from exc
         except httpx.RequestError as exc:

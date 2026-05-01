@@ -14,7 +14,16 @@ const SOURCE_META = {
 const DEFAULT_WIDGET_SETTINGS = {
   paperless: { tag: 'ai-processed', limit: '5' },
   immich: { album_id: '', limit: '6' },
-  jobber: { limit: '5', show_client: 'true', show_status: 'true', show_date: 'true' },
+  jobber: {
+    limit: '5',
+    show_jobs: 'true',
+    show_requests: 'true',
+    show_quotes: 'true',
+    show_invoices: 'true',
+    show_client: 'true',
+    show_status: 'true',
+    show_date: 'true',
+  },
 };
 
 const DEFAULT_QUICK_LINKS = [
@@ -163,6 +172,10 @@ function WidgetSettingsModal({ source, settings, onClose, onSave }) {
           {isJobber && (
             <div className="grid grid-cols-1 gap-2 rounded-lg bg-gray-50 p-3">
               {[
+                ['show_jobs', 'Show jobs'],
+                ['show_requests', 'Show requests'],
+                ['show_quotes', 'Show quotes'],
+                ['show_invoices', 'Show invoices'],
                 ['show_client', 'Show client'],
                 ['show_status', 'Show status'],
                 ['show_date', 'Show start date'],
@@ -310,40 +323,94 @@ function ImmichWidget({ title, icon, status, stale, data, onRefresh, loading, on
 }
 
 function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, loading, onConfigure }) {
-  const jobs = data?.upcoming_jobs || [];
   const limit = Math.max(1, Math.min(10, Number(settings?.limit || 5)));
-  const visibleJobs = jobs.slice(0, limit);
   const showClient = settings?.show_client !== 'false';
   const showStatus = settings?.show_status !== 'false';
   const showStart = settings?.show_start !== 'false';
+  const sections = [
+    {
+      key: 'jobs',
+      label: 'Jobs',
+      items: data?.upcoming_jobs || [],
+      enabled: settings?.show_jobs !== 'false',
+      titleFor: (item) => item.title || 'Untitled job',
+      statusFor: (item) => item.jobStatus,
+      dateFor: (item) => item.startAt || item.start_at || item.start,
+      empty: 'No upcoming jobs.',
+    },
+    {
+      key: 'requests',
+      label: 'Requests',
+      items: data?.pending_requests || [],
+      enabled: settings?.show_requests !== 'false',
+      titleFor: (item) => item.title || 'Untitled request',
+      statusFor: (item) => item.requestStatus,
+      dateFor: (item) => item.createdAt || item.created_at,
+      empty: 'No pending requests.',
+    },
+    {
+      key: 'quotes',
+      label: 'Quotes',
+      items: data?.pending_quotes || [],
+      enabled: settings?.show_quotes !== 'false',
+      titleFor: (item) => item.title || 'Untitled quote',
+      statusFor: (item) => item.quoteStatus,
+      dateFor: (item) => item.createdAt || item.created_at,
+      empty: 'No pending quotes.',
+    },
+    {
+      key: 'invoices',
+      label: 'Invoices',
+      items: data?.pending_invoices || [],
+      enabled: settings?.show_invoices !== 'false',
+      titleFor: (item) => item.invoiceNumber ? `Invoice ${item.invoiceNumber}` : item.title || 'Untitled invoice',
+      statusFor: (item) => item.invoiceStatus,
+      dateFor: (item) => item.dueDate || item.due_date || item.createdAt,
+      empty: 'No pending invoices.',
+    },
+  ].filter((section) => section.enabled);
+  const hasItems = sections.some((section) => section.items.length > 0);
 
   return (
     <div className="card flex flex-col gap-3">
       <WidgetHeader title={title} icon={icon} status={status} stale={stale} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />
       {status === 'not_connected' ? (
         <p className="text-sm text-red-500">Integration not connected. Configure in Settings.</p>
-      ) : visibleJobs.length > 0 ? (
-        <div className="space-y-2">
-          {visibleJobs.map((job, idx) => {
-            const clientName = job.client?.name || job.clientName || '';
-            const start = job.startAt || job.start_at || job.start;
+      ) : hasItems ? (
+        <div className="space-y-3">
+          {sections.map((section) => {
+            const visibleItems = section.items.slice(0, limit);
+            if (visibleItems.length === 0) return null;
             return (
-              <div key={`${job.id || job.title || 'job'}-${idx}`} className="rounded-lg border border-gray-100 p-3 bg-white">
-                <div className="font-medium text-sm text-gray-800">{job.title || 'Untitled job'}</div>
-                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500">
-                  {showClient && clientName && <span>{clientName}</span>}
-                  {showStatus && job.jobStatus && <span>{job.jobStatus}</span>}
-                  {showStart && start && <span>{new Date(start).toLocaleString()}</span>}
+              <div key={section.key} className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">{section.label}</h4>
+                  <span className="text-xs text-gray-400">{section.items.length}</span>
                 </div>
+                {visibleItems.map((item, idx) => {
+                  const clientName = item.client?.name || item.clientName || '';
+                  const statusText = section.statusFor(item);
+                  const dateValue = section.dateFor(item);
+                  return (
+                    <div key={`${section.key}-${item.id || section.titleFor(item)}-${idx}`} className="rounded-lg border border-gray-100 p-3 bg-white">
+                      <div className="font-medium text-sm text-gray-800">{section.titleFor(item)}</div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500">
+                        {showClient && clientName && <span>{clientName}</span>}
+                        {showStatus && statusText && <span>{statusText}</span>}
+                        {showStart && dateValue && <span>{new Date(dateValue).toLocaleString()}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+                {section.items.length > visibleItems.length && (
+                  <p className="text-xs text-gray-400">{section.items.length - visibleItems.length} more {section.label.toLowerCase()} not shown.</p>
+                )}
               </div>
             );
           })}
-          {data?.count > visibleJobs.length && (
-            <p className="text-xs text-gray-400">{data.count - visibleJobs.length} more jobs not shown.</p>
-          )}
         </div>
       ) : (
-        <p className="text-sm text-gray-500">No upcoming jobs found.</p>
+        <p className="text-sm text-gray-500">No Jobber items found.</p>
       )}
     </div>
   );
@@ -646,6 +713,10 @@ export default function DashboardPage() {
       return {
         ...defaults,
         limit: settings['dashboard.jobber.limit'] || defaults.limit,
+        show_jobs: settings['dashboard.jobber.show_jobs'] || defaults.show_jobs,
+        show_requests: settings['dashboard.jobber.show_requests'] || defaults.show_requests,
+        show_quotes: settings['dashboard.jobber.show_quotes'] || defaults.show_quotes,
+        show_invoices: settings['dashboard.jobber.show_invoices'] || defaults.show_invoices,
         show_client: settings['dashboard.jobber.show_client'] || defaults.show_client,
         show_status: settings['dashboard.jobber.show_status'] || defaults.show_status,
         show_date: settings['dashboard.jobber.show_date'] || defaults.show_date,
@@ -660,6 +731,10 @@ export default function DashboardPage() {
       : source === 'jobber'
         ? {
             'dashboard.jobber.limit': form.limit || '5',
+            'dashboard.jobber.show_jobs': form.show_jobs || 'true',
+            'dashboard.jobber.show_requests': form.show_requests || 'true',
+            'dashboard.jobber.show_quotes': form.show_quotes || 'true',
+            'dashboard.jobber.show_invoices': form.show_invoices || 'true',
             'dashboard.jobber.show_client': form.show_client || 'true',
             'dashboard.jobber.show_status': form.show_status || 'true',
             'dashboard.jobber.show_date': form.show_date || 'true',

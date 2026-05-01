@@ -485,7 +485,7 @@ def test_jobber_dashboard_limit_setting_controls_query_size():
             },
             request=request,
         )
-        with patch("httpx.post", return_value=response) as mock_post:
+        with patch("httpx.post", side_effect=[response, response, response, response]) as mock_post:
             r = client.post("/dashboard/refresh/jobber", headers=h)
 
         assert r.status_code == 200
@@ -493,6 +493,9 @@ def test_jobber_dashboard_limit_setting_controls_query_size():
         payload = client.get("/dashboard", headers=h).json()
         assert payload["jobber"]["data"]["limit"] == 3
         assert payload["jobber"]["data"]["upcoming_jobs"][0]["client"]["name"] == "Alice"
+        assert "pending_requests" in payload["jobber"]["data"]
+        assert "pending_quotes" in payload["jobber"]["data"]
+        assert "pending_invoices" in payload["jobber"]["data"]
 
 
 def test_paperless_gpt_401_has_actionable_error():
