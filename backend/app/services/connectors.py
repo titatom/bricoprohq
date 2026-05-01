@@ -314,6 +314,16 @@ class JobberConnector(BaseConnector):
             log.warning("Jobber optional collection %s failed: %s", key, exc)
             return []
 
+    def _optional_collection_with_fallback(
+        self, graphql_url: str, bearer: str, query: str, fallback_query: str, key: str
+    ) -> list:
+        try:
+            data = self._post_graphql(graphql_url, bearer, query)
+            return data.get(key, {}).get("nodes", [])
+        except Exception as exc:
+            log.warning("Jobber optional collection %s failed, retrying simpler query: %s", key, exc)
+            return self._optional_collection(graphql_url, bearer, fallback_query, key)
+
     def fetch(self) -> dict:
         bearer = self._get_bearer_token()
         graphql_url = self.base_url or "https://api.getjobber.com/api/graphql"
@@ -343,6 +353,7 @@ class JobberConnector(BaseConnector):
                 nodes {{
                   title
                   requestStatus
+                  jobberWebUri
                   createdAt
                   client {{ name }}
                 }}
@@ -355,6 +366,7 @@ class JobberConnector(BaseConnector):
                 nodes {{
                   title
                   quoteStatus
+                  jobberWebUri
                   createdAt
                   client {{ name }}
                 }}
@@ -366,7 +378,27 @@ class JobberConnector(BaseConnector):
               invoices(first: {limit}) {{
                 nodes {{
                   invoiceNumber
+                  subject
                   invoiceStatus
+                  jobberWebUri
+                  amounts {{
+                    balance
+                    total
+                  }}
+                  dueDate
+                  client {{ name }}
+                }}
+              }}
+            }}
+            """
+            fallback_invoices_query = f"""
+            query {{
+              invoices(first: {limit}) {{
+                nodes {{
+                  invoiceNumber
+                  subject
+                  invoiceStatus
+                  jobberWebUri
                   dueDate
                   client {{ name }}
                 }}
@@ -375,7 +407,9 @@ class JobberConnector(BaseConnector):
             """
             requests = self._optional_collection(graphql_url, bearer, requests_query, "requests")
             quotes = self._optional_collection(graphql_url, bearer, quotes_query, "quotes")
-            invoices = self._optional_collection(graphql_url, bearer, invoices_query, "invoices")
+            invoices = self._optional_collection_with_fallback(
+                graphql_url, bearer, invoices_query, fallback_invoices_query, "invoices"
+            )
 
             return {
                 "upcoming_jobs": jobs,

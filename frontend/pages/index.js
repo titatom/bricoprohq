@@ -322,6 +322,58 @@ function ImmichWidget({ title, icon, status, stale, data, onRefresh, loading, on
   );
 }
 
+function formatJobberStatus(value) {
+  if (!value) return '';
+  return String(value)
+    .replace(/_/g, ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatJobberDate(value, prefix = '') {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${prefix}${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
+}
+
+function formatJobberMoney(value) {
+  if (value === null || value === undefined || value === '') return '';
+
+  if (typeof value === 'object') {
+    const hasCents = value.cents !== null && value.cents !== undefined;
+    const amount = hasCents ? Number(value.cents) / 100 : value.amount ?? value.value ?? value.total ?? value.balance;
+    const currency = value.currency ?? value.currencyCode ?? value.currency_code;
+    return formatJobberMoneyValue(amount, currency);
+  }
+
+  return formatJobberMoneyValue(value);
+}
+
+function formatJobberMoneyValue(amount, currency = 'CAD') {
+  const numericAmount = Number(amount);
+  if (!Number.isFinite(numericAmount)) return '';
+
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency,
+      maximumFractionDigits: 2,
+    }).format(numericAmount);
+  } catch {
+    return `$${numericAmount.toFixed(2)}`;
+  }
+}
+
+function jobberInvoiceAmount(item) {
+  return (
+    formatJobberMoney(item.amounts?.balance) ||
+    formatJobberMoney(item.amounts?.total) ||
+    formatJobberMoney(item.balance) ||
+    formatJobberMoney(item.total)
+  );
+}
+
 function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, loading, onConfigure }) {
   const limit = Math.max(1, Math.min(10, Number(settings?.limit || 5)));
   const showClient = settings?.show_client !== 'false';
@@ -330,42 +382,47 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
   const sections = [
     {
       key: 'jobs',
-      label: 'Jobs',
+      label: 'Upcoming jobs',
       items: data?.upcoming_jobs || [],
       enabled: settings?.show_jobs !== 'false',
       titleFor: (item) => item.title || 'Untitled job',
       statusFor: (item) => item.jobStatus,
       dateFor: (item) => item.startAt || item.start_at || item.start,
+      dateLabel: 'Starts ',
       empty: 'No upcoming jobs.',
     },
     {
       key: 'requests',
-      label: 'Requests',
+      label: 'Pending requests',
       items: data?.pending_requests || [],
       enabled: settings?.show_requests !== 'false',
       titleFor: (item) => item.title || 'Untitled request',
       statusFor: (item) => item.requestStatus,
       dateFor: (item) => item.createdAt || item.created_at,
+      dateLabel: 'Requested ',
       empty: 'No pending requests.',
     },
     {
       key: 'quotes',
-      label: 'Quotes',
+      label: 'Pending quotes',
       items: data?.pending_quotes || [],
       enabled: settings?.show_quotes !== 'false',
       titleFor: (item) => item.title || 'Untitled quote',
       statusFor: (item) => item.quoteStatus,
       dateFor: (item) => item.createdAt || item.created_at,
+      dateLabel: 'Created ',
       empty: 'No pending quotes.',
     },
     {
       key: 'invoices',
-      label: 'Invoices',
+      label: 'Pending invoices',
       items: data?.pending_invoices || [],
       enabled: settings?.show_invoices !== 'false',
-      titleFor: (item) => item.invoiceNumber ? `Invoice ${item.invoiceNumber}` : item.title || 'Untitled invoice',
+      titleFor: (item) => item.invoiceNumber ? `Invoice ${item.invoiceNumber}` : item.subject || item.title || 'Untitled invoice',
       statusFor: (item) => item.invoiceStatus,
       dateFor: (item) => item.dueDate || item.due_date || item.createdAt,
+      dateLabel: 'Due ',
+      amountFor: jobberInvoiceAmount,
       empty: 'No pending invoices.',
     },
   ].filter((section) => section.enabled);
@@ -391,17 +448,28 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
                 </div>
                 {visibleItems.map((item, idx) => {
                   const clientName = item.client?.name || item.clientName || '';
-                  const statusText = section.statusFor(item);
+                  const statusText = formatJobberStatus(section.statusFor(item));
                   const dateValue = section.dateFor(item);
+                  const amountText = section.amountFor?.(item);
+                  const href = item.jobberWebUri || item.jobber_web_uri;
                   return (
-                    <div key={`${section.key}-${item.id || section.titleFor(item)}-${idx}`} className="rounded-lg border border-gray-100 p-3 bg-white">
-                      <div className="font-medium text-sm text-gray-800">{section.titleFor(item)}</div>
+                    <a
+                      key={`${section.key}-${item.id || section.titleFor(item)}-${idx}`}
+                      href={href || '#'}
+                      target={href ? '_blank' : undefined}
+                      rel={href ? 'noopener noreferrer' : undefined}
+                      className="block rounded-lg border border-gray-100 p-3 bg-white hover:border-brand-200 hover:bg-brand-50 transition-colors"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="font-medium text-sm text-gray-800">{section.titleFor(item)}</div>
+                        {amountText && <div className="shrink-0 text-sm font-semibold text-gray-900">{amountText}</div>}
+                      </div>
                       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500">
                         {showClient && clientName && <span>{clientName}</span>}
                         {showStatus && statusText && <span>{statusText}</span>}
-                        {showDate && dateValue && <span>{new Date(dateValue).toLocaleString()}</span>}
+                        {showDate && dateValue && <span>{formatJobberDate(dateValue, section.dateLabel)}</span>}
                       </div>
-                    </div>
+                    </a>
                   );
                 })}
                 {section.items.length > visibleItems.length && (
