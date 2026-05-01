@@ -445,6 +445,56 @@ def test_jobber_base_url_update_takes_effect_with_masked_oauth_secret():
         assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer jobber-access-token"
 
 
+def test_jobber_dashboard_limit_setting_controls_query_size():
+    app = make_client("test_dash_jobber_limit_setting.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/jobber",
+            headers=h,
+            json={
+                "base_url": "https://api.getjobber.com/api/graphql",
+                "config_json": '{"client_id":"jobber-client","client_secret":"jobber-secret"}',
+            },
+        )
+        client.put("/settings/dashboard.jobber.limit", headers=h, json={"value": "3"})
+
+        from app.db import SessionLocal
+        from app.models import Integration
+
+        db = SessionLocal()
+        try:
+            jobber = db.query(Integration).filter(Integration.provider == "jobber").first()
+            jobber.oauth_access_token = "jobber-access-token"
+            db.commit()
+        finally:
+            db.close()
+
+        request = httpx.Request("POST", "https://api.getjobber.com/api/graphql")
+        response = httpx.Response(
+            200,
+            json={
+                "data": {
+                    "jobs": {
+                        "nodes": [
+                            {"title": "Deck repair", "jobStatus": "ACTIVE", "startAt": "2026-05-01T10:00:00Z", "client": {"name": "Alice"}},
+                            {"title": "Kitchen quote", "jobStatus": "UPCOMING", "startAt": "2026-05-02T10:00:00Z", "client": {"name": "Bob"}},
+                        ]
+                    }
+                }
+            },
+            request=request,
+        )
+        with patch("httpx.post", return_value=response) as mock_post:
+            r = client.post("/dashboard/refresh/jobber", headers=h)
+
+        assert r.status_code == 200
+        assert "first: 3" in mock_post.call_args.kwargs["json"]["query"]
+        payload = client.get("/dashboard", headers=h).json()
+        assert payload["jobber"]["data"]["limit"] == 3
+        assert payload["jobber"]["data"]["upcoming_jobs"][0]["client"]["name"] == "Alice"
+
+
 def test_paperless_gpt_401_has_actionable_error():
     app = make_client("test_dash_paperless_gpt_401.db")
     with TestClient(app) as client:

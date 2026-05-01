@@ -14,6 +14,7 @@ const SOURCE_META = {
 const DEFAULT_WIDGET_SETTINGS = {
   paperless: { tag: 'ai-processed', limit: '5' },
   immich: { album_id: '', limit: '6' },
+  jobber: { limit: '5', show_client: 'true', show_status: 'true', show_date: 'true' },
 };
 
 const DEFAULT_QUICK_LINKS = [
@@ -115,6 +116,8 @@ function WidgetHeader({ title, icon, status, stale, onRefresh, loading, onConfig
 function WidgetSettingsModal({ source, settings, onClose, onSave }) {
   const [form, setForm] = useState(settings);
   const isPaperless = source === 'paperless';
+  const isJobber = source === 'jobber';
+  const title = isPaperless ? 'Paperless dashboard settings' : isJobber ? 'Jobber dashboard settings' : 'Immich dashboard settings';
 
   return (
     <div className="fixed inset-0 z-50 bg-gray-900/30 flex items-center justify-center p-4">
@@ -127,13 +130,13 @@ function WidgetSettingsModal({ source, settings, onClose, onSave }) {
       >
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold text-gray-900">
-            {isPaperless ? 'Paperless dashboard settings' : 'Immich dashboard settings'}
+            {title}
           </h3>
           <button type="button" className="text-gray-400 hover:text-gray-700" onClick={onClose}>×</button>
         </div>
 
         <div className="space-y-3">
-          {isPaperless ? (
+          {isPaperless && (
             <div>
               <label className="label">Document tag</label>
               <input
@@ -144,7 +147,8 @@ function WidgetSettingsModal({ source, settings, onClose, onSave }) {
               />
               <p className="text-xs text-gray-400 mt-1">Only latest documents with this tag are shown.</p>
             </div>
-          ) : (
+          )}
+          {!isPaperless && !isJobber && (
             <div>
               <label className="label">Album ID</label>
               <input
@@ -154,6 +158,24 @@ function WidgetSettingsModal({ source, settings, onClose, onSave }) {
                 placeholder="Immich album ID"
               />
               <p className="text-xs text-gray-400 mt-1">Leave blank to show the latest assets.</p>
+            </div>
+          )}
+          {isJobber && (
+            <div className="grid grid-cols-1 gap-2 rounded-lg bg-gray-50 p-3">
+              {[
+                ['show_client', 'Show client'],
+                ['show_status', 'Show status'],
+                ['show_date', 'Show start date'],
+              ].map(([key, label]) => (
+                <label key={key} className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={form[key] !== 'false'}
+                    onChange={(e) => setForm({ ...form, [key]: e.target.checked ? 'true' : 'false' })}
+                  />
+                  {label}
+                </label>
+              ))}
             </div>
           )}
           <div>
@@ -287,7 +309,50 @@ function ImmichWidget({ title, icon, status, stale, data, onRefresh, loading, on
   );
 }
 
-function WidgetCard({ source, title, icon, status, stale, data, onRefresh, loading, onConfigure }) {
+function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, loading, onConfigure }) {
+  const jobs = data?.upcoming_jobs || [];
+  const limit = Math.max(1, Math.min(10, Number(settings?.limit || 5)));
+  const visibleJobs = jobs.slice(0, limit);
+  const showClient = settings?.show_client !== 'false';
+  const showStatus = settings?.show_status !== 'false';
+  const showStart = settings?.show_start !== 'false';
+
+  return (
+    <div className="card flex flex-col gap-3">
+      <WidgetHeader title={title} icon={icon} status={status} stale={stale} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />
+      {status === 'not_connected' ? (
+        <p className="text-sm text-red-500">Integration not connected. Configure in Settings.</p>
+      ) : visibleJobs.length > 0 ? (
+        <div className="space-y-2">
+          {visibleJobs.map((job, idx) => {
+            const clientName = job.client?.name || job.clientName || '';
+            const start = job.startAt || job.start_at || job.start;
+            return (
+              <div key={`${job.id || job.title || 'job'}-${idx}`} className="rounded-lg border border-gray-100 p-3 bg-white">
+                <div className="font-medium text-sm text-gray-800">{job.title || 'Untitled job'}</div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500">
+                  {showClient && clientName && <span>{clientName}</span>}
+                  {showStatus && job.jobStatus && <span>{job.jobStatus}</span>}
+                  {showStart && start && <span>{new Date(start).toLocaleString()}</span>}
+                </div>
+              </div>
+            );
+          })}
+          {data?.count > visibleJobs.length && (
+            <p className="text-xs text-gray-400">{data.count - visibleJobs.length} more jobs not shown.</p>
+          )}
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500">No upcoming jobs found.</p>
+      )}
+    </div>
+  );
+}
+
+function WidgetCard({ source, title, icon, status, stale, data, settings, onRefresh, loading, onConfigure }) {
+  if (source === 'jobber') {
+    return <JobberWidget title={title} icon={icon} status={status} stale={stale} data={data} settings={settings} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />;
+  }
   if (source === 'paperless') {
     return <PaperlessWidget title={title} icon={icon} status={status} stale={stale} data={data} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />;
   }
@@ -577,13 +642,29 @@ export default function DashboardPage() {
         limit: settings['dashboard.immich.limit'] || defaults.limit,
       };
     }
+    if (source === 'jobber') {
+      return {
+        ...defaults,
+        limit: settings['dashboard.jobber.limit'] || defaults.limit,
+        show_client: settings['dashboard.jobber.show_client'] || defaults.show_client,
+        show_status: settings['dashboard.jobber.show_status'] || defaults.show_status,
+        show_date: settings['dashboard.jobber.show_date'] || defaults.show_date,
+      };
+    }
     return defaults;
   };
 
   const saveWidgetSettings = async (source, form) => {
     const entries = source === 'paperless'
       ? { 'dashboard.paperless.tag': form.tag || 'ai-processed', 'dashboard.paperless.limit': form.limit || '5' }
-      : { 'dashboard.immich.album_id': form.album_id || '', 'dashboard.immich.limit': form.limit || '6' };
+      : source === 'jobber'
+        ? {
+            'dashboard.jobber.limit': form.limit || '5',
+            'dashboard.jobber.show_client': form.show_client || 'true',
+            'dashboard.jobber.show_status': form.show_status || 'true',
+            'dashboard.jobber.show_date': form.show_date || 'true',
+          }
+        : { 'dashboard.immich.album_id': form.album_id || '', 'dashboard.immich.limit': form.limit || '6' };
     for (const [key, value] of Object.entries(entries)) {
       await apiFetch(`/settings/${key}`, { method: 'PUT', body: JSON.stringify({ value }) });
     }
@@ -645,9 +726,10 @@ export default function DashboardPage() {
               status={w.status || 'unknown'}
               stale={w.stale}
               data={w.data || {}}
+              settings={widgetSettingsFor(src)}
               onRefresh={() => refreshSource(src)}
               loading={refreshing[src]}
-              onConfigure={['paperless', 'immich'].includes(src) ? () => setSettingsSource(src) : null}
+              onConfigure={['paperless', 'immich', 'jobber'].includes(src) ? () => setSettingsSource(src) : null}
             />
           );
         })}

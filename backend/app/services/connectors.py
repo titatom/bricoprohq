@@ -271,17 +271,18 @@ class JobberConnector(BaseConnector):
     def fetch(self) -> dict:
         bearer = self._get_bearer_token()
         graphql_url = self.base_url or "https://api.getjobber.com/api/graphql"
-        query = """
-        query {
-          jobs(filter: {status: [ACTIVE, UPCOMING]}, first: 10) {
-            nodes {
+        limit = self._int_setting("dashboard.jobber.limit", 5)
+        query = f"""
+        query {{
+          jobs(filter: {{status: [ACTIVE, UPCOMING]}}, first: {limit}) {{
+            nodes {{
               title
               jobStatus
               startAt
-              client { name }
-            }
-          }
-        }
+              client {{ name }}
+            }}
+          }}
+        }}
         """
         try:
             r = httpx.post(
@@ -293,7 +294,7 @@ class JobberConnector(BaseConnector):
             r.raise_for_status()
             data = r.json()
             jobs = data.get("data", {}).get("jobs", {}).get("nodes", [])
-            return {"upcoming_jobs": jobs, "count": len(jobs)}
+            return {"upcoming_jobs": jobs, "count": len(jobs), "limit": limit}
         except httpx.HTTPStatusError as exc:
             raise ConnectorError(f"Jobber HTTP error: {exc.response.status_code}") from exc
         except httpx.RequestError as exc:
