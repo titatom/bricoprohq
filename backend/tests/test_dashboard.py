@@ -332,6 +332,41 @@ def test_paperless_gpt_supports_bearer_auth_mode():
         assert mock_get.call_args.kwargs["headers"]["Authorization"] == "Bearer secret-token"
 
 
+def test_paperless_gpt_base_url_update_takes_effect_with_masked_secret():
+    app = make_client("test_dash_paperless_gpt_update_base_url.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={
+                "base_url": "https://bricoprohq.thomasrich.ca",
+                "config_json": '{"auth_mode":"bearer","api_key":"secret-token"}',
+            },
+        )
+
+        update = client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={
+                "base_url": "http://paperless-gpt.local:8080",
+                "config_json": '{"auth_mode":"bearer","api_key":"••••••••"}',
+            },
+        )
+        assert update.status_code == 200
+        assert update.json()["base_url"] == "http://paperless-gpt.local:8080"
+        assert update.json()["config_fields"]["api_key"] == "••••••••"
+
+        request = httpx.Request("GET", "http://paperless-gpt.local:8080/api/documents")
+        response = httpx.Response(200, json={"documents": []}, request=request)
+        with patch("httpx.get", return_value=response) as mock_get:
+            r = client.post("/integrations/paperless-gpt/test", headers=h)
+
+        assert r.status_code == 200
+        assert str(mock_get.call_args.args[0]) == "http://paperless-gpt.local:8080/api/documents"
+        assert mock_get.call_args.kwargs["headers"]["Authorization"] == "Bearer secret-token"
+
+
 def test_paperless_gpt_401_has_actionable_error():
     app = make_client("test_dash_paperless_gpt_401.db")
     with TestClient(app) as client:

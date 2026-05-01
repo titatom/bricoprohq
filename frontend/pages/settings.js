@@ -350,18 +350,29 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
     e.preventDefault();
     setSaving(true);
     setTestResult(null);
-    await onSave(providerKey, form);
-    setSaved(true);
-    setSaving(false);
-    setTimeout(() => setSaved(false), 2000);
+    try {
+      await onSave(providerKey, form);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setTestResult({ ok: false, message: String(err) });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const connect = async () => {
     setTesting(true);
     setTestResult(null);
-    const result = await onTest(providerKey);
-    setTestResult(result);
-    setTesting(false);
+    try {
+      await onSave(providerKey, form);
+      const result = await onTest(providerKey);
+      setTestResult(result);
+    } catch (err) {
+      setTestResult({ ok: false, message: String(err) });
+    } finally {
+      setTesting(false);
+    }
   };
 
   const oauthConnect = async () => {
@@ -545,9 +556,12 @@ export default function SettingsPage() {
       method: 'PUT',
       body: JSON.stringify({ base_url: base_url || '', config_json: JSON.stringify(rest) }),
     });
+    const data = await parseApiResponse(r, 'Save failed');
+    if (!r.ok) {
+      throw new Error(data.detail || data.message || 'Save failed');
+    }
     if (r.ok) {
-      const updated = await r.json();
-      setIntegrations((prev) => prev.map((i) => (i.provider === providerKey ? updated : i)));
+      setIntegrations((prev) => prev.map((i) => (i.provider === providerKey ? data : i)));
     }
   }, [apiFetch]);
 
