@@ -367,6 +367,52 @@ def test_paperless_gpt_base_url_update_takes_effect_with_masked_secret():
         assert mock_get.call_args.kwargs["headers"]["Authorization"] == "Bearer secret-token"
 
 
+def test_jobber_base_url_update_takes_effect_with_masked_oauth_secret():
+    app = make_client("test_dash_jobber_update_base_url.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/jobber",
+            headers=h,
+            json={
+                "base_url": "https://old-jobber-proxy.local/graphql",
+                "config_json": '{"client_id":"jobber-client","client_secret":"jobber-secret"}',
+            },
+        )
+
+        from app.db import SessionLocal
+        from app.models import Integration
+
+        db = SessionLocal()
+        try:
+            jobber = db.query(Integration).filter(Integration.provider == "jobber").first()
+            jobber.oauth_access_token = "jobber-access-token"
+            db.commit()
+        finally:
+            db.close()
+
+        update = client.put(
+            "/integrations/jobber",
+            headers=h,
+            json={
+                "base_url": "https://new-jobber-proxy.local/graphql",
+                "config_json": '{"client_id":"jobber-client","client_secret":"••••••••"}',
+            },
+        )
+        assert update.status_code == 200
+        assert update.json()["base_url"] == "https://new-jobber-proxy.local/graphql"
+        assert update.json()["config_fields"]["client_secret"] == "••••••••"
+
+        request = httpx.Request("POST", "https://new-jobber-proxy.local/graphql")
+        response = httpx.Response(200, json={"data": {"jobs": {"nodes": []}}}, request=request)
+        with patch("httpx.post", return_value=response) as mock_post:
+            r = client.post("/integrations/jobber/test", headers=h)
+
+        assert r.status_code == 200
+        assert str(mock_post.call_args.args[0]) == "https://new-jobber-proxy.local/graphql"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer jobber-access-token"
+
+
 def test_paperless_gpt_401_has_actionable_error():
     app = make_client("test_dash_paperless_gpt_401.db")
     with TestClient(app) as client:

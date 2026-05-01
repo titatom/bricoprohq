@@ -378,9 +378,15 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
   const oauthConnect = async () => {
     setTesting(true);
     setTestResult(null);
-    const result = await onOAuthConnect(oauthProviderKey);
-    if (!result.ok) {
-      setTestResult(result);
+    try {
+      await onSave(providerKey, form);
+      const result = await onOAuthConnect(oauthProviderKey);
+      if (!result.ok) {
+        setTestResult(result);
+      }
+    } catch (err) {
+      setTestResult({ ok: false, message: String(err) });
+    } finally {
       setTesting(false);
     }
   };
@@ -455,16 +461,26 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
             </button>
           )}
 
-          {(isOAuth || isSharedOAuth) ? (
+          {isOAuth || isSharedOAuth ? (
             oauthConnected ? (
-              <button
-                type="button"
-                className="btn-secondary text-sm text-red-600 border-red-200 hover:bg-red-50"
-                onClick={disconnect}
-                disabled={disconnecting}
-              >
-                {disconnecting ? 'Disconnecting…' : 'Disconnect'}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btn-secondary text-sm"
+                  onClick={connect}
+                  disabled={testing || saving}
+                >
+                  {testing ? 'Testing…' : 'Test Connection'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary text-sm text-red-600 border-red-200 hover:bg-red-50"
+                  onClick={disconnect}
+                  disabled={disconnecting}
+                >
+                  {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+                </button>
+              </>
             ) : (
               <button
                 type="button"
