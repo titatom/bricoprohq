@@ -375,7 +375,7 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
   const sharedIntegration = isSharedOAuth ? integrationsByProvider?.[meta.sharedProvider] : null;
   const oauthConnected = isSharedOAuth ? sharedIntegration?.oauth_connected : integration?.oauth_connected;
   const oauthProviderKey = isSharedOAuth ? meta.sharedProvider : providerKey;
-  const isConnected = oauthConnected || integration?.status === 'ok';
+  const isConnected = integration?.status === 'ok' || (oauthConnected && integration?.status !== 'error');
   const statusLabel = isConnected ? 'Connected' : integration?.status === 'error' ? 'Error' : 'Not connected';
   const statusColor = isConnected
     ? 'bg-green-100 text-green-700'
@@ -619,7 +619,7 @@ export default function SettingsPage() {
         setIntegrations((prev) =>
           prev.map((i) => (i.provider === providerKey ? { ...i, status: 'ok' } : i))
         );
-        return { ok: true, message: 'Connected.' };
+        return { ok: true, message: data.message || 'Connected.' };
       }
       setIntegrations((prev) =>
         prev.map((i) => (i.provider === providerKey ? { ...i, status: 'error' } : i))

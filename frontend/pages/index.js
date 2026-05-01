@@ -326,7 +326,7 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
   const limit = Math.max(1, Math.min(10, Number(settings?.limit || 5)));
   const showClient = settings?.show_client !== 'false';
   const showStatus = settings?.show_status !== 'false';
-  const showStart = settings?.show_start !== 'false';
+  const showDate = settings?.show_date !== 'false';
   const sections = [
     {
       key: 'jobs',
@@ -376,6 +376,8 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
       <WidgetHeader title={title} icon={icon} status={status} stale={stale} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />
       {status === 'not_connected' ? (
         <p className="text-sm text-red-500">Integration not connected. Configure in Settings.</p>
+      ) : data?.error ? (
+        <p className="text-sm text-red-500">{data.error}</p>
       ) : hasItems ? (
         <div className="space-y-3">
           {sections.map((section) => {
@@ -397,7 +399,7 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
                       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500">
                         {showClient && clientName && <span>{clientName}</span>}
                         {showStatus && statusText && <span>{statusText}</span>}
-                        {showStart && dateValue && <span>{new Date(dateValue).toLocaleString()}</span>}
+                        {showDate && dateValue && <span>{new Date(dateValue).toLocaleString()}</span>}
                       </div>
                     </div>
                   );

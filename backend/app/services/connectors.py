@@ -10,6 +10,7 @@ Raise ConnectorError for connectivity / auth failures.
 
 import json
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 
 import httpx
@@ -84,9 +85,23 @@ def _json_or_connector_error(response: httpx.Response, service_name: str):
     try:
         return response.json()
     except ValueError as exc:
-        body = response.text.strip()
-        snippet = body[:120] if body else "<empty response>"
+        snippet = _response_snippet(response)
         raise ConnectorError(f"{service_name} returned a non-JSON response: {snippet}") from exc
+
+
+def _response_snippet(response: httpx.Response, limit: int = 160) -> str:
+    body = response.text.strip()
+    if not body:
+        return "<empty response>"
+    content_type = response.headers.get("content-type", "")
+    if "html" in content_type.lower() or body.lstrip().lower().startswith("<!doctype html"):
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", body, flags=re.IGNORECASE | re.DOTALL)
+        if title_match:
+            body = title_match.group(1)
+        else:
+            body = re.sub(r"<[^>]+>", " ", body)
+    body = re.sub(r"\s+", " ", body).strip()
+    return body[:limit] if body else "<empty response>"
 
 
 def _raise_http_status(exc: httpx.HTTPStatusError, service_name: str):
@@ -98,7 +113,8 @@ def _raise_http_status(exc: httpx.HTTPStatusError, service_name: str):
         hint = "endpoint not found; check the base URL and service API version"
     else:
         hint = "request failed"
-    raise ConnectorError(f"{service_name} HTTP error {status} at {path}: {hint}") from exc
+    detail = _response_snippet(exc.response)
+    raise ConnectorError(f"{service_name} HTTP error {status} at {path}: {hint}. Response: {detail}") from exc
 
 
 def _google_oauth_config(integration: Integration) -> dict:
@@ -269,16 +285,20 @@ class JobberConnector(BaseConnector):
         )
 
     def _post_graphql(self, graphql_url: str, bearer: str, query: str) -> dict:
-        r = httpx.post(
-            graphql_url,
-            json={"query": query},
-            headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
-            timeout=10,
-        )
-        r.raise_for_status()
-        data = r.json()
+        try:
+            r = httpx.post(
+                graphql_url,
+                json={"query": query},
+                headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
+                timeout=10,
+            )
+            r.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            _raise_http_status(exc, "Jobber")
+        data = _json_or_connector_error(r, "Jobber")
         if data.get("errors"):
-            raise ConnectorError(f"Jobber GraphQL error: {data['errors']}")
+            messages = "; ".join(error.get("message", str(error)) for error in data["errors"])
+            raise ConnectorError(f"Jobber GraphQL error: {messages}")
         return data.get("data", {})
 
     def _optional_collection(self, graphql_url: str, bearer: str, query: str, key: str) -> list:
@@ -295,10 +315,13 @@ class JobberConnector(BaseConnector):
         limit = self._int_setting("dashboard.jobber.limit", 5)
         jobs_query = f"""
         query {{
-          jobs(filter: {{status: [ACTIVE, UPCOMING]}}, first: {limit}) {{
+          jobs(first: {limit}) {{
             nodes {{
+              id
               title
+              jobNumber
               jobStatus
+              jobberWebUri
               startAt
               client {{ name }}
             }}

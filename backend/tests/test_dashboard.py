@@ -498,6 +498,82 @@ def test_jobber_dashboard_limit_setting_controls_query_size():
         assert "pending_invoices" in payload["jobber"]["data"]
 
 
+def test_jobber_502_reports_actionable_error_without_html_dump():
+    app = make_client("test_dash_jobber_502.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/jobber",
+            headers=h,
+            json={
+                "base_url": "https://api.getjobber.com/api/graphql",
+                "config_json": '{"client_id":"jobber-client","client_secret":"jobber-secret"}',
+            },
+        )
+
+        from app.db import SessionLocal
+        from app.models import Integration
+
+        db = SessionLocal()
+        try:
+            jobber = db.query(Integration).filter(Integration.provider == "jobber").first()
+            jobber.oauth_access_token = "jobber-access-token"
+            db.commit()
+        finally:
+            db.close()
+
+        request = httpx.Request("POST", "https://api.getjobber.com/api/graphql")
+        response = httpx.Response(
+            502,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            content=b"<!DOCTYPE html><html><head><title>thomasrich.ca | 502: Bad gateway</title></head><body>Cloudflare</body></html>",
+            request=request,
+        )
+        with patch("httpx.post", return_value=response):
+            r = client.post("/integrations/jobber/test", headers=h)
+
+        assert r.status_code == 502
+        detail = r.json()["detail"]
+        assert "Jobber HTTP error 502 at /api/graphql" in detail
+        assert "thomasrich.ca | 502: Bad gateway" in detail
+        assert "<!DOCTYPE html>" not in detail
+
+
+def test_jobber_dashboard_refresh_caches_error_when_primary_query_fails():
+    app = make_client("test_dash_jobber_dashboard_502.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/jobber",
+            headers=h,
+            json={
+                "base_url": "https://api.getjobber.com/api/graphql",
+                "config_json": '{"client_id":"jobber-client","client_secret":"jobber-secret"}',
+            },
+        )
+
+        from app.db import SessionLocal
+        from app.models import Integration
+
+        db = SessionLocal()
+        try:
+            jobber = db.query(Integration).filter(Integration.provider == "jobber").first()
+            jobber.oauth_access_token = "jobber-access-token"
+            db.commit()
+        finally:
+            db.close()
+
+        request = httpx.Request("POST", "https://api.getjobber.com/api/graphql")
+        response = httpx.Response(502, json={"message": "Bad gateway"}, request=request)
+        with patch("httpx.post", return_value=response):
+            r = client.post("/dashboard/refresh/jobber", headers=h)
+
+        assert r.status_code == 200
+        payload = client.get("/dashboard", headers=h).json()
+        assert payload["jobber"]["status"] == "error"
+        assert "Jobber HTTP error 502 at /api/graphql" in payload["jobber"]["data"]["error"]
+
+
 def test_paperless_gpt_401_has_actionable_error():
     app = make_client("test_dash_paperless_gpt_401.db")
     with TestClient(app) as client:
