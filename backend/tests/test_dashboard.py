@@ -240,6 +240,38 @@ def test_immich_test_endpoint_uses_search_metadata():
         assert mock_post.call_args.kwargs["json"] == {"page": 1, "size": 6}
         assert mock_post.call_args.kwargs["headers"]["x-api-key"] == "test-key"
         assert r.json()["data"]["recent_assets"][0]["filename"] == "photo.jpg"
+        assert r.json()["data"]["recent_assets"][0]["preview_url"] == "/integrations/immich/assets/asset-1/thumbnail"
+
+
+def test_immich_thumbnail_proxy_uses_api_key():
+    app = make_client("test_dash_immich_thumbnail_proxy.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/immich",
+            headers=h,
+            json={"base_url": "http://immich.local:2283", "config_json": '{"api_key":"test-key"}'},
+        )
+
+        request = httpx.Request(
+            "GET",
+            "http://immich.local:2283/api/assets/asset-1/thumbnail?size=preview",
+        )
+        response = httpx.Response(
+            200,
+            content=b"fake-image",
+            headers={"content-type": "image/jpeg"},
+            request=request,
+        )
+        with patch("httpx.get", return_value=response) as mock_get:
+            r = client.get("/integrations/immich/assets/asset-1/thumbnail", headers=h)
+
+        assert r.status_code == 200
+        assert r.content == b"fake-image"
+        assert r.headers["content-type"] == "image/jpeg"
+        assert str(mock_get.call_args.args[0]) == "http://immich.local:2283/api/assets/asset-1/thumbnail"
+        assert mock_get.call_args.kwargs["params"] == {"size": "preview"}
+        assert mock_get.call_args.kwargs["headers"]["x-api-key"] == "test-key"
 
 
 def test_immich_404_has_actionable_error():
@@ -330,6 +362,140 @@ def test_paperless_gpt_supports_bearer_auth_mode():
 
         assert r.status_code == 200
         assert mock_get.call_args.kwargs["headers"]["Authorization"] == "Bearer secret-token"
+
+
+def test_paperless_gpt_base_url_update_takes_effect_with_masked_secret():
+    app = make_client("test_dash_paperless_gpt_update_base_url.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={
+                "base_url": "https://bricoprohq.thomasrich.ca",
+                "config_json": '{"auth_mode":"bearer","api_key":"secret-token"}',
+            },
+        )
+
+        update = client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={
+                "base_url": "http://paperless-gpt.local:8080",
+                "config_json": '{"auth_mode":"bearer","api_key":"••••••••"}',
+            },
+        )
+        assert update.status_code == 200
+        assert update.json()["base_url"] == "http://paperless-gpt.local:8080"
+        assert update.json()["config_fields"]["api_key"] == "••••••••"
+
+        request = httpx.Request("GET", "http://paperless-gpt.local:8080/api/documents")
+        response = httpx.Response(200, json={"documents": []}, request=request)
+        with patch("httpx.get", return_value=response) as mock_get:
+            r = client.post("/integrations/paperless-gpt/test", headers=h)
+
+        assert r.status_code == 200
+        assert str(mock_get.call_args.args[0]) == "http://paperless-gpt.local:8080/api/documents"
+        assert mock_get.call_args.kwargs["headers"]["Authorization"] == "Bearer secret-token"
+
+
+def test_jobber_base_url_update_takes_effect_with_masked_oauth_secret():
+    app = make_client("test_dash_jobber_update_base_url.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/jobber",
+            headers=h,
+            json={
+                "base_url": "https://old-jobber-proxy.local/graphql",
+                "config_json": '{"client_id":"jobber-client","client_secret":"jobber-secret"}',
+            },
+        )
+
+        from app.db import SessionLocal
+        from app.models import Integration
+
+        db = SessionLocal()
+        try:
+            jobber = db.query(Integration).filter(Integration.provider == "jobber").first()
+            jobber.oauth_access_token = "jobber-access-token"
+            db.commit()
+        finally:
+            db.close()
+
+        update = client.put(
+            "/integrations/jobber",
+            headers=h,
+            json={
+                "base_url": "https://new-jobber-proxy.local/graphql",
+                "config_json": '{"client_id":"jobber-client","client_secret":"••••••••"}',
+            },
+        )
+        assert update.status_code == 200
+        assert update.json()["base_url"] == "https://new-jobber-proxy.local/graphql"
+        assert update.json()["config_fields"]["client_secret"] == "••••••••"
+
+        request = httpx.Request("POST", "https://new-jobber-proxy.local/graphql")
+        response = httpx.Response(200, json={"data": {"jobs": {"nodes": []}}}, request=request)
+        with patch("httpx.post", return_value=response) as mock_post:
+            r = client.post("/integrations/jobber/test", headers=h)
+
+        assert r.status_code == 200
+        assert str(mock_post.call_args.args[0]) == "https://new-jobber-proxy.local/graphql"
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer jobber-access-token"
+
+
+def test_jobber_dashboard_limit_setting_controls_query_size():
+    app = make_client("test_dash_jobber_limit_setting.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/jobber",
+            headers=h,
+            json={
+                "base_url": "https://api.getjobber.com/api/graphql",
+                "config_json": '{"client_id":"jobber-client","client_secret":"jobber-secret"}',
+            },
+        )
+        client.put("/settings/dashboard.jobber.limit", headers=h, json={"value": "3"})
+
+        from app.db import SessionLocal
+        from app.models import Integration
+
+        db = SessionLocal()
+        try:
+            jobber = db.query(Integration).filter(Integration.provider == "jobber").first()
+            jobber.oauth_access_token = "jobber-access-token"
+            db.commit()
+        finally:
+            db.close()
+
+        request = httpx.Request("POST", "https://api.getjobber.com/api/graphql")
+        response = httpx.Response(
+            200,
+            json={
+                "data": {
+                    "jobs": {
+                        "nodes": [
+                            {"title": "Deck repair", "jobStatus": "ACTIVE", "startAt": "2026-05-01T10:00:00Z", "client": {"name": "Alice"}},
+                            {"title": "Kitchen quote", "jobStatus": "UPCOMING", "startAt": "2026-05-02T10:00:00Z", "client": {"name": "Bob"}},
+                        ]
+                    }
+                }
+            },
+            request=request,
+        )
+        with patch("httpx.post", side_effect=[response, response, response, response]) as mock_post:
+            r = client.post("/dashboard/refresh/jobber", headers=h)
+
+        assert r.status_code == 200
+        assert "first: 3" in mock_post.call_args.kwargs["json"]["query"]
+        payload = client.get("/dashboard", headers=h).json()
+        assert payload["jobber"]["data"]["limit"] == 3
+        assert payload["jobber"]["data"]["upcoming_jobs"][0]["client"]["name"] == "Alice"
+        assert "pending_requests" in payload["jobber"]["data"]
+        assert "pending_quotes" in payload["jobber"]["data"]
+        assert "pending_invoices" in payload["jobber"]["data"]
 
 
 def test_paperless_gpt_401_has_actionable_error():

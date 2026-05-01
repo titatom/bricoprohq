@@ -72,6 +72,7 @@ const INTEGRATION_FIELDS = {
   google_calendar: {
     label: 'Google',
     icon: '📅',
+    logoDomain: 'google.com',
     description: 'Connect once for Calendar and Business Profile.',
     authType: 'oauth',
     connectLabel: 'Connect with Google',
@@ -85,6 +86,7 @@ const INTEGRATION_FIELDS = {
   jobber: {
     label: 'Jobber',
     icon: '🔧',
+    logoDomain: 'jobber.com',
     description: 'Show upcoming jobs and job status on the dashboard.',
     authType: 'oauth',
     connectLabel: 'Connect with Jobber',
@@ -97,6 +99,7 @@ const INTEGRATION_FIELDS = {
   immich: {
     label: 'Immich',
     icon: '🖼️',
+    logoDomain: 'immich.app',
     description: 'Connect source albums and recent photo context.',
     authType: 'api_key',
     fields: [
@@ -128,6 +131,7 @@ const INTEGRATION_FIELDS = {
   paperless: {
     label: 'Paperless-ngx',
     icon: '📄',
+    logoDomain: 'docs.paperless-ngx.com',
     description: 'Show recent documents and pending review queue.',
     authType: 'api_key',
     fields: [
@@ -138,6 +142,7 @@ const INTEGRATION_FIELDS = {
   meta: {
     label: 'Meta (Facebook & Instagram)',
     icon: '📘',
+    logoDomain: 'facebook.com',
     description: 'Connect your Facebook Page and Instagram Business account for publishing.',
     authType: 'oauth',
     connectLabel: 'Connect with Meta',
@@ -150,6 +155,7 @@ const INTEGRATION_FIELDS = {
   google_business: {
     label: 'Google Business Profile',
     icon: '🗺️',
+    logoDomain: 'business.google.com',
     description: 'Uses the shared Google OAuth connection above.',
     authType: 'shared_oauth',
     sharedProvider: 'google_calendar',
@@ -158,6 +164,13 @@ const INTEGRATION_FIELDS = {
     ],
   },
 };
+
+const SETTINGS_TABS = [
+  { key: 'general', label: 'General' },
+  { key: 'ai', label: 'AI Provider' },
+  { key: 'integrations', label: 'Integrations' },
+  { key: 'social', label: 'Social Studio' },
+];
 
 async function parseApiResponse(response, fallbackMessage) {
   const text = await response.text();
@@ -170,6 +183,23 @@ async function parseApiResponse(response, fallbackMessage) {
 }
 
 // ── Components ────────────────────────────────────────────────────────────────
+
+function IntegrationIcon({ meta }) {
+  if (meta.logoDomain) {
+    return (
+      <span className="w-8 h-8 rounded-xl bg-white border border-gray-100 flex items-center justify-center overflow-hidden">
+        <img
+          src={`https://www.google.com/s2/favicons?domain=${meta.logoDomain}&sz=64`}
+          alt=""
+          className="w-5 h-5 object-contain"
+          loading="lazy"
+          referrerPolicy="no-referrer"
+        />
+      </span>
+    );
+  }
+  return <span className="text-lg">{meta.icon}</span>;
+}
 
 function AiProviderSection({ settings, onSave, onTest }) {
   const currentProvider = settings.ai_provider || 'openrouter';
@@ -345,31 +375,56 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
   const sharedIntegration = isSharedOAuth ? integrationsByProvider?.[meta.sharedProvider] : null;
   const oauthConnected = isSharedOAuth ? sharedIntegration?.oauth_connected : integration?.oauth_connected;
   const oauthProviderKey = isSharedOAuth ? meta.sharedProvider : providerKey;
+  const isConnected = oauthConnected || integration?.status === 'ok';
+  const statusLabel = isConnected ? 'Connected' : integration?.status === 'error' ? 'Error' : 'Not connected';
+  const statusColor = isConnected
+    ? 'bg-green-100 text-green-700'
+    : integration?.status === 'error'
+      ? 'bg-red-100 text-red-600'
+      : 'bg-gray-100 text-gray-500';
 
   const save = async (e) => {
     e.preventDefault();
     setSaving(true);
     setTestResult(null);
-    await onSave(providerKey, form);
-    setSaved(true);
-    setSaving(false);
-    setTimeout(() => setSaved(false), 2000);
+    try {
+      await onSave(providerKey, form);
+      setSaved(true);
+      setTestResult({ ok: true, message: 'Saved.' });
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setTestResult({ ok: false, message: String(err) });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const connect = async () => {
     setTesting(true);
     setTestResult(null);
-    const result = await onTest(providerKey);
-    setTestResult(result);
-    setTesting(false);
+    try {
+      await onSave(providerKey, form);
+      const result = await onTest(providerKey);
+      setTestResult(result);
+    } catch (err) {
+      setTestResult({ ok: false, message: String(err) });
+    } finally {
+      setTesting(false);
+    }
   };
 
   const oauthConnect = async () => {
     setTesting(true);
     setTestResult(null);
-    const result = await onOAuthConnect(oauthProviderKey);
-    if (!result.ok) {
-      setTestResult(result);
+    try {
+      await onSave(providerKey, form);
+      const result = await onOAuthConnect(oauthProviderKey);
+      if (!result.ok) {
+        setTestResult(result);
+      }
+    } catch (err) {
+      setTestResult({ ok: false, message: String(err) });
+    } finally {
       setTesting(false);
     }
   };
@@ -381,28 +436,19 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
     setDisconnecting(false);
   };
 
-  const statusColor =
-    integration?.status === 'ok'            ? 'bg-green-100 text-green-700' :
-    integration?.status === 'not_connected'  ? 'bg-gray-100 text-gray-500'   :
-    integration?.status === 'error'          ? 'bg-red-100 text-red-600'     :
-    'bg-gray-100 text-gray-500';
-
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-          <span className="text-lg">{meta.icon}</span>
+          <IntegrationIcon meta={meta} />
           <div>
             <h3 className="font-semibold text-gray-800">{meta.label}</h3>
             <p className="text-xs text-gray-400">{meta.description}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {(isOAuth || isSharedOAuth) && oauthConnected && (
-            <span className="badge bg-green-100 text-green-700">Connected via OAuth</span>
-          )}
           <span className={`badge ${statusColor}`}>
-            {integration?.status || 'unknown'}
+            {statusLabel}
             {integration?.last_sync_at ? ` · ${new Date(integration.last_sync_at).toLocaleDateString()}` : ''}
           </span>
         </div>
@@ -433,27 +479,37 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
 
         {testResult && (
           <div className={`text-sm rounded-lg px-4 py-2.5 ${testResult.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-            {testResult.ok ? '✓ ' : '✗ '}{testResult.message}
+            {testResult.message}
           </div>
         )}
 
         <div className="flex flex-wrap gap-2 pt-1">
           {!isSharedOAuth && (
             <button type="submit" className="btn-primary text-sm" disabled={saving}>
-              {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
+              {saving ? 'Saving...' : saved ? 'Saved' : 'Save'}
             </button>
           )}
 
-          {(isOAuth || isSharedOAuth) ? (
+          {isOAuth || isSharedOAuth ? (
             oauthConnected ? (
-              <button
-                type="button"
-                className="btn-secondary text-sm text-red-600 border-red-200 hover:bg-red-50"
-                onClick={disconnect}
-                disabled={disconnecting}
-              >
-                {disconnecting ? 'Disconnecting…' : 'Disconnect'}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btn-secondary text-sm"
+                  onClick={connect}
+                  disabled={testing || saving}
+                >
+                  {testing ? 'Testing…' : 'Test Connection'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary text-sm text-red-600 border-red-200 hover:bg-red-50"
+                  onClick={disconnect}
+                  disabled={disconnecting}
+                >
+                  {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+                </button>
+              </>
             ) : (
               <button
                 type="button"
@@ -487,6 +543,7 @@ export default function SettingsPage() {
   const [integrations, setIntegrations] = useState([]);
   const [settings, setSettings] = useState({});
   const [oauthBanner, setOauthBanner] = useState(null);
+  const [activeTab, setActiveTab] = useState('general');
 
   const testAiConnection = useCallback(async () => {
     const r = await apiFetch('/ai/test', { method: 'POST' });
@@ -545,9 +602,12 @@ export default function SettingsPage() {
       method: 'PUT',
       body: JSON.stringify({ base_url: base_url || '', config_json: JSON.stringify(rest) }),
     });
+    const data = await parseApiResponse(r, 'Save failed');
+    if (!r.ok) {
+      throw new Error(data.detail || data.message || 'Save failed');
+    }
     if (r.ok) {
-      const updated = await r.json();
-      setIntegrations((prev) => prev.map((i) => (i.provider === providerKey ? updated : i)));
+      setIntegrations((prev) => prev.map((i) => (i.provider === providerKey ? data : i)));
     }
   }, [apiFetch]);
 
@@ -559,12 +619,12 @@ export default function SettingsPage() {
         setIntegrations((prev) =>
           prev.map((i) => (i.provider === providerKey ? { ...i, status: 'ok' } : i))
         );
-        return { ok: true, message: data.message || 'Connection successful' };
+        return { ok: true, message: 'Connected.' };
       }
       setIntegrations((prev) =>
         prev.map((i) => (i.provider === providerKey ? { ...i, status: 'error' } : i))
       );
-      return { ok: false, message: data.detail || 'Connection test failed' };
+      return { ok: false, message: data.detail || 'Check settings.' };
     } catch (err) {
       return { ok: false, message: String(err) };
     }
@@ -576,15 +636,15 @@ export default function SettingsPage() {
       const data = await parseApiResponse(r, 'OAuth connection failed');
       if (!r.ok) {
         const message = data.detail === 'Missing bearer token'
-          ? 'You are not signed in to Bricopro HQ. Log in again before connecting this integration.'
-          : data.detail || 'OAuth connection failed';
+          ? 'Sign in again.'
+          : data.detail || 'Check settings.';
         return { ok: false, message };
       }
       if (!data.authorization_url) {
-        return { ok: false, message: 'OAuth provider did not return an authorization URL.' };
+        return { ok: false, message: 'Check settings.' };
       }
       window.location.assign(data.authorization_url);
-      return { ok: true, message: 'Redirecting to authorization provider...' };
+      return { ok: true, message: 'Redirecting...' };
     } catch (err) {
       return { ok: false, message: String(err) };
     }
@@ -603,29 +663,42 @@ export default function SettingsPage() {
   return (
     <div className="p-6 max-w-3xl">
       <h2 className="text-2xl font-bold text-gray-900 mb-1">Settings</h2>
-      <p className="text-gray-500 text-sm mb-8">Configure the AI provider and integration credentials. All values are saved to the database and persist across restarts.</p>
+      <p className="text-gray-500 text-sm mb-5">Configure app preferences, AI, integrations, and Social Studio.</p>
 
-      <div className="card mb-8 border-l-4 border-accent-500">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h3 className="font-semibold text-gray-800">Social Studio Settings</h3>
-            <p className="text-sm text-gray-500 mt-1">
-              Configure Immich albums, model choices, account defaults, and KPI preferences separately from core integrations.
-            </p>
-          </div>
-          <Link href="/settings/social-studio" className="btn-primary text-sm whitespace-nowrap">
-            Open Social Studio Settings
-          </Link>
-        </div>
+      <div className="flex flex-wrap gap-2 mb-6 border-b border-gray-200">
+        {SETTINGS_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
+              activeTab === tab.key
+                ? 'border-brand-600 text-brand-700'
+                : 'border-transparent text-gray-500 hover:text-gray-800'
+            }`}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
-      {/* AI Provider */}
-      <section className="mb-8">
-        <AiProviderSection settings={settings} onSave={saveAiSettings} onTest={testAiConnection} />
-      </section>
+      {activeTab === 'general' && (
+        <section className="card">
+          <h3 className="font-semibold text-gray-800">General</h3>
+          <p className="text-sm text-gray-500 mt-1">
+            Core app settings live here. More general preferences will appear in this tab as they are added.
+          </p>
+        </section>
+      )}
+
+      {activeTab === 'ai' && (
+        <section>
+          <AiProviderSection settings={settings} onSave={saveAiSettings} onTest={testAiConnection} />
+        </section>
+      )}
 
       {/* OAuth result banner */}
-      {oauthBanner && (
+      {activeTab === 'integrations' && oauthBanner && (
         <div className={`mb-6 rounded-lg px-4 py-3 flex items-center justify-between ${oauthBanner.ok ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
           <span className="text-sm">{oauthBanner.ok ? '✓ ' : '✗ '}{oauthBanner.message}</span>
           <button className="text-xs opacity-60 hover:opacity-100 ml-4" onClick={() => setOauthBanner(null)}>Dismiss</button>
@@ -633,27 +706,45 @@ export default function SettingsPage() {
       )}
 
       {/* Integrations */}
-      <section>
-        <h3 className="text-base font-semibold text-gray-800 mb-3">Integrations</h3>
-        <p className="text-sm text-gray-500 mb-4">
-          All credentials are stored in the database. The app reads them on each refresh — no restart needed.
-        </p>
-        <div className="grid grid-cols-1 gap-4">
-          {Object.entries(INTEGRATION_FIELDS).map(([key, meta]) => (
-            <IntegrationSection
-              key={key}
-              providerKey={key}
-              meta={meta}
-              integration={intMap[key] || null}
-              integrationsByProvider={intMap}
-              onSave={saveIntegration}
-              onTest={testIntegration}
-              onOAuthConnect={startOAuthConnect}
-              onDisconnect={disconnectIntegration}
-            />
-          ))}
-        </div>
-      </section>
+      {activeTab === 'integrations' && (
+        <section>
+          <h3 className="text-base font-semibold text-gray-800 mb-3">Integrations</h3>
+          <p className="text-sm text-gray-500 mb-4">
+            All credentials are stored in the database. The app reads them on each refresh - no restart needed.
+          </p>
+          <div className="grid grid-cols-1 gap-4">
+            {Object.entries(INTEGRATION_FIELDS).map(([key, meta]) => (
+              <IntegrationSection
+                key={key}
+                providerKey={key}
+                meta={meta}
+                integration={intMap[key] || null}
+                integrationsByProvider={intMap}
+                onSave={saveIntegration}
+                onTest={testIntegration}
+                onOAuthConnect={startOAuthConnect}
+                onDisconnect={disconnectIntegration}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {activeTab === 'social' && (
+        <section className="card border-l-4 border-accent-500">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h3 className="font-semibold text-gray-800">Social Studio Settings</h3>
+              <p className="text-sm text-gray-500 mt-1">
+                Configure Immich albums, model choices, account defaults, and KPI preferences separately from core integrations.
+              </p>
+            </div>
+            <Link href="/settings/social-studio" className="btn-primary text-sm whitespace-nowrap">
+              Open Social Studio Settings
+            </Link>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

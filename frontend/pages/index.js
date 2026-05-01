@@ -14,6 +14,16 @@ const SOURCE_META = {
 const DEFAULT_WIDGET_SETTINGS = {
   paperless: { tag: 'ai-processed', limit: '5' },
   immich: { album_id: '', limit: '6' },
+  jobber: {
+    limit: '5',
+    show_jobs: 'true',
+    show_requests: 'true',
+    show_quotes: 'true',
+    show_invoices: 'true',
+    show_client: 'true',
+    show_status: 'true',
+    show_date: 'true',
+  },
 };
 
 const DEFAULT_QUICK_LINKS = [
@@ -26,7 +36,6 @@ const DEFAULT_QUICK_LINKS = [
   { title: 'Meta Business Suite',  icon: '📣', url: 'https://business.facebook.com',        category: 'Marketing'  },
   { title: 'Google Business',      icon: '⭐', url: 'https://business.google.com',           category: 'Marketing'  },
   { title: 'Canva',                icon: '🎨', url: 'https://canva.com',                    category: 'Marketing'  },
-  { title: 'Actual Budget',        icon: '💸', url: 'http://actual.local',                  category: 'Finance'    },
 ];
 
 const QUICK_LINK_LOGO_DOMAINS = {
@@ -40,7 +49,6 @@ const QUICK_LINK_LOGO_DOMAINS = {
   'meta business suite': 'facebook.com',
   'google business': 'business.google.com',
   canva: 'canva.com',
-  'actual budget': 'actualbudget.org',
 };
 
 function logoDomainFor(link) {
@@ -55,6 +63,25 @@ function logoDomainFor(link) {
 
 function logoUrlFor(link) {
   return `https://www.google.com/s2/favicons?domain=${logoDomainFor(link)}&sz=64`;
+}
+
+function QuickLinkIcon({ link }) {
+  const icon = (link.icon || '').trim();
+  if (icon && icon !== 'link') {
+    if (/^https?:\/\//i.test(icon)) {
+      return <img src={icon} alt="" className="w-6 h-6 object-contain" loading="lazy" referrerPolicy="no-referrer" />;
+    }
+    return <span className="text-xl leading-none">{icon}</span>;
+  }
+  return (
+    <img
+      src={logoUrlFor(link)}
+      alt=""
+      className="w-6 h-6 object-contain"
+      loading="lazy"
+      referrerPolicy="no-referrer"
+    />
+  );
 }
 
 function WidgetHeader({ title, icon, status, stale, onRefresh, loading, onConfigure }) {
@@ -98,6 +125,8 @@ function WidgetHeader({ title, icon, status, stale, onRefresh, loading, onConfig
 function WidgetSettingsModal({ source, settings, onClose, onSave }) {
   const [form, setForm] = useState(settings);
   const isPaperless = source === 'paperless';
+  const isJobber = source === 'jobber';
+  const title = isPaperless ? 'Paperless dashboard settings' : isJobber ? 'Jobber dashboard settings' : 'Immich dashboard settings';
 
   return (
     <div className="fixed inset-0 z-50 bg-gray-900/30 flex items-center justify-center p-4">
@@ -110,13 +139,13 @@ function WidgetSettingsModal({ source, settings, onClose, onSave }) {
       >
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold text-gray-900">
-            {isPaperless ? 'Paperless dashboard settings' : 'Immich dashboard settings'}
+            {title}
           </h3>
           <button type="button" className="text-gray-400 hover:text-gray-700" onClick={onClose}>×</button>
         </div>
 
         <div className="space-y-3">
-          {isPaperless ? (
+          {isPaperless && (
             <div>
               <label className="label">Document tag</label>
               <input
@@ -127,7 +156,8 @@ function WidgetSettingsModal({ source, settings, onClose, onSave }) {
               />
               <p className="text-xs text-gray-400 mt-1">Only latest documents with this tag are shown.</p>
             </div>
-          ) : (
+          )}
+          {!isPaperless && !isJobber && (
             <div>
               <label className="label">Album ID</label>
               <input
@@ -137,6 +167,28 @@ function WidgetSettingsModal({ source, settings, onClose, onSave }) {
                 placeholder="Immich album ID"
               />
               <p className="text-xs text-gray-400 mt-1">Leave blank to show the latest assets.</p>
+            </div>
+          )}
+          {isJobber && (
+            <div className="grid grid-cols-1 gap-2 rounded-lg bg-gray-50 p-3">
+              {[
+                ['show_jobs', 'Show jobs'],
+                ['show_requests', 'Show requests'],
+                ['show_quotes', 'Show quotes'],
+                ['show_invoices', 'Show invoices'],
+                ['show_client', 'Show client'],
+                ['show_status', 'Show status'],
+                ['show_date', 'Show start date'],
+              ].map(([key, label]) => (
+                <label key={key} className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={form[key] !== 'false'}
+                    onChange={(e) => setForm({ ...form, [key]: e.target.checked ? 'true' : 'false' })}
+                  />
+                  {label}
+                </label>
+              ))}
             </div>
           )}
           <div>
@@ -194,6 +246,52 @@ function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading,
   );
 }
 
+function ImmichThumbnail({ asset }) {
+  const { apiFetch } = useAuth();
+  const [src, setSrc] = useState('');
+  const [failed, setFailed] = useState(false);
+  const assetId = asset?.id;
+
+  useEffect(() => {
+    let objectUrl = '';
+    let cancelled = false;
+
+    async function loadThumbnail() {
+      if (!assetId) return;
+      setFailed(false);
+      setSrc('');
+      try {
+        const response = await apiFetch(`/integrations/immich/assets/${encodeURIComponent(assetId)}/thumbnail`, {
+          headers: {},
+        });
+        if (!response.ok) throw new Error('thumbnail failed');
+        const blob = await response.blob();
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setSrc(objectUrl);
+      } catch (err) {
+        if (!cancelled) setFailed(true);
+      }
+    }
+
+    loadThumbnail();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [apiFetch, assetId]);
+
+  if (src && !failed) {
+    return <img src={src} alt={asset.filename || 'Immich asset'} className="w-full h-full object-cover" loading="lazy" />;
+  }
+
+  return (
+    <div className="w-full h-full flex items-center justify-center text-xs text-gray-400 text-center p-2">
+      {failed ? 'Preview unavailable' : asset.filename || 'Photo'}
+    </div>
+  );
+}
+
 function ImmichWidget({ title, icon, status, stale, data, onRefresh, loading, onConfigure }) {
   const assets = data?.recent_assets || [];
 
@@ -213,11 +311,7 @@ function ImmichWidget({ title, icon, status, stale, data, onRefresh, loading, on
               title={asset.filename}
               className="aspect-square rounded-xl bg-gray-100 overflow-hidden border border-gray-100 hover:border-brand-200"
             >
-              {asset.preview_url ? (
-                <img src={asset.preview_url} alt={asset.filename || 'Immich asset'} className="w-full h-full object-cover" loading="lazy" />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-xs text-gray-400 text-center p-2">{asset.filename || 'Photo'}</div>
-              )}
+              <ImmichThumbnail asset={asset} />
             </a>
           ))}
         </div>
@@ -228,7 +322,104 @@ function ImmichWidget({ title, icon, status, stale, data, onRefresh, loading, on
   );
 }
 
-function WidgetCard({ source, title, icon, status, stale, data, onRefresh, loading, onConfigure }) {
+function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, loading, onConfigure }) {
+  const limit = Math.max(1, Math.min(10, Number(settings?.limit || 5)));
+  const showClient = settings?.show_client !== 'false';
+  const showStatus = settings?.show_status !== 'false';
+  const showStart = settings?.show_start !== 'false';
+  const sections = [
+    {
+      key: 'jobs',
+      label: 'Jobs',
+      items: data?.upcoming_jobs || [],
+      enabled: settings?.show_jobs !== 'false',
+      titleFor: (item) => item.title || 'Untitled job',
+      statusFor: (item) => item.jobStatus,
+      dateFor: (item) => item.startAt || item.start_at || item.start,
+      empty: 'No upcoming jobs.',
+    },
+    {
+      key: 'requests',
+      label: 'Requests',
+      items: data?.pending_requests || [],
+      enabled: settings?.show_requests !== 'false',
+      titleFor: (item) => item.title || 'Untitled request',
+      statusFor: (item) => item.requestStatus,
+      dateFor: (item) => item.createdAt || item.created_at,
+      empty: 'No pending requests.',
+    },
+    {
+      key: 'quotes',
+      label: 'Quotes',
+      items: data?.pending_quotes || [],
+      enabled: settings?.show_quotes !== 'false',
+      titleFor: (item) => item.title || 'Untitled quote',
+      statusFor: (item) => item.quoteStatus,
+      dateFor: (item) => item.createdAt || item.created_at,
+      empty: 'No pending quotes.',
+    },
+    {
+      key: 'invoices',
+      label: 'Invoices',
+      items: data?.pending_invoices || [],
+      enabled: settings?.show_invoices !== 'false',
+      titleFor: (item) => item.invoiceNumber ? `Invoice ${item.invoiceNumber}` : item.title || 'Untitled invoice',
+      statusFor: (item) => item.invoiceStatus,
+      dateFor: (item) => item.dueDate || item.due_date || item.createdAt,
+      empty: 'No pending invoices.',
+    },
+  ].filter((section) => section.enabled);
+  const hasItems = sections.some((section) => section.items.length > 0);
+
+  return (
+    <div className="card flex flex-col gap-3">
+      <WidgetHeader title={title} icon={icon} status={status} stale={stale} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />
+      {status === 'not_connected' ? (
+        <p className="text-sm text-red-500">Integration not connected. Configure in Settings.</p>
+      ) : hasItems ? (
+        <div className="space-y-3">
+          {sections.map((section) => {
+            const visibleItems = section.items.slice(0, limit);
+            if (visibleItems.length === 0) return null;
+            return (
+              <div key={section.key} className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">{section.label}</h4>
+                  <span className="text-xs text-gray-400">{section.items.length}</span>
+                </div>
+                {visibleItems.map((item, idx) => {
+                  const clientName = item.client?.name || item.clientName || '';
+                  const statusText = section.statusFor(item);
+                  const dateValue = section.dateFor(item);
+                  return (
+                    <div key={`${section.key}-${item.id || section.titleFor(item)}-${idx}`} className="rounded-lg border border-gray-100 p-3 bg-white">
+                      <div className="font-medium text-sm text-gray-800">{section.titleFor(item)}</div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500">
+                        {showClient && clientName && <span>{clientName}</span>}
+                        {showStatus && statusText && <span>{statusText}</span>}
+                        {showStart && dateValue && <span>{new Date(dateValue).toLocaleString()}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+                {section.items.length > visibleItems.length && (
+                  <p className="text-xs text-gray-400">{section.items.length - visibleItems.length} more {section.label.toLowerCase()} not shown.</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500">No Jobber items found.</p>
+      )}
+    </div>
+  );
+}
+
+function WidgetCard({ source, title, icon, status, stale, data, settings, onRefresh, loading, onConfigure }) {
+  if (source === 'jobber') {
+    return <JobberWidget title={title} icon={icon} status={status} stale={stale} data={data} settings={settings} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />;
+  }
   if (source === 'paperless') {
     return <PaperlessWidget title={title} icon={icon} status={status} stale={stale} data={data} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />;
   }
@@ -250,31 +441,79 @@ function WidgetCard({ source, title, icon, status, stale, data, onRefresh, loadi
   );
 }
 
-function QuickLinksWidget({ links, onAdd, onDelete }) {
-  const [form, setForm] = useState({ title: '', url: '', category: 'Operations' });
+function QuickLinkForm({ form, setForm, onSubmit, onCancel, submitLabel }) {
+  return (
+    <form
+      className="flex flex-wrap justify-center gap-2 mb-4 p-3 bg-gray-50 rounded-lg"
+      onSubmit={onSubmit}
+    >
+      <input className="input w-20" placeholder="Icon" value={form.icon} onChange={(e) => setForm({ ...form, icon: e.target.value })} />
+      <input className="input flex-1 min-w-32" placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required />
+      <input className="input flex-1 min-w-48" placeholder="https://..." value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} required />
+      <input className="input w-36" placeholder="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
+      <button type="submit" className="btn-primary text-sm">{submitLabel}</button>
+      <button type="button" className="btn-secondary text-sm" onClick={onCancel}>Cancel</button>
+    </form>
+  );
+}
+
+function QuickLinksWidget({ links, onAdd, onUpdate, onDelete }) {
+  const emptyForm = { title: '', url: '', category: 'Operations', icon: '' };
+  const [form, setForm] = useState(emptyForm);
+  const [editing, setEditing] = useState(null);
   const [adding, setAdding] = useState(false);
+
+  const resetForm = () => {
+    setForm(emptyForm);
+    setEditing(null);
+    setAdding(false);
+  };
+
+  const startAdd = () => {
+    setForm(emptyForm);
+    setEditing(null);
+    setAdding((v) => !v);
+  };
+
+  const startEdit = (link) => {
+    setForm({
+      title: link.title || '',
+      url: link.url || '',
+      category: link.category || 'Operations',
+      icon: link.icon === 'link' ? '' : (link.icon || ''),
+    });
+    setEditing(link);
+    setAdding(false);
+  };
+
+  const submitAdd = async (e) => {
+    e.preventDefault();
+    await onAdd(form);
+    resetForm();
+  };
+
+  const submitEdit = async (e) => {
+    e.preventDefault();
+    await onUpdate(editing, form);
+    resetForm();
+  };
 
   return (
     <div className="card col-span-full py-3 mb-6">
       <div className="flex items-center justify-between gap-3 mb-3">
         <h3 className="font-semibold text-gray-800 text-sm">Quick Links</h3>
-        <button className="btn-secondary text-xs py-1 px-3" onClick={() => setAdding((v) => !v)}>
+        <button className="btn-secondary text-xs py-1 px-3" onClick={startAdd}>
           {adding ? 'Cancel' : '+ Add Link'}
         </button>
       </div>
       {adding && (
-        <form
-          className="flex flex-wrap gap-2 mb-4 p-3 bg-gray-50 rounded-lg"
-          onSubmit={(e) => { e.preventDefault(); onAdd(form); setAdding(false); setForm({ title: '', url: '', category: 'Operations' }); }}
-        >
-          <input className="input flex-1 min-w-32" placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required />
-          <input className="input flex-1 min-w-48" placeholder="https://..." value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} required />
-          <input className="input w-36" placeholder="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
-          <button type="submit" className="btn-primary text-sm">Save</button>
-        </form>
+        <QuickLinkForm form={form} setForm={setForm} onSubmit={submitAdd} onCancel={resetForm} submitLabel="Add" />
+      )}
+      {editing && (
+        <QuickLinkForm form={form} setForm={setForm} onSubmit={submitEdit} onCancel={resetForm} submitLabel="Save" />
       )}
       {links.length > 0 ? (
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        <div className="flex items-center justify-center gap-2 flex-wrap pb-1">
           {links.map((link) => (
             <div key={link.id} className="relative group flex-shrink-0">
               <a
@@ -285,14 +524,16 @@ function QuickLinksWidget({ links, onAdd, onDelete }) {
                 aria-label={link.title}
                 className="w-11 h-11 rounded-xl border border-gray-100 bg-white hover:bg-brand-50 hover:border-brand-200 shadow-sm flex items-center justify-center transition-colors"
               >
-                <img
-                  src={logoUrlFor(link)}
-                  alt=""
-                  className="w-6 h-6 object-contain"
-                  loading="lazy"
-                  referrerPolicy="no-referrer"
-                />
+                <QuickLinkIcon link={link} />
               </a>
+              <button
+                className="absolute -left-1 -top-1 w-4 h-4 rounded-full bg-white border border-gray-200 text-gray-400 hover:text-brand-600 text-[10px] leading-none opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={() => startEdit(link)}
+                title={`Edit ${link.title}`}
+                aria-label={`Edit ${link.title}`}
+              >
+                ✎
+              </button>
               <button
                 className="absolute -right-1 -top-1 w-4 h-4 rounded-full bg-white border border-gray-200 text-gray-300 hover:text-red-400 text-xs leading-none opacity-0 group-hover:opacity-100 transition-opacity"
                 onClick={() => onDelete(link.id)}
@@ -359,7 +600,6 @@ function ProcessingSummary({ summary }) {
 export default function DashboardPage() {
   const { isLoggedIn, apiFetch } = useAuth();
   const [dashboard, setDashboard] = useState({});
-  const [integrations, setIntegrations] = useState([]);
   const [settings, setSettings] = useState({});
   const [quickLinks, setQuickLinks] = useState([]);
   const [processingSummary, setProcessingSummary] = useState(null);
@@ -369,11 +609,6 @@ export default function DashboardPage() {
   const loadDashboard = useCallback(async () => {
     const r = await apiFetch('/dashboard');
     if (r.ok) setDashboard(await r.json());
-  }, [apiFetch]);
-
-  const loadIntegrations = useCallback(async () => {
-    const r = await apiFetch('/integrations');
-    if (r.ok) setIntegrations(await r.json());
   }, [apiFetch]);
 
   const loadSettings = useCallback(async () => {
@@ -408,7 +643,6 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!isLoggedIn) return;
     loadDashboard();
-    loadIntegrations();
     loadSettings();
     loadProcessingSummary();
     loadQuickLinks().then(async () => {
@@ -424,7 +658,6 @@ export default function DashboardPage() {
     setRefreshing((p) => ({ ...p, [source]: true }));
     await apiFetch(`/dashboard/refresh/${source}`, { method: 'POST' });
     await loadDashboard();
-    await loadIntegrations();
     await loadProcessingSummary();
     setRefreshing((p) => ({ ...p, [source]: false }));
   };
@@ -434,8 +667,21 @@ export default function DashboardPage() {
       method: 'POST',
       body: JSON.stringify({
         ...form,
-        icon: 'link',
+        icon: form.icon || '🔗',
         sort_order: 0,
+        is_active: true,
+      }),
+    });
+    await loadQuickLinks();
+  };
+
+  const updateQuickLink = async (link, form) => {
+    await apiFetch(`/quick-links/${link.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        ...link,
+        ...form,
+        icon: form.icon || '🔗',
         is_active: true,
       }),
     });
@@ -463,13 +709,37 @@ export default function DashboardPage() {
         limit: settings['dashboard.immich.limit'] || defaults.limit,
       };
     }
+    if (source === 'jobber') {
+      return {
+        ...defaults,
+        limit: settings['dashboard.jobber.limit'] || defaults.limit,
+        show_jobs: settings['dashboard.jobber.show_jobs'] || defaults.show_jobs,
+        show_requests: settings['dashboard.jobber.show_requests'] || defaults.show_requests,
+        show_quotes: settings['dashboard.jobber.show_quotes'] || defaults.show_quotes,
+        show_invoices: settings['dashboard.jobber.show_invoices'] || defaults.show_invoices,
+        show_client: settings['dashboard.jobber.show_client'] || defaults.show_client,
+        show_status: settings['dashboard.jobber.show_status'] || defaults.show_status,
+        show_date: settings['dashboard.jobber.show_date'] || defaults.show_date,
+      };
+    }
     return defaults;
   };
 
   const saveWidgetSettings = async (source, form) => {
     const entries = source === 'paperless'
       ? { 'dashboard.paperless.tag': form.tag || 'ai-processed', 'dashboard.paperless.limit': form.limit || '5' }
-      : { 'dashboard.immich.album_id': form.album_id || '', 'dashboard.immich.limit': form.limit || '6' };
+      : source === 'jobber'
+        ? {
+            'dashboard.jobber.limit': form.limit || '5',
+            'dashboard.jobber.show_jobs': form.show_jobs || 'true',
+            'dashboard.jobber.show_requests': form.show_requests || 'true',
+            'dashboard.jobber.show_quotes': form.show_quotes || 'true',
+            'dashboard.jobber.show_invoices': form.show_invoices || 'true',
+            'dashboard.jobber.show_client': form.show_client || 'true',
+            'dashboard.jobber.show_status': form.show_status || 'true',
+            'dashboard.jobber.show_date': form.show_date || 'true',
+          }
+        : { 'dashboard.immich.album_id': form.album_id || '', 'dashboard.immich.limit': form.limit || '6' };
     for (const [key, value] of Object.entries(entries)) {
       await apiFetch(`/settings/${key}`, { method: 'PUT', body: JSON.stringify({ value }) });
     }
@@ -479,6 +749,10 @@ export default function DashboardPage() {
   };
 
   if (!isLoggedIn) return <LoginForm />;
+
+  const visibleQuickLinks = quickLinks.filter(
+    (link) => link.is_active && link.title?.toLowerCase() !== 'actual budget'
+  );
 
   return (
     <div className="p-6">
@@ -492,8 +766,9 @@ export default function DashboardPage() {
       )}
 
       <QuickLinksWidget
-        links={quickLinks.filter((l) => l.is_active)}
+        links={visibleQuickLinks}
         onAdd={addQuickLink}
+        onUpdate={updateQuickLink}
         onDelete={deleteQuickLink}
       />
 
@@ -512,16 +787,6 @@ export default function DashboardPage() {
 
       <ProcessingSummary summary={processingSummary} />
 
-      {/* Integration status bar */}
-      <div className="flex gap-3 flex-wrap mb-6">
-        {integrations.map((i) => (
-          <div key={i.provider} className="flex items-center gap-1.5 bg-white border border-gray-100 rounded-full px-3 py-1 shadow-sm">
-            <span className={`w-2 h-2 rounded-full ${i.status === 'ok' ? 'bg-green-400' : i.status === 'not_connected' ? 'bg-red-400' : 'bg-yellow-400'}`} />
-            <span className="text-xs text-gray-600">{i.provider.replace('_', ' ')}</span>
-          </div>
-        ))}
-      </div>
-
       {/* Integration widgets */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         {SOURCES.map((src) => {
@@ -536,9 +801,10 @@ export default function DashboardPage() {
               status={w.status || 'unknown'}
               stale={w.stale}
               data={w.data || {}}
+              settings={widgetSettingsFor(src)}
               onRefresh={() => refreshSource(src)}
               loading={refreshing[src]}
-              onConfigure={['paperless', 'immich'].includes(src) ? () => setSettingsSource(src) : null}
+              onConfigure={['paperless', 'immich', 'jobber'].includes(src) ? () => setSettingsSource(src) : null}
             />
           );
         })}
