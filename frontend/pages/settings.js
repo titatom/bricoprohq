@@ -345,6 +345,13 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
   const sharedIntegration = isSharedOAuth ? integrationsByProvider?.[meta.sharedProvider] : null;
   const oauthConnected = isSharedOAuth ? sharedIntegration?.oauth_connected : integration?.oauth_connected;
   const oauthProviderKey = isSharedOAuth ? meta.sharedProvider : providerKey;
+  const isConnected = oauthConnected || integration?.status === 'ok';
+  const statusLabel = isConnected ? 'Connected' : integration?.status === 'error' ? 'Error' : 'Not connected';
+  const statusColor = isConnected
+    ? 'bg-green-100 text-green-700'
+    : integration?.status === 'error'
+      ? 'bg-red-100 text-red-600'
+      : 'bg-gray-100 text-gray-500';
 
   const save = async (e) => {
     e.preventDefault();
@@ -353,6 +360,7 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
     try {
       await onSave(providerKey, form);
       setSaved(true);
+      setTestResult({ ok: true, message: 'Saved.' });
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
       setTestResult({ ok: false, message: String(err) });
@@ -398,12 +406,6 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
     setDisconnecting(false);
   };
 
-  const statusColor =
-    integration?.status === 'ok'            ? 'bg-green-100 text-green-700' :
-    integration?.status === 'not_connected'  ? 'bg-gray-100 text-gray-500'   :
-    integration?.status === 'error'          ? 'bg-red-100 text-red-600'     :
-    'bg-gray-100 text-gray-500';
-
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-4">
@@ -415,11 +417,8 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {(isOAuth || isSharedOAuth) && oauthConnected && (
-            <span className="badge bg-green-100 text-green-700">Connected via OAuth</span>
-          )}
           <span className={`badge ${statusColor}`}>
-            {integration?.status || 'unknown'}
+            {statusLabel}
             {integration?.last_sync_at ? ` · ${new Date(integration.last_sync_at).toLocaleDateString()}` : ''}
           </span>
         </div>
@@ -450,14 +449,14 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
 
         {testResult && (
           <div className={`text-sm rounded-lg px-4 py-2.5 ${testResult.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-            {testResult.ok ? '✓ ' : '✗ '}{testResult.message}
+            {testResult.message}
           </div>
         )}
 
         <div className="flex flex-wrap gap-2 pt-1">
           {!isSharedOAuth && (
             <button type="submit" className="btn-primary text-sm" disabled={saving}>
-              {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
+              {saving ? 'Saving...' : saved ? 'Saved' : 'Save'}
             </button>
           )}
 
@@ -589,12 +588,12 @@ export default function SettingsPage() {
         setIntegrations((prev) =>
           prev.map((i) => (i.provider === providerKey ? { ...i, status: 'ok' } : i))
         );
-        return { ok: true, message: data.message || 'Connection successful' };
+        return { ok: true, message: 'Connected.' };
       }
       setIntegrations((prev) =>
         prev.map((i) => (i.provider === providerKey ? { ...i, status: 'error' } : i))
       );
-      return { ok: false, message: data.detail || 'Connection test failed' };
+      return { ok: false, message: data.detail || 'Check settings.' };
     } catch (err) {
       return { ok: false, message: String(err) };
     }
@@ -606,15 +605,15 @@ export default function SettingsPage() {
       const data = await parseApiResponse(r, 'OAuth connection failed');
       if (!r.ok) {
         const message = data.detail === 'Missing bearer token'
-          ? 'You are not signed in to Bricopro HQ. Log in again before connecting this integration.'
-          : data.detail || 'OAuth connection failed';
+          ? 'Sign in again.'
+          : data.detail || 'Check settings.';
         return { ok: false, message };
       }
       if (!data.authorization_url) {
-        return { ok: false, message: 'OAuth provider did not return an authorization URL.' };
+        return { ok: false, message: 'Check settings.' };
       }
       window.location.assign(data.authorization_url);
-      return { ok: true, message: 'Redirecting to authorization provider...' };
+      return { ok: true, message: 'Redirecting...' };
     } catch (err) {
       return { ok: false, message: String(err) };
     }
