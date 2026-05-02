@@ -617,18 +617,27 @@ def immich_asset_thumbnail(asset_id: str, _: User = Depends(auth_user), db: Sess
     if not api_key or all(c == '•' for c in api_key):
         raise HTTPException(400, "Immich api_key not configured")
 
-    try:
-        upstream = httpx.get(
-            f"{i.base_url.rstrip('/')}/api/assets/{asset_id}/thumbnail",
-            params={"size": "preview"},
-            headers={"x-api-key": api_key},
-            timeout=20,
-        )
-        upstream.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(exc.response.status_code, "Immich thumbnail request failed") from exc
-    except httpx.RequestError as exc:
-        raise HTTPException(502, f"Immich thumbnail request failed: {exc}") from exc
+    thumbnail_url = f"{i.base_url.rstrip('/')}/api/assets/{asset_id}/thumbnail"
+    last_status = None
+    upstream = None
+    for size in ("preview", "thumbnail"):
+        try:
+            upstream = httpx.get(
+                thumbnail_url,
+                params={"size": size},
+                headers={"x-api-key": api_key},
+                timeout=20,
+            )
+            upstream.raise_for_status()
+            break
+        except httpx.HTTPStatusError as exc:
+            last_status = exc.response.status_code
+            upstream = None
+            continue
+        except httpx.RequestError as exc:
+            raise HTTPException(502, f"Immich thumbnail request failed: {exc}") from exc
+    if upstream is None:
+        raise HTTPException(last_status or 502, "Immich thumbnail request failed for preview and thumbnail sizes")
 
     content_type = upstream.headers.get("content-type", "image/jpeg")
     return Response(
