@@ -176,9 +176,6 @@ function WidgetSettingsModal({ source, settings, onClose, onSave }) {
                 ['show_requests', 'Show requests'],
                 ['show_quotes', 'Show quotes'],
                 ['show_invoices', 'Show invoices'],
-                ['show_client', 'Show client'],
-                ['show_status', 'Show status'],
-                ['show_date', 'Show start date'],
               ].map(([key, label]) => (
                 <label key={key} className="flex items-center gap-2 text-sm text-gray-700">
                   <input
@@ -374,11 +371,19 @@ function jobberInvoiceAmount(item) {
   );
 }
 
+function jobberClientName(item) {
+  return (
+    item.client?.name ||
+    item.clientName ||
+    item.client_name ||
+    item.contactName ||
+    item.companyName ||
+    ''
+  );
+}
+
 function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, loading, onConfigure }) {
   const limit = Math.max(1, Math.min(10, Number(settings?.limit || 5)));
-  const showClient = settings?.show_client !== 'false';
-  const showStatus = settings?.show_status !== 'false';
-  const showDate = settings?.show_date !== 'false';
   const sections = [
     {
       key: 'jobs',
@@ -387,7 +392,7 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
       enabled: settings?.show_jobs !== 'false',
       titleFor: (item) => item.title || 'Untitled job',
       statusFor: (item) => item.jobStatus,
-      dateFor: (item) => item.startAt || item.start_at || item.start,
+      dateFor: (item) => item.startAt || item.startsAt || item.scheduledStartAt || item.start_at || item.start,
       dateLabel: 'Starts ',
       empty: 'No upcoming jobs.',
     },
@@ -447,11 +452,16 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
                   <span className="text-xs text-gray-400">{section.items.length}</span>
                 </div>
                 {visibleItems.map((item, idx) => {
-                  const clientName = item.client?.name || item.clientName || '';
+                  const clientName = jobberClientName(item);
                   const statusText = formatJobberStatus(section.statusFor(item));
                   const dateValue = section.dateFor(item);
                   const amountText = section.amountFor?.(item);
                   const href = item.jobberWebUri || item.jobber_web_uri;
+                  const details = [
+                    clientName,
+                    statusText,
+                    dateValue ? formatJobberDate(dateValue, section.dateLabel) : '',
+                  ].filter(Boolean);
                   return (
                     <a
                       key={`${section.key}-${item.id || section.titleFor(item)}-${idx}`}
@@ -465,9 +475,7 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
                         {amountText && <div className="shrink-0 text-sm font-semibold text-gray-900">{amountText}</div>}
                       </div>
                       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500">
-                        {showClient && clientName && <span>{clientName}</span>}
-                        {showStatus && statusText && <span>{statusText}</span>}
-                        {showDate && dateValue && <span>{formatJobberDate(dateValue, section.dateLabel)}</span>}
+                        {details.map((detail) => <span key={detail}>{detail}</span>)}
                       </div>
                     </a>
                   );
@@ -787,9 +795,6 @@ export default function DashboardPage() {
         show_requests: settings['dashboard.jobber.show_requests'] || defaults.show_requests,
         show_quotes: settings['dashboard.jobber.show_quotes'] || defaults.show_quotes,
         show_invoices: settings['dashboard.jobber.show_invoices'] || defaults.show_invoices,
-        show_client: settings['dashboard.jobber.show_client'] || defaults.show_client,
-        show_status: settings['dashboard.jobber.show_status'] || defaults.show_status,
-        show_date: settings['dashboard.jobber.show_date'] || defaults.show_date,
       };
     }
     return defaults;
@@ -805,9 +810,6 @@ export default function DashboardPage() {
             'dashboard.jobber.show_requests': form.show_requests || 'true',
             'dashboard.jobber.show_quotes': form.show_quotes || 'true',
             'dashboard.jobber.show_invoices': form.show_invoices || 'true',
-            'dashboard.jobber.show_client': form.show_client || 'true',
-            'dashboard.jobber.show_status': form.show_status || 'true',
-            'dashboard.jobber.show_date': form.show_date || 'true',
           }
         : { 'dashboard.immich.album_id': form.album_id || '', 'dashboard.immich.limit': form.limit || '6' };
     for (const [key, value] of Object.entries(entries)) {
