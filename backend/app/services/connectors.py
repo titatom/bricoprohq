@@ -10,8 +10,10 @@ Raise ConnectorError for connectivity / auth failures.
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy.orm import object_session
@@ -33,6 +35,47 @@ class ConnectorNotConfigured(Exception):
 
 class ConnectorError(Exception):
     pass
+
+
+def _normalized_origin(url: str) -> tuple[str, str, int | None, str] | None:
+    parsed = urlparse((url or "").strip())
+    if not parsed.scheme or not parsed.hostname:
+        return None
+    if parsed.port is not None:
+        port = parsed.port
+    elif parsed.scheme.lower() == "https":
+        port = 443
+    elif parsed.scheme.lower() == "http":
+        port = 80
+    else:
+        port = None
+    return (
+        parsed.scheme.lower(),
+        parsed.hostname.lower(),
+        port,
+        parsed.path.rstrip("/"),
+    )
+
+
+def validate_paperless_gpt_base_url(base_url: str, app_base_url: str = "") -> None:
+    normalized = _normalized_origin(base_url)
+    if not normalized:
+        return
+
+    _, _, _, path = normalized
+    if path.lower() == "/api" or path.lower().endswith("/api"):
+        raise ConnectorNotConfigured(
+            "paperless-gpt: base_url must be the Paperless-GPT service root without '/api'. "
+            "Example: http://paperless-gpt.local:8080"
+        )
+
+    app_origin = _normalized_origin(app_base_url)
+    if app_origin and normalized == app_origin:
+        raise ConnectorNotConfigured(
+            "paperless-gpt: base_url points to this Bricopro HQ app. Enter the Paperless-GPT "
+            "service URL instead of APP_BASE_URL. If Paperless-GPT is reverse-proxied on the "
+            "same host, use its dedicated path prefix instead of the HQ root URL."
+        )
 
 
 # ── Base ──────────────────────────────────────────────────────────────────────
@@ -115,7 +158,10 @@ def _raise_http_status(exc: httpx.HTTPStatusError, service_name: str):
     else:
         hint = "request failed"
     detail = _response_snippet(exc.response)
-    raise ConnectorError(f"{service_name} HTTP error {status} at {path}: {hint}. Response: {detail}") from exc
+    target = str(exc.request.url)
+    raise ConnectorError(
+        f"{service_name} HTTP error {status} at {path}: {hint}. Target: {target}. Response: {detail}"
+    ) from exc
 
 
 def _google_oauth_config(integration: Integration) -> dict:
@@ -640,9 +686,11 @@ class PaperlessGptConnector(BaseConnector):
 
     def fetch(self) -> dict:
         self._require_base_url()
+        validate_paperless_gpt_base_url(self.base_url, os.getenv("APP_BASE_URL", ""))
+        target_url = f"{self.base_url}/api/documents"
         try:
             r = httpx.get(
-                f"{self.base_url}/api/documents",
+                target_url,
                 headers=self._headers(),
                 timeout=10,
             )
@@ -660,7 +708,7 @@ class PaperlessGptConnector(BaseConnector):
         except httpx.HTTPStatusError as exc:
             _raise_http_status(exc, "Paperless-GPT")
         except httpx.RequestError as exc:
-            raise ConnectorError(f"Paperless-GPT request failed: {exc}") from exc
+            raise ConnectorError(f"Paperless-GPT request failed for {target_url}: {exc}") from exc
 
 
 # ── Meta (Facebook + Instagram) ───────────────────────────────────────────────

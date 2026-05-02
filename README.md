@@ -132,6 +132,13 @@ Once logged in, go to **Settings** to configure each integration.
    - **Base URL:** `http://paperless.local:8000` (or your Paperless URL)
    - **API Key:** your Paperless token
 
+### Paperless-GPT
+
+1. In Settings → Paperless-GPT:
+   - **Base URL:** the Paperless-GPT service root that the Bricopro HQ server can reach, for example `http://paperless-gpt.local:8080`
+   - **Do not** use the Bricopro HQ public URL, and **do not** append `/api`
+   - **Auth Mode / API Key:** only set these if your Paperless-GPT deployment or reverse proxy requires them
+
 ### AI Provider
 
 In Settings → AI Provider, select:

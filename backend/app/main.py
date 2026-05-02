@@ -31,6 +31,7 @@ from .schemas import (
     PostMetricIn,
 )
 from .auth import verify_password, create_access_token, hash_password, SECRET_KEY, ALGORITHM
+from .services.connectors import validate_paperless_gpt_base_url, ConnectorNotConfigured
 
 log = logging.getLogger("bricopro")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -512,6 +513,11 @@ def update_integration(
     i = db.query(Integration).filter(Integration.provider == provider).first()
     if not i:
         i = Integration(provider=provider, status="not_connected")
+    if provider == "paperless-gpt":
+        try:
+            validate_paperless_gpt_base_url(payload.base_url, os.getenv("APP_BASE_URL", ""))
+        except ConnectorNotConfigured as exc:
+            raise HTTPException(400, str(exc))
     i.base_url = payload.base_url
 
     # Merge incoming config with existing so that masked values ("••••••••")

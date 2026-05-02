@@ -399,6 +399,41 @@ def test_paperless_gpt_base_url_update_takes_effect_with_masked_secret():
         assert mock_get.call_args.kwargs["headers"]["Authorization"] == "Bearer secret-token"
 
 
+def test_paperless_gpt_rejects_bricopro_root_base_url_on_save():
+    os.environ["APP_BASE_URL"] = "https://bricoprohq.thomasrich.ca"
+    app = make_client("test_dash_paperless_gpt_reject_bricopro_root.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        r = client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={
+                "base_url": "https://bricoprohq.thomasrich.ca",
+                "config_json": '{"auth_mode":"bearer","api_key":"secret-token"}',
+            },
+        )
+
+        assert r.status_code == 400
+        assert "base_url points to this Bricopro HQ app" in r.json()["detail"]
+
+
+def test_paperless_gpt_rejects_base_url_with_api_suffix_on_save():
+    app = make_client("test_dash_paperless_gpt_reject_api_suffix.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        r = client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={
+                "base_url": "http://paperless-gpt.local:8080/api",
+                "config_json": "{}",
+            },
+        )
+
+        assert r.status_code == 400
+        assert "without '/api'" in r.json()["detail"]
+
+
 def test_jobber_base_url_update_takes_effect_with_masked_oauth_secret():
     app = make_client("test_dash_jobber_update_base_url.db")
     with TestClient(app) as client:
@@ -641,6 +676,28 @@ def test_paperless_gpt_404_has_actionable_error():
         assert r.status_code == 502
         assert "Paperless-GPT HTTP error 404 at /api/documents" in r.json()["detail"]
         assert "check the base URL and service API version" in r.json()["detail"]
+        assert "Target: http://paperless-gpt.local:8080/api/documents" in r.json()["detail"]
+
+
+def test_paperless_gpt_request_error_includes_target_url():
+    app = make_client("test_dash_paperless_gpt_request_error.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={"base_url": "http://paperless-gpt.local:8080", "config_json": "{}"},
+        )
+
+        request = httpx.Request("GET", "http://paperless-gpt.local:8080/api/documents")
+        with patch(
+            "httpx.get",
+            side_effect=httpx.ConnectError("Connection refused", request=request),
+        ):
+            r = client.post("/integrations/paperless-gpt/test", headers=h)
+
+        assert r.status_code == 502
+        assert "Paperless-GPT request failed for http://paperless-gpt.local:8080/api/documents" in r.json()["detail"]
 
 
 def test_paperless_dashboard_filters_ai_processed_documents():

@@ -123,7 +123,7 @@ const INTEGRATION_FIELDS = {
     description: 'Process documents with AI and surface pending document work.',
     authType: 'api_key',
     fields: [
-      { key: 'base_url', label: 'Paperless-GPT Base URL', placeholder: 'http://192.168.1.x:8080', help: 'Your Paperless-GPT service URL on the local network' },
+      { key: 'base_url', label: 'Paperless-GPT Base URL', placeholder: 'http://192.168.1.x:8080', help: 'Use the Paperless-GPT service root that this server can reach. Do not enter the Bricopro HQ URL or append /api.' },
       { key: 'auth_mode', label: 'Auth Mode', placeholder: 'none, bearer, token, or x-api-key', help: 'Default is none. Use bearer/token/x-api-key only if your Paperless-GPT deployment or reverse proxy requires it.' },
       { key: 'api_key',  label: 'Paperless-GPT API Key',  placeholder: 'Optional service API key or token', type: 'password', help: 'Only required when Auth Mode is bearer, token, or x-api-key.' },
     ],
