@@ -26,6 +26,7 @@ log = logging.getLogger("bricopro.connectors")
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_PROVIDERS = {"google_calendar", "google_business"}
 GOOGLE_CANONICAL_PROVIDER = "google_calendar"
+JOBBER_TOKEN_URL = "https://api.getjobber.com/api/oauth/token"
 JOBBER_GRAPHQL_VERSION = "2025-04-16"
 
 
@@ -321,9 +322,15 @@ class GoogleCalendarConnector(BaseConnector):
 class JobberConnector(BaseConnector):
     provider = "jobber"
 
+    def _jobber_oauth_config(self) -> dict:
+        return self.config
+
     def _get_bearer_token(self) -> str:
-        """Return OAuth access token if available, otherwise fall back to legacy api_key."""
+        """Return a valid OAuth access token if available, otherwise fall back to legacy api_key."""
         if self.integration.oauth_access_token:
+            expires_at = self.integration.oauth_token_expires_at
+            if expires_at and expires_at.replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc) + timedelta(seconds=60):
+                self._refresh_token()
             return self.integration.oauth_access_token
         if self.api_key:
             return self.api_key
@@ -331,7 +338,47 @@ class JobberConnector(BaseConnector):
             "jobber: not connected via OAuth. Click 'Connect with Jobber' in Settings."
         )
 
-    def _post_graphql(self, graphql_url: str, bearer: str, query: str) -> dict:
+    def _refresh_token(self) -> None:
+        intg = self.integration
+        if not intg.oauth_refresh_token:
+            raise ConnectorNotConfigured(
+                "jobber: access token expired and no refresh token stored. Reconnect via Settings."
+            )
+        config = self._jobber_oauth_config()
+        client_id = config.get("client_id", "")
+        client_secret = config.get("client_secret", "")
+        if not client_id or not client_secret:
+            raise ConnectorNotConfigured(
+                "jobber: client_id/client_secret missing for token refresh."
+            )
+        try:
+            resp = httpx.post(
+                JOBBER_TOKEN_URL,
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "refresh_token": intg.oauth_refresh_token,
+                    "grant_type": "refresh_token",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            token_data = resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise ConnectorError(f"Jobber token refresh failed: {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise ConnectorError(f"Jobber token refresh request failed: {exc}") from exc
+
+        expires_in = token_data.get("expires_in", 3600)
+        intg.oauth_access_token = token_data["access_token"]
+        intg.oauth_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+        if token_data.get("refresh_token"):
+            intg.oauth_refresh_token = token_data["refresh_token"]
+        if self.session:
+            self.session.commit()
+
+    def _post_graphql_once(self, graphql_url: str, bearer: str, query: str) -> dict:
         try:
             r = httpx.post(
                 graphql_url,
@@ -352,31 +399,69 @@ class JobberConnector(BaseConnector):
             raise ConnectorError(f"Jobber GraphQL error: {messages}")
         return data.get("data", {})
 
-    def _optional_collection(self, graphql_url: str, bearer: str, query: str, key: str) -> list:
+    def _post_graphql(self, graphql_url: str, query: str) -> dict:
+        bearer = self._get_bearer_token()
         try:
-            data = self._post_graphql(graphql_url, bearer, query)
+            return self._post_graphql_once(graphql_url, bearer, query)
+        except ConnectorError as exc:
+            if (
+                "Jobber HTTP error 401" in str(exc)
+                and self.integration.oauth_access_token
+                and self.integration.oauth_refresh_token
+            ):
+                self._refresh_token()
+                return self._post_graphql_once(graphql_url, self.integration.oauth_access_token, query)
+            raise
+
+    def _optional_collection(self, graphql_url: str, query: str, key: str) -> list:
+        try:
+            data = self._post_graphql(graphql_url, query)
             return data.get(key, {}).get("nodes", [])
         except Exception as exc:
             log.warning("Jobber optional collection %s failed: %s", key, exc)
             return []
 
     def _optional_collection_with_fallback(
-        self, graphql_url: str, bearer: str, query: str, fallback_query: str, key: str
+        self, graphql_url: str, query: str, fallback_query: str, key: str
     ) -> list:
         try:
-            data = self._post_graphql(graphql_url, bearer, query)
+            data = self._post_graphql(graphql_url, query)
             return data.get(key, {}).get("nodes", [])
         except Exception as exc:
             log.warning("Jobber optional collection %s failed, retrying simpler query: %s", key, exc)
-            return self._optional_collection(graphql_url, bearer, fallback_query, key)
+            return self._optional_collection(graphql_url, fallback_query, key)
+
+    def _status_filter(self, key: str) -> set[str]:
+        raw = self._setting(key, "")
+        return {part.strip().upper() for part in raw.split(",") if part.strip()}
+
+    @staticmethod
+    def _filter_by_status(items: list, status_key: str, allowed: set[str]) -> list:
+        if not allowed:
+            return items
+        return [
+            item
+            for item in items
+            if str(item.get(status_key, "")).strip().upper() in allowed
+        ]
+
+    @staticmethod
+    def _query_limit(base_limit: int, *filters: set[str]) -> int:
+        if any(filters):
+            return min(50, max(base_limit, base_limit * 4))
+        return base_limit
 
     def fetch(self) -> dict:
-        bearer = self._get_bearer_token()
         graphql_url = self.base_url or "https://api.getjobber.com/api/graphql"
         limit = self._int_setting("dashboard.jobber.limit", 5)
+        job_statuses = self._status_filter("dashboard.jobber.job_statuses")
+        request_statuses = self._status_filter("dashboard.jobber.request_statuses")
+        quote_statuses = self._status_filter("dashboard.jobber.quote_statuses")
+        invoice_statuses = self._status_filter("dashboard.jobber.invoice_statuses")
+        query_limit = self._query_limit(limit, job_statuses, request_statuses, quote_statuses, invoice_statuses)
         jobs_query = f"""
         query {{
-          jobs(first: {limit}) {{
+          jobs(first: {query_limit}) {{
             nodes {{
               id
               title
@@ -390,13 +475,14 @@ class JobberConnector(BaseConnector):
         }}
         """
         try:
-            data = self._post_graphql(graphql_url, bearer, jobs_query)
-            jobs = data.get("jobs", {}).get("nodes", [])
+            data = self._post_graphql(graphql_url, jobs_query)
+            jobs = self._filter_by_status(data.get("jobs", {}).get("nodes", []), "jobStatus", job_statuses)
 
             requests_query = f"""
             query {{
-              requests(first: {limit}) {{
+              requests(first: {query_limit}) {{
                 nodes {{
+                  id
                   title
                   requestStatus
                   jobberWebUri
@@ -408,9 +494,11 @@ class JobberConnector(BaseConnector):
             """
             quotes_query = f"""
             query {{
-              quotes(first: {limit}) {{
+              quotes(first: {query_limit}) {{
                 nodes {{
+                  id
                   title
+                  quoteNumber
                   quoteStatus
                   jobberWebUri
                   createdAt
@@ -421,8 +509,9 @@ class JobberConnector(BaseConnector):
             """
             invoices_query = f"""
             query {{
-              invoices(first: {limit}) {{
+              invoices(first: {query_limit}) {{
                 nodes {{
+                  id
                   invoiceNumber
                   subject
                   invoiceStatus
@@ -439,8 +528,9 @@ class JobberConnector(BaseConnector):
             """
             fallback_invoices_query = f"""
             query {{
-              invoices(first: {limit}) {{
+              invoices(first: {query_limit}) {{
                 nodes {{
+                  id
                   invoiceNumber
                   subject
                   invoiceStatus
@@ -451,22 +541,42 @@ class JobberConnector(BaseConnector):
               }}
             }}
             """
-            requests = self._optional_collection(graphql_url, bearer, requests_query, "requests")
-            quotes = self._optional_collection(graphql_url, bearer, quotes_query, "quotes")
+            requests = self._filter_by_status(
+                self._optional_collection(graphql_url, requests_query, "requests"),
+                "requestStatus",
+                request_statuses,
+            )
+            quotes = self._filter_by_status(
+                self._optional_collection(graphql_url, quotes_query, "quotes"),
+                "quoteStatus",
+                quote_statuses,
+            )
             invoices = self._optional_collection_with_fallback(
-                graphql_url, bearer, invoices_query, fallback_invoices_query, "invoices"
+                graphql_url, invoices_query, fallback_invoices_query, "invoices"
+            )
+            invoices = self._filter_by_status(
+                invoices,
+                "invoiceStatus",
+                invoice_statuses,
             )
 
             return {
-                "upcoming_jobs": jobs,
-                "pending_requests": requests,
-                "pending_quotes": quotes,
-                "pending_invoices": invoices,
+                "upcoming_jobs": jobs[:limit],
+                "pending_requests": requests[:limit],
+                "pending_quotes": quotes[:limit],
+                "pending_invoices": invoices[:limit],
                 "count": len(jobs),
                 "requests_count": len(requests),
                 "quotes_count": len(quotes),
                 "invoices_count": len(invoices),
                 "limit": limit,
+                "query_limit": query_limit,
+                "filters": {
+                    "job_statuses": sorted(job_statuses),
+                    "request_statuses": sorted(request_statuses),
+                    "quote_statuses": sorted(quote_statuses),
+                    "invoice_statuses": sorted(invoice_statuses),
+                },
             }
         except httpx.HTTPStatusError as exc:
             raise ConnectorError(f"Jobber HTTP error: {exc.response.status_code}") from exc

@@ -20,28 +20,31 @@ const DEFAULT_WIDGET_SETTINGS = {
     show_requests: 'true',
     show_quotes: 'true',
     show_invoices: 'true',
-    show_client: 'true',
-    show_status: 'true',
-    show_date: 'true',
+    job_statuses: 'ACTIVE, UPCOMING',
+    request_statuses: '',
+    quote_statuses: '',
+    invoice_statuses: 'AWAITING_PAYMENT, PAST_DUE',
   },
 };
 
 const DEFAULT_QUICK_LINKS = [
-  { title: 'Jobber',               icon: '🔧', url: 'https://app.jobber.com',              category: 'Operations' },
-  { title: 'Google Calendar',      icon: '📅', url: 'https://calendar.google.com',          category: 'Operations' },
-  { title: 'Gmail',                icon: '✉️', url: 'https://mail.google.com',              category: 'Operations' },
-  { title: 'Paperless-ngx',        icon: '📄', url: 'http://paperless.local',               category: 'Documents'  },
-  { title: 'Immich',               icon: '🖼️', url: 'http://immich.local',                  category: 'Photos'     },
-  { title: 'WordPress Admin',      icon: '🌐', url: 'https://bricopro.ca/wp-admin',         category: 'Marketing'  },
-  { title: 'Meta Business Suite',  icon: '📣', url: 'https://business.facebook.com',        category: 'Marketing'  },
-  { title: 'Google Business',      icon: '⭐', url: 'https://business.google.com',           category: 'Marketing'  },
-  { title: 'Canva',                icon: '🎨', url: 'https://canva.com',                    category: 'Marketing'  },
+  { title: 'Jobber',               icon: 'link', url: 'https://app.jobber.com',              category: 'Operations' },
+  { title: 'Google Calendar',      icon: 'link', url: 'https://calendar.google.com',          category: 'Operations' },
+  { title: 'Gmail',                icon: 'link', url: 'https://mail.google.com',              category: 'Operations' },
+  { title: 'Paperless-ngx',        icon: 'link', url: 'http://paperless.local',               category: 'Documents'  },
+  { title: 'Immich',               icon: 'link', url: 'http://immich.local',                  category: 'Photos'     },
+  { title: 'WordPress Admin',      icon: 'link', url: 'https://bricopro.ca/wp-admin',         category: 'Marketing'  },
+  { title: 'Meta Business Suite',  icon: 'link', url: 'https://business.facebook.com',        category: 'Marketing'  },
+  { title: 'Google Business',      icon: 'link', url: 'https://business.google.com',           category: 'Marketing'  },
+  { title: 'Canva',                icon: 'link', url: 'https://canva.com',                    category: 'Marketing'  },
 ];
 
 const QUICK_LINK_LOGO_DOMAINS = {
   jobber: 'jobber.com',
   'google calendar': 'calendar.google.com',
   gmail: 'mail.google.com',
+  'google business profile': 'business.google.com',
+  gbp: 'business.google.com',
   'paperless-ngx': 'docs.paperless-ngx.com',
   paperless: 'docs.paperless-ngx.com',
   immich: 'immich.app',
@@ -170,25 +173,41 @@ function WidgetSettingsModal({ source, settings, onClose, onSave }) {
             </div>
           )}
           {isJobber && (
-            <div className="grid grid-cols-1 gap-2 rounded-lg bg-gray-50 p-3">
+            <div className="space-y-3 rounded-lg bg-gray-50 p-3">
+              <div className="grid grid-cols-1 gap-2">
+                {[
+                  ['show_jobs', 'Show jobs'],
+                  ['show_requests', 'Show requests'],
+                  ['show_quotes', 'Show quotes'],
+                  ['show_invoices', 'Show invoices'],
+                ].map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={form[key] !== 'false'}
+                      onChange={(e) => setForm({ ...form, [key]: e.target.checked ? 'true' : 'false' })}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
               {[
-                ['show_jobs', 'Show jobs'],
-                ['show_requests', 'Show requests'],
-                ['show_quotes', 'Show quotes'],
-                ['show_invoices', 'Show invoices'],
-                ['show_client', 'Show client'],
-                ['show_status', 'Show status'],
-                ['show_date', 'Show start date'],
-              ].map(([key, label]) => (
-                <label key={key} className="flex items-center gap-2 text-sm text-gray-700">
+                ['job_statuses', 'Job statuses', 'ACTIVE, UPCOMING'],
+                ['request_statuses', 'Request statuses', ''],
+                ['quote_statuses', 'Quote statuses', ''],
+                ['invoice_statuses', 'Invoice statuses', 'AWAITING_PAYMENT, PAST_DUE'],
+              ].map(([key, label, placeholder]) => (
+                <div key={key}>
+                  <label className="label">{label}</label>
                   <input
-                    type="checkbox"
-                    checked={form[key] !== 'false'}
-                    onChange={(e) => setForm({ ...form, [key]: e.target.checked ? 'true' : 'false' })}
+                    className="input"
+                    value={form[key] || ''}
+                    onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                    placeholder={placeholder || 'Leave blank for all'}
                   />
-                  {label}
-                </label>
+                </div>
               ))}
+              <p className="text-xs text-gray-400">Use comma-separated Jobber statuses. Leave a field blank to show all statuses.</p>
             </div>
           )}
           <div>
@@ -374,11 +393,19 @@ function jobberInvoiceAmount(item) {
   );
 }
 
+function jobberClientName(item) {
+  return (
+    item.client?.name ||
+    item.clientName ||
+    item.client_name ||
+    item.contactName ||
+    item.companyName ||
+    ''
+  );
+}
+
 function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, loading, onConfigure }) {
   const limit = Math.max(1, Math.min(10, Number(settings?.limit || 5)));
-  const showClient = settings?.show_client !== 'false';
-  const showStatus = settings?.show_status !== 'false';
-  const showDate = settings?.show_date !== 'false';
   const sections = [
     {
       key: 'jobs',
@@ -387,7 +414,7 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
       enabled: settings?.show_jobs !== 'false',
       titleFor: (item) => item.title || 'Untitled job',
       statusFor: (item) => item.jobStatus,
-      dateFor: (item) => item.startAt || item.start_at || item.start,
+      dateFor: (item) => item.startAt || item.startsAt || item.scheduledStartAt || item.start_at || item.start,
       dateLabel: 'Starts ',
       empty: 'No upcoming jobs.',
     },
@@ -396,7 +423,7 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
       label: 'Pending requests',
       items: data?.pending_requests || [],
       enabled: settings?.show_requests !== 'false',
-      titleFor: (item) => item.title || 'Untitled request',
+      titleFor: (item) => item.title || item.description || 'Untitled request',
       statusFor: (item) => item.requestStatus,
       dateFor: (item) => item.createdAt || item.created_at,
       dateLabel: 'Requested ',
@@ -407,7 +434,7 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
       label: 'Pending quotes',
       items: data?.pending_quotes || [],
       enabled: settings?.show_quotes !== 'false',
-      titleFor: (item) => item.title || 'Untitled quote',
+      titleFor: (item) => item.title || item.description || (item.quoteNumber ? `Quote ${item.quoteNumber}` : '') || 'Untitled quote',
       statusFor: (item) => item.quoteStatus,
       dateFor: (item) => item.createdAt || item.created_at,
       dateLabel: 'Created ',
@@ -447,11 +474,16 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
                   <span className="text-xs text-gray-400">{section.items.length}</span>
                 </div>
                 {visibleItems.map((item, idx) => {
-                  const clientName = item.client?.name || item.clientName || '';
+                  const clientName = jobberClientName(item);
                   const statusText = formatJobberStatus(section.statusFor(item));
                   const dateValue = section.dateFor(item);
                   const amountText = section.amountFor?.(item);
                   const href = item.jobberWebUri || item.jobber_web_uri;
+                  const details = [
+                    clientName,
+                    statusText,
+                    dateValue ? formatJobberDate(dateValue, section.dateLabel) : '',
+                  ].filter(Boolean);
                   return (
                     <a
                       key={`${section.key}-${item.id || section.titleFor(item)}-${idx}`}
@@ -465,9 +497,7 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
                         {amountText && <div className="shrink-0 text-sm font-semibold text-gray-900">{amountText}</div>}
                       </div>
                       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500">
-                        {showClient && clientName && <span>{clientName}</span>}
-                        {showStatus && statusText && <span>{statusText}</span>}
-                        {showDate && dateValue && <span>{formatJobberDate(dateValue, section.dateLabel)}</span>}
+                        {details.map((detail) => <span key={detail}>{detail}</span>)}
                       </div>
                     </a>
                   );
@@ -787,9 +817,10 @@ export default function DashboardPage() {
         show_requests: settings['dashboard.jobber.show_requests'] || defaults.show_requests,
         show_quotes: settings['dashboard.jobber.show_quotes'] || defaults.show_quotes,
         show_invoices: settings['dashboard.jobber.show_invoices'] || defaults.show_invoices,
-        show_client: settings['dashboard.jobber.show_client'] || defaults.show_client,
-        show_status: settings['dashboard.jobber.show_status'] || defaults.show_status,
-        show_date: settings['dashboard.jobber.show_date'] || defaults.show_date,
+        job_statuses: settings['dashboard.jobber.job_statuses'] || defaults.job_statuses,
+        request_statuses: settings['dashboard.jobber.request_statuses'] || defaults.request_statuses,
+        quote_statuses: settings['dashboard.jobber.quote_statuses'] || defaults.quote_statuses,
+        invoice_statuses: settings['dashboard.jobber.invoice_statuses'] || defaults.invoice_statuses,
       };
     }
     return defaults;
@@ -805,9 +836,10 @@ export default function DashboardPage() {
             'dashboard.jobber.show_requests': form.show_requests || 'true',
             'dashboard.jobber.show_quotes': form.show_quotes || 'true',
             'dashboard.jobber.show_invoices': form.show_invoices || 'true',
-            'dashboard.jobber.show_client': form.show_client || 'true',
-            'dashboard.jobber.show_status': form.show_status || 'true',
-            'dashboard.jobber.show_date': form.show_date || 'true',
+            'dashboard.jobber.job_statuses': form.job_statuses || '',
+            'dashboard.jobber.request_statuses': form.request_statuses || '',
+            'dashboard.jobber.quote_statuses': form.quote_statuses || '',
+            'dashboard.jobber.invoice_statuses': form.invoice_statuses || '',
           }
         : { 'dashboard.immich.album_id': form.album_id || '', 'dashboard.immich.limit': form.limit || '6' };
     for (const [key, value] of Object.entries(entries)) {

@@ -1,5 +1,6 @@
 import os
 import importlib
+from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 from unittest.mock import patch
 
@@ -272,6 +273,42 @@ def test_immich_thumbnail_proxy_uses_api_key():
         assert str(mock_get.call_args.args[0]) == "http://immich.local:2283/api/assets/asset-1/thumbnail"
         assert mock_get.call_args.kwargs["params"] == {"size": "preview"}
         assert mock_get.call_args.kwargs["headers"]["x-api-key"] == "test-key"
+
+
+def test_immich_thumbnail_proxy_falls_back_to_thumbnail_size():
+    app = make_client("test_dash_immich_thumbnail_fallback.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/immich",
+            headers=h,
+            json={"base_url": "http://immich.local:2283", "config_json": '{"api_key":"test-key"}'},
+        )
+
+        preview_request = httpx.Request(
+            "GET",
+            "http://immich.local:2283/api/assets/asset-1/thumbnail?size=preview",
+        )
+        thumbnail_request = httpx.Request(
+            "GET",
+            "http://immich.local:2283/api/assets/asset-1/thumbnail?size=thumbnail",
+        )
+        preview_response = httpx.Response(404, json={"message": "missing preview"}, request=preview_request)
+        thumbnail_response = httpx.Response(
+            200,
+            content=b"fake-thumbnail",
+            headers={"content-type": "image/webp"},
+            request=thumbnail_request,
+        )
+        with patch("httpx.get", side_effect=[preview_response, thumbnail_response]) as mock_get:
+            r = client.get("/integrations/immich/assets/asset-1/thumbnail", headers=h)
+
+        assert r.status_code == 200
+        assert r.content == b"fake-thumbnail"
+        assert r.headers["content-type"] == "image/webp"
+        assert mock_get.call_count == 2
+        assert mock_get.call_args_list[0].kwargs["params"] == {"size": "preview"}
+        assert mock_get.call_args_list[1].kwargs["params"] == {"size": "thumbnail"}
 
 
 def test_immich_404_has_actionable_error():
@@ -557,6 +594,145 @@ def test_jobber_dashboard_limit_setting_controls_query_size():
         assert "pending_quotes" in payload["jobber"]["data"]
         assert "pending_invoices" in payload["jobber"]["data"]
         assert payload["jobber"]["data"]["pending_invoices"][0]["amounts"]["balance"] == 1250.5
+
+
+def test_jobber_dashboard_status_filters_results_and_expands_query_size():
+    app = make_client("test_dash_jobber_status_filters.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/jobber",
+            headers=h,
+            json={
+                "base_url": "https://api.getjobber.com/api/graphql",
+                "config_json": '{"client_id":"jobber-client","client_secret":"jobber-secret"}',
+            },
+        )
+        client.put("/settings/dashboard.jobber.limit", headers=h, json={"value": "2"})
+        client.put("/settings/dashboard.jobber.job_statuses", headers=h, json={"value": "ACTIVE"})
+        client.put("/settings/dashboard.jobber.request_statuses", headers=h, json={"value": "NEW"})
+        client.put("/settings/dashboard.jobber.quote_statuses", headers=h, json={"value": "AWAITING_RESPONSE"})
+        client.put("/settings/dashboard.jobber.invoice_statuses", headers=h, json={"value": "AWAITING_PAYMENT"})
+
+        from app.db import SessionLocal
+        from app.models import Integration
+
+        db = SessionLocal()
+        try:
+            jobber = db.query(Integration).filter(Integration.provider == "jobber").first()
+            jobber.oauth_access_token = "jobber-access-token"
+            db.commit()
+        finally:
+            db.close()
+
+        request = httpx.Request("POST", "https://api.getjobber.com/api/graphql")
+        responses = [
+            httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "jobs": {
+                            "nodes": [
+                                {"title": "Keep", "jobStatus": "ACTIVE", "client": {"name": "Alice"}},
+                                {"title": "Drop", "jobStatus": "ARCHIVED", "client": {"name": "Bob"}},
+                            ]
+                        }
+                    }
+                },
+                request=request,
+            ),
+            httpx.Response(
+                200,
+                json={"data": {"requests": {"nodes": [
+                    {"title": "Keep request", "requestStatus": "NEW"},
+                    {"title": "Drop request", "requestStatus": "CONVERTED"},
+                ]}}},
+                request=request,
+            ),
+            httpx.Response(
+                200,
+                json={"data": {"quotes": {"nodes": [
+                    {"title": "Keep quote", "quoteStatus": "AWAITING_RESPONSE"},
+                    {"title": "Drop quote", "quoteStatus": "APPROVED"},
+                ]}}},
+                request=request,
+            ),
+            httpx.Response(
+                200,
+                json={"data": {"invoices": {"nodes": [
+                    {"invoiceNumber": "1001", "invoiceStatus": "AWAITING_PAYMENT"},
+                    {"invoiceNumber": "1002", "invoiceStatus": "PAID"},
+                ]}}},
+                request=request,
+            ),
+        ]
+        with patch("httpx.post", side_effect=responses) as mock_post:
+            r = client.post("/dashboard/refresh/jobber", headers=h)
+
+        assert r.status_code == 200
+        assert "first: 8" in mock_post.call_args_list[0].kwargs["json"]["query"]
+        payload = client.get("/dashboard", headers=h).json()["jobber"]["data"]
+        assert [job["title"] for job in payload["upcoming_jobs"]] == ["Keep"]
+        assert [request["title"] for request in payload["pending_requests"]] == ["Keep request"]
+        assert [quote["title"] for quote in payload["pending_quotes"]] == ["Keep quote"]
+        assert [invoice["invoiceNumber"] for invoice in payload["pending_invoices"]] == ["1001"]
+
+
+def test_jobber_refreshes_expired_oauth_token_before_query():
+    app = make_client("test_dash_jobber_refresh_expired_token.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/jobber",
+            headers=h,
+            json={
+                "base_url": "https://api.getjobber.com/api/graphql",
+                "config_json": '{"client_id":"jobber-client","client_secret":"jobber-secret"}',
+            },
+        )
+
+        from app.db import SessionLocal
+        from app.models import Integration
+        from datetime import datetime, timezone, timedelta
+
+        db = SessionLocal()
+        try:
+            jobber = db.query(Integration).filter(Integration.provider == "jobber").first()
+            jobber.oauth_access_token = "expired-access"
+            jobber.oauth_refresh_token = "jobber-refresh"
+            jobber.oauth_token_expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+            db.commit()
+        finally:
+            db.close()
+
+        token_request = httpx.Request("POST", "https://api.getjobber.com/api/oauth/token")
+        graphql_request = httpx.Request("POST", "https://api.getjobber.com/api/graphql")
+        token_response = httpx.Response(
+            200,
+            json={"access_token": "fresh-access", "refresh_token": "fresh-refresh", "expires_in": 3600},
+            request=token_request,
+        )
+        responses = [
+            token_response,
+            httpx.Response(200, json={"data": {"jobs": {"nodes": []}}}, request=graphql_request),
+            httpx.Response(200, json={"data": {"requests": {"nodes": []}}}, request=graphql_request),
+            httpx.Response(200, json={"data": {"quotes": {"nodes": []}}}, request=graphql_request),
+            httpx.Response(200, json={"data": {"invoices": {"nodes": []}}}, request=graphql_request),
+        ]
+        with patch("httpx.post", side_effect=responses) as mock_post:
+            r = client.post("/dashboard/refresh/jobber", headers=h)
+
+        assert r.status_code == 200
+        assert str(mock_post.call_args_list[0].args[0]) == "https://api.getjobber.com/api/oauth/token"
+        assert mock_post.call_args_list[1].kwargs["headers"]["Authorization"] == "Bearer fresh-access"
+
+        db = SessionLocal()
+        try:
+            jobber = db.query(Integration).filter(Integration.provider == "jobber").first()
+            assert jobber.oauth_access_token == "fresh-access"
+            assert jobber.oauth_refresh_token == "fresh-refresh"
+        finally:
+            db.close()
 
 
 def test_jobber_502_reports_actionable_error_without_html_dump():
