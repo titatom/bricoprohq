@@ -36,12 +36,32 @@ from .services.connectors import validate_paperless_gpt_base_url, ConnectorNotCo
 log = logging.getLogger("bricopro")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
+if os.getenv("SECRET_KEY", "change-me") in ("change-me", "change-me-generate-a-random-secret"):
+    log.warning(
+        "SECRET_KEY is using the default placeholder value. Set SECRET_KEY in your "
+        "environment to a random secret to keep JWTs from being forgeable."
+    )
+
 app = FastAPI(title="Bricopro HQ API", version="1.0.0")
+
+# CORS — `allow_origins=["*"]` paired with `allow_credentials=True` violates the
+# CORS spec (browsers reject `Access-Control-Allow-Origin: *` on credentialed
+# requests). The frontend talks to the backend through the Next.js /api proxy,
+# so by default we keep CORS narrow and only relax when CORS_ALLOW_ORIGINS is
+# explicitly set.
+_cors_origins_env = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
+if _cors_origins_env:
+    _cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+    _cors_allow_credentials = "*" not in _cors_origins
+else:
+    _app_base_url = os.getenv("APP_BASE_URL", "").rstrip("/")
+    _cors_origins = [_app_base_url] if _app_base_url else []
+    _cors_allow_credentials = bool(_cors_origins)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins or ["*"],
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -194,8 +214,18 @@ def ql_del(id: int, _: User = Depends(auth_user), db: Session = Depends(get_db))
 
 # ── Integrations ──────────────────────────────────────────────────────────────
 
-# In-memory CSRF state store: state_token → provider name
-_oauth_states: dict[str, str] = {}
+# In-memory CSRF state store: state_token → (provider name, issued_at).
+# A short TTL keeps the dict from growing unbounded if users start an OAuth
+# flow without ever completing it.
+_oauth_states: dict[str, tuple[str, datetime]] = {}
+OAUTH_STATE_TTL = timedelta(minutes=10)
+
+
+def _purge_expired_oauth_states() -> None:
+    cutoff = datetime.now(timezone.utc) - OAUTH_STATE_TTL
+    for token, (_, issued_at) in list(_oauth_states.items()):
+        if issued_at < cutoff:
+            _oauth_states.pop(token, None)
 
 # Secret config keys that are always masked in API responses
 _SECRET_KEYS = {"api_key", "client_secret"}
@@ -362,8 +392,9 @@ def oauth_authorize(
     if not client_id:
         raise HTTPException(400, f"{provider} client_id not configured. Save Client ID first.")
 
+    _purge_expired_oauth_states()
     state = secrets.token_hex(16)
-    _oauth_states[state] = provider
+    _oauth_states[state] = (provider, datetime.now(timezone.utc))
 
     prov = OAUTH_PROVIDERS[registry_provider]
     redirect_uri = _oauth_redirect_uri(provider)
@@ -402,7 +433,9 @@ def oauth_callback(
             f"{frontend_base}/settings?oauth_error={error}&oauth_provider={provider}"
         )
 
-    if not state or _oauth_states.get(state) != provider:
+    _purge_expired_oauth_states()
+    state_entry = _oauth_states.get(state) if state else None
+    if not state_entry or state_entry[0] != provider:
         raise HTTPException(400, "Invalid or expired OAuth state")
     _oauth_states.pop(state, None)
 
