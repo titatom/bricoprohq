@@ -196,6 +196,12 @@ def test_integration_test_endpoint_not_configured():
         r = client.post("/integrations/immich/test", headers=h)
         assert r.status_code == 400  # ConnectorNotConfigured
 
+        # And the integration row must NOT be flipped to "error" just because
+        # the user hasn't finished configuring it yet — that would make every
+        # fresh deployment look broken on the dashboard.
+        integrations = {i["provider"]: i for i in client.get("/integrations", headers=h).json()}
+        assert integrations["immich"]["status"] == "not_connected"
+
 
 def test_immich_test_endpoint_handles_non_json_response():
     app = make_client("test_dash_immich_non_json.db")
@@ -677,6 +683,41 @@ def test_paperless_gpt_404_has_actionable_error():
         assert "Paperless-GPT HTTP error 404 at /api/documents" in r.json()["detail"]
         assert "check the base URL and service API version" in r.json()["detail"]
         assert "Target: http://paperless-gpt.local:8080/api/documents" in r.json()["detail"]
+
+
+def test_paperless_gpt_502_reports_actionable_error():
+    """An upstream 502 from the paperless-gpt service should be surfaced to the
+    user with the target URL and a hint about gateway errors, not a bare
+    ``502 Bad Gateway`` that leaves the operator guessing.
+    """
+    app = make_client("test_dash_paperless_gpt_502.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={"base_url": "http://paperless-gpt.local:8080", "config_json": "{}"},
+        )
+
+        request = httpx.Request("GET", "http://paperless-gpt.local:8080/api/documents")
+        response = httpx.Response(
+            502,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            content=b"<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body>nginx</body></html>",
+            request=request,
+        )
+        with patch("httpx.get", return_value=response):
+            r = client.post("/integrations/paperless-gpt/test", headers=h)
+
+        assert r.status_code == 502
+        detail = r.json()["detail"]
+        assert "Paperless-GPT HTTP error 502 at /api/documents" in detail
+        assert "upstream gateway error" in detail
+        assert "Target: http://paperless-gpt.local:8080/api/documents" in detail
+        assert "<!DOCTYPE html>" not in detail
+
+        integrations = {i["provider"]: i for i in client.get("/integrations", headers=h).json()}
+        assert integrations["paperless-gpt"]["status"] == "error"
 
 
 def test_paperless_gpt_request_error_includes_target_url():

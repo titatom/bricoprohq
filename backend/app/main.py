@@ -548,25 +548,42 @@ def update_integration(
 @app.post("/integrations/{provider}/test")
 def test_integration(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     """Attempt a live connection test for an integration."""
+    from .services.connectors import get_connector, ConnectorNotConfigured, ConnectorError
+
     try:
-        from .services.connectors import get_connector, ConnectorNotConfigured, ConnectorError
         connector = get_connector(provider, db)
         result = connector.fetch()
-        i = db.query(Integration).filter(Integration.provider == provider).first()
-        if i:
-            i.status = "ok"
-            i.last_sync_at = datetime.now(timezone.utc)
-            db.commit()
-        return {"ok": True, "message": f"Connected successfully. Fetched data from {provider}.", "data": result}
-    except Exception as exc:
+    except ConnectorNotConfigured as exc:
+        # Not-configured is a 400 — do NOT mark the integration as "error" since
+        # the user hasn't finished setting it up yet.
+        log.info("Integration test for %s: not configured — %s", provider, exc)
+        raise HTTPException(400, str(exc)) from exc
+    except ConnectorError as exc:
+        log.warning("Integration test for %s failed: %s", provider, exc)
+        db.rollback()
         i = db.query(Integration).filter(Integration.provider == provider).first()
         if i:
             i.status = "error"
             db.commit()
-        from .services.connectors import ConnectorNotConfigured
-        if isinstance(exc, ConnectorNotConfigured):
-            raise HTTPException(400, str(exc))
-        raise HTTPException(502, str(exc))
+        raise HTTPException(502, str(exc)) from exc
+    except HTTPException:
+        # Allow downstream auth/validation 4xx responses to bubble up untouched.
+        raise
+    except Exception as exc:  # pragma: no cover — defensive
+        log.exception("Unexpected error while testing integration %s", provider)
+        db.rollback()
+        i = db.query(Integration).filter(Integration.provider == provider).first()
+        if i:
+            i.status = "error"
+            db.commit()
+        raise HTTPException(502, f"{provider} test failed: {exc}") from exc
+
+    i = db.query(Integration).filter(Integration.provider == provider).first()
+    if i:
+        i.status = "ok"
+        i.last_sync_at = datetime.now(timezone.utc)
+        db.commit()
+    return {"ok": True, "message": f"Connected successfully. Fetched data from {provider}.", "data": result}
 
 
 # ── Dashboard cache ───────────────────────────────────────────────────────────

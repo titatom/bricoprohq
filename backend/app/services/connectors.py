@@ -153,8 +153,17 @@ def _raise_http_status(exc: httpx.HTTPStatusError, service_name: str):
     path = exc.request.url.path
     if status == 401:
         hint = "authentication rejected; check the API key/auth mode"
+    elif status == 403:
+        hint = "permission denied; the credentials are valid but lack access to this endpoint"
     elif status == 404:
         hint = "endpoint not found; check the base URL and service API version"
+    elif status in (502, 503, 504):
+        hint = (
+            "upstream gateway error; the target service is unreachable, restarting, "
+            "or behind a reverse proxy that is returning an error page"
+        )
+    elif 500 <= status < 600:
+        hint = "server-side error from the target service; check its logs"
     else:
         hint = "request failed"
     detail = _response_snippet(exc.response)
