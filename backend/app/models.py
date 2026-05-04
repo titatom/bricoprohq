@@ -1,7 +1,16 @@
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from sqlalchemy import String, Integer, Boolean, DateTime, Date, Text, ForeignKey, Float
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
+
+
+def _utcnow() -> datetime:
+    """Naive-datetime substitute for datetime.utcnow that uses tz-aware UTC under the hood.
+
+    SQLAlchemy DateTime columns in this app are timezone-naive (SQLite default),
+    so we strip tzinfo to keep stored values consistent.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 class User(Base):
     __tablename__ = "users"
@@ -9,7 +18,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(50), default="admin")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 class Setting(Base):
     __tablename__ = "settings"
@@ -45,7 +54,7 @@ class DashboardCache(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     source: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     data_json: Mapped[str] = mapped_column(Text, default="{}")
-    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
 
 class Campaign(Base):
@@ -70,7 +79,7 @@ class ContentAsset(Base):
     service_category: Mapped[str] = mapped_column(String(255), default="")
     status: Mapped[str] = mapped_column(String(100), default="new")
     note: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 class ContentDraft(Base):
     __tablename__ = "content_drafts"
@@ -87,8 +96,8 @@ class ContentDraft(Base):
     cta: Mapped[str] = mapped_column(String(255), default="request_quote")
     status: Mapped[str] = mapped_column(String(100), default="draft_generated")
     planned_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 class PostMetric(Base):
     __tablename__ = "post_metrics"
@@ -111,4 +120,4 @@ class PostMetric(Base):
     messages: Mapped[int] = mapped_column(Integer, default=0)
     calls: Mapped[int] = mapped_column(Integer, default=0)
     notes: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)

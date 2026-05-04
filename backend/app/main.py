@@ -1104,7 +1104,7 @@ def move_draft(
     if not d:
         raise HTTPException(404, "Draft not found")
     d.status = status
-    d.updated_at = datetime.utcnow()
+    d.updated_at = datetime.now(timezone.utc)
     db.commit()
     return {"updated": True}
 
