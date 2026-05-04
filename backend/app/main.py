@@ -1199,7 +1199,8 @@ def campaign_generate(campaign_id: int, _: User = Depends(auth_user), db: Sessio
 # ── KPI / performance tracking ────────────────────────────────────────────────
 
 def _metric_payload(m: PostMetric) -> dict:
-    cost_per_lead = round(m.spend_cents / m.leads, 2) if m.leads else 0
+    spend_dollars = (m.spend_cents or 0) / 100
+    cost_per_lead = round(spend_dollars / m.leads, 2) if m.leads else 0
     return {
         "id": m.id,
         "draft_id": m.draft_id,
@@ -1209,7 +1210,7 @@ def _metric_payload(m: PostMetric) -> dict:
         "platform": m.platform,
         "post_url": m.post_url,
         "published_date": m.posted_at.isoformat() if m.posted_at else None,
-        "spend": m.spend_cents,
+        "spend": round(spend_dollars, 2),
         "impressions": m.impressions,
         "reach": m.reach,
         "clicks": m.clicks,
@@ -1242,7 +1243,7 @@ def create_kpi_record(payload: PostMetricIn, _: User = Depends(auth_user), db: S
         platform=payload.platform,
         post_url=payload.post_url,
         posted_at=posted_at,
-        spend_cents=payload.spend,
+        spend_cents=int(round((payload.spend or 0) * 100)),
         impressions=payload.impressions,
         reach=payload.reach,
         clicks=payload.clicks,
@@ -1260,7 +1261,8 @@ def create_kpi_record(payload: PostMetricIn, _: User = Depends(auth_user), db: S
 @app.get("/kpi/summary")
 def kpi_summary(_: User = Depends(auth_user), db: Session = Depends(get_db)):
     records = db.query(PostMetric).all()
-    total_spend = sum(r.spend_cents for r in records)
+    total_spend_cents = sum(r.spend_cents or 0 for r in records)
+    total_spend = round(total_spend_cents / 100, 2)
     total_leads = sum(r.leads for r in records)
     total_clicks = sum(r.clicks for r in records)
     total_impressions = sum(r.impressions for r in records)
