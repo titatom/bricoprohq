@@ -223,7 +223,11 @@ function summarizeTextResponse(text, contentType = '', fallbackMessage = 'Reques
 function isHtmlResponse(text, contentType = '') {
   const lowerType = (contentType || '').toLowerCase();
   const lowerText = text.trim().toLowerCase();
-  return lowerType.includes('html') || /^<(?:!doctype html|html|head|body|title)\b/.test(lowerText);
+  return (
+    lowerType.includes('html') ||
+    /^<(?:!doctype html|html|head|body|title)\b/.test(lowerText) ||
+    /<(?:!doctype html|html|head|body|title)\b/.test(lowerText.slice(0, 500))
+  );
 }
 
 function stripHtml(text) {
