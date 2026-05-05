@@ -8,6 +8,7 @@ Raise ConnectorNotConfigured when the integration has no base_url / api_key.
 Raise ConnectorError for connectivity / auth failures.
 """
 
+import html as html_lib
 import json
 import logging
 import os
@@ -69,13 +70,15 @@ def validate_paperless_gpt_base_url(base_url: str, app_base_url: str = "") -> No
             "Example: http://paperless-gpt.local:8080"
         )
 
-    app_origin = _normalized_origin(app_base_url)
-    if app_origin and normalized[:3] == app_origin[:3] and path in {"", app_origin[3]}:
-        raise ConnectorNotConfigured(
-            "paperless-gpt: base_url points to this Bricopro HQ app. Enter the Paperless-GPT "
-            "service URL instead of APP_BASE_URL. If Paperless-GPT is reverse-proxied on the "
-            "same host, use its dedicated path prefix instead of the HQ root URL."
-        )
+    app_base_urls = [value.strip() for value in str(app_base_url or "").split(",") if value.strip()]
+    app_origins = [_normalized_origin(value) for value in app_base_urls]
+    for app_origin in [origin for origin in app_origins if origin]:
+        if normalized[:3] == app_origin[:3] and path in {"", app_origin[3]}:
+            raise ConnectorNotConfigured(
+                "paperless-gpt: base_url points to this Bricopro HQ app. Enter the Paperless-GPT "
+                "service URL instead of APP_BASE_URL. If Paperless-GPT is reverse-proxied on the "
+                "same host, use its dedicated path prefix instead of the HQ root URL."
+            )
 
 
 # ── Base ──────────────────────────────────────────────────────────────────────
@@ -125,25 +128,58 @@ class BaseConnector:
         raise NotImplementedError
 
 
-def _json_or_connector_error(response: httpx.Response, service_name: str):
+def _json_or_connector_error(response: httpx.Response, service_name: str, configured_base_url: str = ""):
     try:
         return response.json()
     except ValueError as exc:
         snippet = _response_snippet(response)
+        if _response_is_html(response):
+            target = _response_target(response)
+            configured = (
+                f" Configured base URL: {configured_base_url}."
+                if configured_base_url
+                else ""
+            )
+            raise ConnectorError(
+                f"{service_name} returned HTML instead of JSON.{configured} "
+                f"Target: {target}. This usually means the base URL points to a web app, "
+                f"login page, or reverse-proxy error page instead of the {service_name} API. "
+                f"Response summary: {snippet}"
+            ) from exc
         raise ConnectorError(f"{service_name} returned a non-JSON response: {snippet}") from exc
+
+
+def _response_is_html(response: httpx.Response) -> bool:
+    content_type = response.headers.get("content-type", "").lower()
+    body = response.text.lstrip().lower()
+    if "html" in content_type:
+        return True
+    if body.startswith(("<!doctype html", "<html", "<head", "<body", "<title")):
+        return True
+    return bool(re.match(r"^<[a-z][\w:-]*(\s|>|/>)", body)) and any(
+        tag in body[:500] for tag in ("</html", "</head", "</body", "<title")
+    )
+
+
+def _response_target(response: httpx.Response) -> str:
+    try:
+        return str(response.request.url)
+    except RuntimeError:
+        return "<unknown>"
 
 
 def _response_snippet(response: httpx.Response, limit: int = 160) -> str:
     body = response.text.strip()
     if not body:
         return "<empty response>"
-    content_type = response.headers.get("content-type", "")
-    if "html" in content_type.lower() or body.lstrip().lower().startswith("<!doctype html"):
+    if _response_is_html(response):
         title_match = re.search(r"<title[^>]*>(.*?)</title>", body, flags=re.IGNORECASE | re.DOTALL)
         if title_match:
             body = title_match.group(1)
         else:
+            body = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", body, flags=re.IGNORECASE | re.DOTALL)
             body = re.sub(r"<[^>]+>", " ", body)
+        body = html_lib.unescape(body)
     body = re.sub(r"\s+", " ", body).strip()
     return body[:limit] if body else "<empty response>"
 
@@ -164,8 +200,14 @@ def _raise_http_status(exc: httpx.HTTPStatusError, service_name: str, configured
         if configured_base_url
         else ""
     )
+    html_hint = (
+        " The response was HTML, so the target is likely a web app, login page, "
+        "or reverse-proxy error page instead of the service API."
+        if _response_is_html(exc.response)
+        else ""
+    )
     raise ConnectorError(
-        f"{service_name} HTTP error {status} at {path}: {hint}.{configured} "
+        f"{service_name} HTTP error {status} at {path}: {hint}.{configured}{html_hint} "
         f"Target: {target}. Response: {detail}"
     ) from exc
 
@@ -701,7 +743,7 @@ class PaperlessGptConnector(BaseConnector):
                 timeout=10,
             )
             r.raise_for_status()
-            data = _json_or_connector_error(r, "Paperless-GPT")
+            data = _json_or_connector_error(r, "Paperless-GPT", configured_base_url=self.base_url)
             if isinstance(data, dict) and any(
                 key in data for key in ("pending_documents", "pending", "needs_review", "processed_documents", "processed")
             ):

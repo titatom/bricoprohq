@@ -176,10 +176,70 @@ async function parseApiResponse(response, fallbackMessage) {
   const text = await response.text();
   if (!text) return {};
   try {
-    return JSON.parse(text);
+    const data = JSON.parse(text);
+    return sanitizeApiPayload(data, fallbackMessage);
   } catch (err) {
-    return { detail: text, message: text || fallbackMessage };
+    const detail = summarizeTextResponse(text, response.headers.get('content-type'), fallbackMessage);
+    return { detail, message: detail };
   }
+}
+
+function sanitizeApiPayload(data, fallbackMessage = 'Request failed') {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  return {
+    ...data,
+    detail: typeof data.detail === 'string'
+      ? summarizeTextResponse(data.detail, '', fallbackMessage)
+      : data.detail,
+    message: typeof data.message === 'string'
+      ? summarizeTextResponse(data.message, '', fallbackMessage)
+      : data.message,
+  };
+}
+
+function formatErrorMessage(err, fallbackMessage = 'Request failed') {
+  const message = err?.message || String(err || '');
+  const sanitized = summarizeTextResponse(message.replace(/^Error:\s*/, ''), '', fallbackMessage);
+  return err?.message ? `Error: ${sanitized}` : sanitized;
+}
+
+function errorMessage(data, fallbackMessage = 'Request failed') {
+  return data?.detail || data?.message || fallbackMessage;
+}
+
+function summarizeTextResponse(text, contentType = '', fallbackMessage = 'Request failed') {
+  const raw = (text || '').trim();
+  if (!raw) return fallbackMessage;
+  if (isHtmlResponse(raw, contentType)) {
+    const title = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+    const summary = stripHtml(title || raw);
+    return summary
+      ? `Server returned HTML instead of JSON: ${summary}`
+      : 'Server returned HTML instead of JSON. Check the configured URL and reverse proxy.';
+  }
+  return raw;
+}
+
+function isHtmlResponse(text, contentType = '') {
+  const lowerType = (contentType || '').toLowerCase();
+  const lowerText = text.trim().toLowerCase();
+  return lowerType.includes('html') || /^<(?:!doctype html|html|head|body|title)\b/.test(lowerText);
+}
+
+function stripHtml(text) {
+  return (text || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 300);
 }
 
 // ── Components ────────────────────────────────────────────────────────────────
@@ -242,7 +302,7 @@ function AiProviderSection({ settings, onSave, onTest }) {
       const r = await onTest();
       setTestResult(r);
     } catch (err) {
-      setTestResult({ ok: false, message: String(err) });
+      setTestResult({ ok: false, message: formatErrorMessage(err, 'Test failed') });
     }
     setTesting(false);
   };
@@ -393,7 +453,7 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
       setTestResult({ ok: true, message: 'Saved.' });
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
-      setTestResult({ ok: false, message: String(err) });
+      setTestResult({ ok: false, message: formatErrorMessage(err, 'Save failed') });
     } finally {
       setSaving(false);
     }
@@ -407,7 +467,7 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
       const result = await onTest(providerKey);
       setTestResult(result);
     } catch (err) {
-      setTestResult({ ok: false, message: String(err) });
+      setTestResult({ ok: false, message: formatErrorMessage(err, 'Connection test failed') });
     } finally {
       setTesting(false);
     }
@@ -423,7 +483,7 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
         setTestResult(result);
       }
     } catch (err) {
-      setTestResult({ ok: false, message: String(err) });
+      setTestResult({ ok: false, message: formatErrorMessage(err, 'OAuth connection failed') });
     } finally {
       setTesting(false);
     }
@@ -604,7 +664,7 @@ export default function SettingsPage() {
     });
     const data = await parseApiResponse(r, 'Save failed');
     if (!r.ok) {
-      throw new Error(data.detail || data.message || 'Save failed');
+      throw new Error(errorMessage(data, 'Save failed'));
     }
     if (r.ok) {
       setIntegrations((prev) => prev.map((i) => (i.provider === providerKey ? data : i)));
@@ -624,9 +684,9 @@ export default function SettingsPage() {
       setIntegrations((prev) =>
         prev.map((i) => (i.provider === providerKey ? { ...i, status: 'error' } : i))
       );
-      return { ok: false, message: data.detail || 'Check settings.' };
+      return { ok: false, message: errorMessage(data, 'Check settings.') };
     } catch (err) {
-      return { ok: false, message: String(err) };
+      return { ok: false, message: formatErrorMessage(err, 'Connection test failed') };
     }
   }, [apiFetch]);
 
@@ -646,7 +706,7 @@ export default function SettingsPage() {
       window.location.assign(data.authorization_url);
       return { ok: true, message: 'Redirecting...' };
     } catch (err) {
-      return { ok: false, message: String(err) };
+      return { ok: false, message: formatErrorMessage(err, 'OAuth connection failed') };
     }
   }, [apiFetch]);
 
