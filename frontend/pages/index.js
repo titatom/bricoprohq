@@ -2,13 +2,14 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import LoginForm from '../components/LoginForm';
 
-const SOURCES = ['google_calendar', 'jobber', 'immich', 'paperless'];
+const SOURCES = ['google_calendar', 'jobber', 'immich', 'paperless', 'paperless-gpt'];
 
 const SOURCE_META = {
   google_calendar: { label: 'Google Calendar', icon: '📅', color: 'brand' },
   jobber:          { label: 'Jobber',          icon: '🔧', color: 'brand' },
   immich:          { label: 'Immich / Photos', icon: '🖼️', color: 'brand' },
   paperless:       { label: 'Paperless',       icon: '📄', color: 'brand' },
+  'paperless-gpt': { label: 'Paperless-GPT',   icon: '🤖', color: 'brand' },
 };
 
 const DEFAULT_WIDGET_SETTINGS = {
@@ -210,8 +211,8 @@ function WidgetSettingsModal({ source, settings, onClose, onSave }) {
   );
 }
 
-function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading, onConfigure }) {
-  const docs = data?.recent_documents || [];
+function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading, onConfigure, isPaperlessGpt = false }) {
+  const docs = isPaperlessGpt ? (data?.documents || []) : (data?.recent_documents || []);
 
   return (
     <div className="card flex flex-col gap-3">
@@ -220,9 +221,13 @@ function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading,
         <p className="text-sm text-red-500">Integration not connected. Configure in Settings.</p>
       ) : docs.length > 0 ? (
         <div className="space-y-2">
-          <p className="text-xs text-gray-400">
-            Latest documents tagged <span className="font-medium text-gray-600">{data?.tag || 'ai-processed'}</span>
-          </p>
+          {isPaperlessGpt ? (
+            <p className="text-xs text-gray-400">{data?.count ?? docs.length} documents available from Paperless-GPT</p>
+          ) : (
+            <p className="text-xs text-gray-400">
+              Latest documents tagged <span className="font-medium text-gray-600">{data?.tag || 'ai-processed'}</span>
+            </p>
+          )}
           {docs.map((doc) => (
             <a
               key={doc.id || doc.title}
@@ -237,7 +242,9 @@ function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading,
           ))}
         </div>
       ) : (
-        <p className="text-sm text-gray-500">No matching documents found. Use the settings wheel to change the tag.</p>
+        <p className="text-sm text-gray-500">
+          {isPaperlessGpt ? 'No documents returned from Paperless-GPT.' : 'No matching documents found. Use the settings wheel to change the tag.'}
+        </p>
       )}
     </div>
   );
@@ -498,8 +505,8 @@ function WidgetCard({ source, title, icon, status, stale, data, settings, onRefr
   if (source === 'jobber') {
     return <JobberWidget title={title} icon={icon} status={status} stale={stale} data={data} settings={settings} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />;
   }
-  if (source === 'paperless') {
-    return <PaperlessWidget title={title} icon={icon} status={status} stale={stale} data={data} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />;
+  if (source === 'paperless' || source === 'paperless-gpt') {
+    return <PaperlessWidget title={title} icon={icon} status={status} stale={stale} data={data} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} isPaperlessGpt={source === 'paperless-gpt'} />;
   }
   if (source === 'immich') {
     return <ImmichWidget title={title} icon={icon} status={status} stale={stale} data={data} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />;
