@@ -706,8 +706,6 @@ class PaperlessGptConnector(BaseConnector):
             raise ConnectorError(
                 "API key rejected. Generate/copy the key again from Paperless-GPT."
             ) from exc
-        if status == 403:
-            raise ConnectorError("Could not reach Paperless-GPT at this local URL.") from exc
         if status in {500, 502}:
             raise ConnectorError(
                 "Paperless-GPT reached Paperless-ngx but could not fetch documents."
@@ -724,12 +722,17 @@ class PaperlessGptConnector(BaseConnector):
                 timeout=10,
             )
             response.raise_for_status()
-            data = _json_or_connector_error(response, "Paperless-GPT", configured_base_url=self.base_url)
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise ConnectorError("Could not reach Paperless-GPT at this local URL.") from exc
             if not isinstance(data, dict):
                 raise ConnectorError("Could not reach Paperless-GPT at this local URL.")
             return data
         except httpx.HTTPStatusError as exc:
             self._handle_http_status(exc)
+        except ConnectorError:
+            raise
         except httpx.RequestError as exc:
             raise ConnectorError("Could not reach Paperless-GPT at this local URL.") from exc
 

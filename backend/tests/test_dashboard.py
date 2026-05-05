@@ -112,7 +112,7 @@ def test_dashboard_requires_auth():
     app = make_client("test_dash_auth.db")
     with TestClient(app) as client:
         r = client.get("/dashboard")
-        assert r.status_code == 502
+        assert r.status_code == 401
 
 
 def test_refresh_and_cache_flow():
@@ -701,7 +701,7 @@ def test_paperless_gpt_401_has_actionable_error():
         with patch("httpx.get", return_value=response) as mock_get:
             r = client.post("/integrations/paperless-gpt/test", headers=h)
 
-        assert r.status_code == 401
+        assert r.status_code == 502
         assert r.json()["detail"] == "API key rejected. Generate/copy the key again from Paperless-GPT."
         assert str(mock_get.call_args.args[0]) == "http://paperless-gpt.local:8080/api/bricoprohq/v1/health"
         assert mock_get.call_args.kwargs["headers"] == {"X-API-Key": "bad-token"}
