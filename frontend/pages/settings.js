@@ -120,12 +120,11 @@ const INTEGRATION_FIELDS = {
   'paperless-gpt': {
     label: 'Paperless-GPT',
     icon: '🤖',
-    description: 'Process documents with AI and surface pending document work.',
+    description: 'Read AI-processed documents through the BricoproHQ API endpoint.',
     authType: 'api_key',
     fields: [
-      { key: 'base_url', label: 'Paperless-GPT Base URL', placeholder: 'http://192.168.1.x:8080', help: 'Use the Paperless-GPT service root that this server can reach. Do not enter the Bricopro HQ URL or append /api.' },
-      { key: 'auth_mode', label: 'Auth Mode', placeholder: 'none, bearer, token, or x-api-key', help: 'Default is none. Use bearer/token/x-api-key only if your Paperless-GPT deployment or reverse proxy requires it.' },
-      { key: 'api_key',  label: 'Paperless-GPT API Key',  placeholder: 'Optional service API key or token', type: 'password', help: 'Only required when Auth Mode is bearer, token, or x-api-key.' },
+      { key: 'base_url', label: 'Paperless-GPT URL', placeholder: 'http://192.168.1.25:8080', help: 'Use the Paperless-GPT service root that this server can reach. Do not append /api.' },
+      { key: 'api_key',  label: 'API Key',  placeholder: 'pgpt_bhq_...', type: 'password', help: 'API key generated in Paperless-GPT for BricoproHQ.' },
     ],
   },
   paperless: {
@@ -662,9 +661,12 @@ export default function SettingsPage() {
 
   const saveIntegration = useCallback(async (providerKey, form) => {
     const { base_url, ...rest } = form;
+    const normalizedBaseUrl = providerKey === 'paperless-gpt'
+      ? (base_url || '').trim().replace(/\/+$/, '')
+      : (base_url || '');
     const r = await apiFetch(`/integrations/${providerKey}`, {
       method: 'PUT',
-      body: JSON.stringify({ base_url: base_url || '', config_json: JSON.stringify(rest) }),
+      body: JSON.stringify({ base_url: normalizedBaseUrl, config_json: JSON.stringify(rest) }),
     });
     const data = await parseApiResponse(r, 'Save failed');
     if (!r.ok) {

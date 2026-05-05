@@ -356,6 +356,8 @@ def _integration_out(i: Integration) -> dict:
         config = json.loads(i.config_json or "{}")
     except Exception:
         config = {}
+    if i.provider == "paperless-gpt":
+        config = {"api_key": config.get("api_key", "")}
     config_fields = {}
     for k, v in config.items():
         config_fields[k] = "••••••••" if (k in _SECRET_KEYS and v) else v
@@ -552,12 +554,14 @@ def update_integration(
     i = db.query(Integration).filter(Integration.provider == provider).first()
     if not i:
         i = Integration(provider=provider, status="not_connected")
+    base_url = payload.base_url or ""
     if provider == "paperless-gpt":
+        base_url = base_url.strip().rstrip("/")
         try:
-            validate_paperless_gpt_base_url(payload.base_url, _request_app_base_urls(request))
+            validate_paperless_gpt_base_url(base_url, _request_app_base_urls(request))
         except ConnectorNotConfigured as exc:
             raise HTTPException(400, str(exc))
-    i.base_url = payload.base_url
+    i.base_url = base_url
 
     # Merge incoming config with existing so that masked values ("••••••••")
     # do not overwrite real secrets.
@@ -578,6 +582,9 @@ def update_integration(
         else:
             existing_config[k] = v
 
+    if provider == "paperless-gpt":
+        existing_config = {"api_key": existing_config.get("api_key", "")}
+
     i.config_json = json.dumps(existing_config)
     db.add(i)
     db.commit()
@@ -592,7 +599,9 @@ def test_integration(provider: str, request: Request, _: User = Depends(auth_use
         connector = get_connector(provider, db)
         if provider == "paperless-gpt":
             validate_paperless_gpt_base_url(connector.base_url, _request_app_base_urls(request))
-        result = connector.fetch()
+            result = connector.test_connection()
+        else:
+            result = connector.fetch()
         i = db.query(Integration).filter(Integration.provider == provider).first()
         if i:
             i.status = "ok"

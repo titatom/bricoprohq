@@ -11,7 +11,6 @@ Raise ConnectorError for connectivity / auth failures.
 import html as html_lib
 import json
 import logging
-import os
 import re
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
@@ -93,7 +92,7 @@ class BaseConnector:
             self.config = json.loads(integration.config_json or "{}")
         except Exception:
             self.config = {}
-        self.base_url = (integration.base_url or "").rstrip("/")
+        self.base_url = (integration.base_url or "").strip().rstrip("/")
         self.api_key = self.config.get("api_key", "")
 
     def _setting(self, key: str, default: str = "") -> str:
@@ -188,7 +187,7 @@ def _raise_http_status(exc: httpx.HTTPStatusError, service_name: str, configured
     status = exc.response.status_code
     path = exc.request.url.path
     if status == 401:
-        hint = "authentication rejected; check the API key/auth mode"
+        hint = "authentication rejected; check credentials"
     elif status == 404:
         hint = "endpoint not found; check the base URL and service API version"
     else:
@@ -687,79 +686,93 @@ class PaperlessConnector(BaseConnector):
 
 class PaperlessGptConnector(BaseConnector):
     provider = "paperless-gpt"
+    api_prefix = "/api/bricoprohq/v1"
+
+    def _require_config(self):
+        if not self.base_url:
+            raise ConnectorNotConfigured("Enter your Paperless-GPT local URL.")
+        if not self.api_key:
+            raise ConnectorNotConfigured("Enter the API key generated in Paperless-GPT.")
+
+    def _api_base(self) -> str:
+        return f"{self.base_url}{self.api_prefix}"
 
     def _headers(self) -> dict:
-        auth_mode = self.config.get("auth_mode", "none").strip().lower()
-        if auth_mode in ("", "none"):
-            return {"Content-Type": "application/json"}
-        if not self.api_key:
-            raise ConnectorNotConfigured(
-                "paperless-gpt: api_key not configured for selected auth mode. Set it in Settings."
-            )
-        if auth_mode == "bearer":
-            return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        if auth_mode == "token":
-            return {"Authorization": f"Token {self.api_key}", "Content-Type": "application/json"}
-        if auth_mode == "x-api-key":
-            return {"x-api-key": self.api_key, "Content-Type": "application/json"}
-        raise ConnectorNotConfigured(
-            "paperless-gpt: unsupported auth_mode. Use none, bearer, token, or x-api-key."
-        )
+        return {"X-API-Key": self.api_key}
 
-    def _summarize_documents(self, data) -> dict:
-        documents = []
-        if isinstance(data, list):
-            documents = data
-        elif isinstance(data, dict):
-            value = data.get("documents", data.get("results", data.get("items", [])))
-            if isinstance(value, list):
-                documents = value
-        pending = len(documents)
-        needs_review = 0
-        processed = 0
-        for doc in documents:
-            if not isinstance(doc, dict):
-                continue
-            status = str(doc.get("status", "")).lower()
-            tags = [str(t).lower() for t in doc.get("tags", []) if t]
-            if "needs_review" in status or "review" in tags or "paperless-gpt" in tags:
-                needs_review += 1
-            if status in {"processed", "done", "ready"} or "paperless-gpt-auto" in tags:
-                processed += 1
-        return {
-            "pending_documents": pending,
-            "needs_review": needs_review,
-            "processed_documents": processed,
-        }
+    def _handle_http_status(self, exc: httpx.HTTPStatusError) -> None:
+        status = exc.response.status_code
+        if status == 401:
+            raise ConnectorError(
+                "API key rejected. Generate/copy the key again from Paperless-GPT."
+            ) from exc
+        if status in {500, 502}:
+            raise ConnectorError(
+                "Paperless-GPT reached Paperless-ngx but could not fetch documents."
+            ) from exc
+        raise ConnectorError("Could not reach Paperless-GPT at this local URL.") from exc
 
-    def fetch(self) -> dict:
-        self._require_base_url()
-        validate_paperless_gpt_base_url(self.base_url, os.getenv("APP_BASE_URL", ""))
-        target_url = f"{self.base_url}/api/documents"
+    def _get_json(self, path: str, params: dict | None = None) -> dict:
+        url = f"{self._api_base()}{path}"
         try:
-            r = httpx.get(
-                target_url,
+            response = httpx.get(
+                url,
+                params=params,
                 headers=self._headers(),
                 timeout=10,
             )
-            r.raise_for_status()
-            data = _json_or_connector_error(r, "Paperless-GPT", configured_base_url=self.base_url)
-            if isinstance(data, dict) and any(
-                key in data for key in ("pending_documents", "pending", "needs_review", "processed_documents", "processed")
-            ):
-                return {
-                    "pending_documents": data.get("pending_documents", data.get("pending", 0)),
-                    "needs_review": data.get("needs_review", 0),
-                    "processed_documents": data.get("processed_documents", data.get("processed", 0)),
-                }
-            return self._summarize_documents(data)
+            response.raise_for_status()
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise ConnectorError("Could not reach Paperless-GPT at this local URL.") from exc
+            if not isinstance(data, dict):
+                raise ConnectorError("Could not reach Paperless-GPT at this local URL.")
+            return data
         except httpx.HTTPStatusError as exc:
-            _raise_http_status(exc, "Paperless-GPT", configured_base_url=self.base_url)
+            self._handle_http_status(exc)
+        except ConnectorError:
+            raise
         except httpx.RequestError as exc:
-            raise ConnectorError(
-                f"Paperless-GPT request failed for {target_url} "
-                f"(configured base URL: {self.base_url}): {exc}"
-            ) from exc
+            raise ConnectorError("Could not reach Paperless-GPT at this local URL.") from exc
+
+    def _normalize_document(self, doc: dict) -> dict:
+        doc_id = doc.get("id")
+        return {
+            "id": doc_id,
+            "title": doc.get("title") or doc.get("name") or doc.get("original_file_name") or "Untitled document",
+            "added": doc.get("added") or doc.get("created_at") or doc.get("created"),
+            "document_url": f"{self._api_base()}/documents/{doc_id}" if doc_id else "",
+        }
+
+    def _documents_payload(self, data: dict) -> dict:
+        raw_documents = data.get("documents", [])
+        documents = [
+            self._normalize_document(doc)
+            for doc in raw_documents
+            if isinstance(doc, dict)
+        ] if isinstance(raw_documents, list) else []
+        return {
+            "count": data.get("count", len(documents)),
+            "documents": documents,
+        }
+
+    def test_connection(self) -> dict:
+        self._require_config()
+        validate_paperless_gpt_base_url(self.base_url)
+        health = self._get_json("/health")
+        if health.get("ok") is not True or health.get("service") != "paperless-gpt":
+            raise ConnectorError("Could not reach Paperless-GPT at this local URL.")
+        documents = self._documents_payload(self._get_json("/documents", params={"limit": 1}))
+        return {
+            "health": health,
+            "documents": documents,
+        }
+
+    def fetch(self) -> dict:
+        self._require_config()
+        validate_paperless_gpt_base_url(self.base_url)
+        return self._documents_payload(self._get_json("/documents", params={"limit": 25}))
 
 
 # ── Meta (Facebook + Instagram) ───────────────────────────────────────────────
