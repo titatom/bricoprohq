@@ -49,6 +49,12 @@ function copyRequestHeaders(req) {
       headers[name] = value;
     }
   }
+  if (req.headers.host && !headers['x-forwarded-host']) {
+    headers['x-forwarded-host'] = req.headers.host;
+  }
+  if (!headers['x-forwarded-proto']) {
+    headers['x-forwarded-proto'] = req.headers['x-forwarded-proto'] || (req.headers.host?.includes('localhost') ? 'http' : 'https');
+  }
   return headers;
 }
 

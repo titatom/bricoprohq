@@ -3,7 +3,7 @@ import logging
 import os
 import secrets
 from datetime import datetime, timezone, timedelta, date
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request
@@ -54,6 +54,44 @@ PENDING_IMAGE_STATUSES = {"new", "pending_ai", "needs_review"}
 PENDING_DOC_STATUSES = {"new", "pending_ai", "needs_review", "missing_tags", "missing_correspondent", "missing_document_type"}
 DEFAULT_ADMIN_EMAIL = "admin@bricopro.local"
 DEFAULT_ADMIN_PASSWORD = "admin1234"
+
+
+# ── Request origin helpers ────────────────────────────────────────────────────
+
+def _origin_from_url(value: str = "") -> str:
+    parsed = urlparse((value or "").strip())
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _first_header_value(value: str = "") -> str:
+    return (value or "").split(",")[0].strip()
+
+
+def _request_app_base_urls(request: Request) -> str:
+    """Collect known public app origins for validation behind reverse proxies."""
+    bases: list[str] = []
+
+    def add(value: str = "") -> None:
+        value = value.strip().rstrip("/")
+        if value and value not in bases:
+            bases.append(value)
+
+    add(os.getenv("APP_BASE_URL", ""))
+
+    forwarded_host = _first_header_value(
+        request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+    )
+    forwarded_proto = _first_header_value(
+        request.headers.get("x-forwarded-proto") or request.url.scheme
+    )
+    if forwarded_host:
+        add(f"{forwarded_proto or 'http'}://{forwarded_host}")
+
+    add(_origin_from_url(request.headers.get("origin", "")))
+    add(_origin_from_url(request.headers.get("referer", "")))
+    return ",".join(bases)
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -507,6 +545,7 @@ def get_integration(provider: str, _: User = Depends(auth_user), db: Session = D
 def update_integration(
     provider: str,
     payload: IntegrationUpdateIn,
+    request: Request,
     _: User = Depends(auth_user),
     db: Session = Depends(get_db),
 ):
@@ -515,7 +554,7 @@ def update_integration(
         i = Integration(provider=provider, status="not_connected")
     if provider == "paperless-gpt":
         try:
-            validate_paperless_gpt_base_url(payload.base_url, os.getenv("APP_BASE_URL", ""))
+            validate_paperless_gpt_base_url(payload.base_url, _request_app_base_urls(request))
         except ConnectorNotConfigured as exc:
             raise HTTPException(400, str(exc))
     i.base_url = payload.base_url
@@ -546,11 +585,13 @@ def update_integration(
 
 
 @app.post("/integrations/{provider}/test")
-def test_integration(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+def test_integration(provider: str, request: Request, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     """Attempt a live connection test for an integration."""
     try:
         from .services.connectors import get_connector, ConnectorNotConfigured, ConnectorError
         connector = get_connector(provider, db)
+        if provider == "paperless-gpt":
+            validate_paperless_gpt_base_url(connector.base_url, _request_app_base_urls(request))
         result = connector.fetch()
         i = db.query(Integration).filter(Integration.provider == provider).first()
         if i:
