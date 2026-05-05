@@ -364,6 +364,27 @@ def test_paperless_gpt_supports_bearer_auth_mode():
         assert mock_get.call_args.kwargs["headers"]["Authorization"] == "Bearer secret-token"
 
 
+def test_paperless_gpt_local_ip_base_url_is_used_exactly():
+    app = make_client("test_dash_paperless_gpt_local_ip.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        update = client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={"base_url": "http://192.168.1.50:8080", "config_json": "{}"},
+        )
+        assert update.status_code == 200
+        assert update.json()["base_url"] == "http://192.168.1.50:8080"
+
+        request = httpx.Request("GET", "http://192.168.1.50:8080/api/documents")
+        response = httpx.Response(200, json={"documents": []}, request=request)
+        with patch("httpx.get", return_value=response) as mock_get:
+            r = client.post("/integrations/paperless-gpt/test", headers=h)
+
+        assert r.status_code == 200
+        assert str(mock_get.call_args.args[0]) == "http://192.168.1.50:8080/api/documents"
+
+
 def test_paperless_gpt_base_url_update_takes_effect_with_masked_secret():
     app = make_client("test_dash_paperless_gpt_update_base_url.db")
     with TestClient(app) as client:
@@ -372,7 +393,7 @@ def test_paperless_gpt_base_url_update_takes_effect_with_masked_secret():
             "/integrations/paperless-gpt",
             headers=h,
             json={
-                "base_url": "https://bricoprohq.thomasrich.ca",
+                "base_url": "https://old-paperless-gpt.local",
                 "config_json": '{"auth_mode":"bearer","api_key":"secret-token"}',
             },
         )
@@ -396,6 +417,7 @@ def test_paperless_gpt_base_url_update_takes_effect_with_masked_secret():
 
         assert r.status_code == 200
         assert str(mock_get.call_args.args[0]) == "http://paperless-gpt.local:8080/api/documents"
+        assert "old-paperless-gpt.local" not in str(mock_get.call_args.args[0])
         assert mock_get.call_args.kwargs["headers"]["Authorization"] == "Bearer secret-token"
 
 
@@ -679,6 +701,39 @@ def test_paperless_gpt_404_has_actionable_error():
         assert "Target: http://paperless-gpt.local:8080/api/documents" in r.json()["detail"]
 
 
+def test_paperless_gpt_502_reports_configured_base_url_without_html_dump():
+    app = make_client("test_dash_paperless_gpt_502.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/paperless-gpt",
+            headers=h,
+            json={"base_url": "http://192.168.1.50:8080", "config_json": "{}"},
+        )
+
+        request = httpx.Request("GET", "http://192.168.1.50:8080/api/documents")
+        response = httpx.Response(
+            502,
+            headers={"content-type": "text/html; charset=UTF-8"},
+            content=(
+                b"<!DOCTYPE html><html><head>"
+                b"<title>thomasrich.ca | 502: Bad gateway</title>"
+                b"</head><body>Cloudflare</body></html>"
+            ),
+            request=request,
+        )
+        with patch("httpx.get", return_value=response):
+            r = client.post("/integrations/paperless-gpt/test", headers=h)
+
+        assert r.status_code == 502
+        detail = r.json()["detail"]
+        assert "Paperless-GPT HTTP error 502 at /api/documents" in detail
+        assert "Configured base URL: http://192.168.1.50:8080" in detail
+        assert "Target: http://192.168.1.50:8080/api/documents" in detail
+        assert "thomasrich.ca | 502: Bad gateway" in detail
+        assert "<!DOCTYPE html>" not in detail
+
+
 def test_paperless_gpt_request_error_includes_target_url():
     app = make_client("test_dash_paperless_gpt_request_error.db")
     with TestClient(app) as client:
@@ -697,7 +752,9 @@ def test_paperless_gpt_request_error_includes_target_url():
             r = client.post("/integrations/paperless-gpt/test", headers=h)
 
         assert r.status_code == 502
-        assert "Paperless-GPT request failed for http://paperless-gpt.local:8080/api/documents" in r.json()["detail"]
+        detail = r.json()["detail"]
+        assert "Paperless-GPT request failed for http://paperless-gpt.local:8080/api/documents" in detail
+        assert "(configured base URL: http://paperless-gpt.local:8080)" in detail
 
 
 def test_paperless_dashboard_filters_ai_processed_documents():

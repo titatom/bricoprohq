@@ -70,7 +70,7 @@ def validate_paperless_gpt_base_url(base_url: str, app_base_url: str = "") -> No
         )
 
     app_origin = _normalized_origin(app_base_url)
-    if app_origin and normalized == app_origin:
+    if app_origin and normalized[:3] == app_origin[:3] and path in {"", app_origin[3]}:
         raise ConnectorNotConfigured(
             "paperless-gpt: base_url points to this Bricopro HQ app. Enter the Paperless-GPT "
             "service URL instead of APP_BASE_URL. If Paperless-GPT is reverse-proxied on the "
@@ -148,7 +148,7 @@ def _response_snippet(response: httpx.Response, limit: int = 160) -> str:
     return body[:limit] if body else "<empty response>"
 
 
-def _raise_http_status(exc: httpx.HTTPStatusError, service_name: str):
+def _raise_http_status(exc: httpx.HTTPStatusError, service_name: str, configured_base_url: str = ""):
     status = exc.response.status_code
     path = exc.request.url.path
     if status == 401:
@@ -159,8 +159,14 @@ def _raise_http_status(exc: httpx.HTTPStatusError, service_name: str):
         hint = "request failed"
     detail = _response_snippet(exc.response)
     target = str(exc.request.url)
+    configured = (
+        f" Configured base URL: {configured_base_url}."
+        if configured_base_url
+        else ""
+    )
     raise ConnectorError(
-        f"{service_name} HTTP error {status} at {path}: {hint}. Target: {target}. Response: {detail}"
+        f"{service_name} HTTP error {status} at {path}: {hint}.{configured} "
+        f"Target: {target}. Response: {detail}"
     ) from exc
 
 
@@ -706,9 +712,12 @@ class PaperlessGptConnector(BaseConnector):
                 }
             return self._summarize_documents(data)
         except httpx.HTTPStatusError as exc:
-            _raise_http_status(exc, "Paperless-GPT")
+            _raise_http_status(exc, "Paperless-GPT", configured_base_url=self.base_url)
         except httpx.RequestError as exc:
-            raise ConnectorError(f"Paperless-GPT request failed for {target_url}: {exc}") from exc
+            raise ConnectorError(
+                f"Paperless-GPT request failed for {target_url} "
+                f"(configured base URL: {self.base_url}): {exc}"
+            ) from exc
 
 
 # ── Meta (Facebook + Instagram) ───────────────────────────────────────────────
