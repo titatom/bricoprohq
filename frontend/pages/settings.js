@@ -123,7 +123,7 @@ const INTEGRATION_FIELDS = {
     description: 'Read AI-processed documents through the BricoproHQ API endpoint.',
     authType: 'api_key',
     fields: [
-      { key: 'base_url', label: 'Paperless-GPT URL', placeholder: 'http://192.168.1.25:8080', help: 'Use the Paperless-GPT service root that this server can reach. Do not append /api.' },
+      { key: 'base_url', label: 'Paperless-GPT URL', placeholder: 'http://paperless-gpt:8080', help: 'Enter the Paperless-GPT service root only, not /api/bricoprohq/v1. The test runs from the Bricopro HQ backend, so Docker installs may need a service hostname instead of a LAN or host-local address.' },
       { key: 'api_key',  label: 'API Key',  placeholder: 'pgpt_bhq_...', type: 'password', help: 'API key generated in Paperless-GPT for BricoproHQ.' },
     ],
   },
@@ -203,7 +203,23 @@ function formatErrorMessage(err, fallbackMessage = 'Request failed') {
 }
 
 function errorMessage(data, fallbackMessage = 'Request failed') {
+  if (data?.detail && typeof data.detail === 'object') {
+    return data.detail.message || data.detail.hint || data.message || fallbackMessage;
+  }
   return data?.detail || data?.message || fallbackMessage;
+}
+
+function errorDiagnostics(data) {
+  const detail = data?.detail;
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return [];
+  return [
+    detail.type ? `Type: ${detail.type}` : '',
+    detail.upstream_status ? `Upstream status: ${detail.upstream_status}` : '',
+    detail.target_url ? `Target: ${detail.target_url}` : '',
+    detail.configured_base_url ? `Configured base URL: ${detail.configured_base_url}` : '',
+    detail.hint ? `Hint: ${detail.hint}` : '',
+    detail.response_summary ? `Response: ${detail.response_summary}` : '',
+  ].filter(Boolean);
 }
 
 function summarizeTextResponse(text, contentType = '', fallbackMessage = 'Request failed') {
@@ -542,7 +558,14 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
 
         {testResult && (
           <div className={`text-sm rounded-lg px-4 py-2.5 ${testResult.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-            {testResult.message}
+            <div>{testResult.message}</div>
+            {Array.isArray(testResult.diagnostics) && testResult.diagnostics.length > 0 && (
+              <ul className="mt-2 list-disc pl-5 space-y-1 text-xs opacity-90">
+                {testResult.diagnostics.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
 
@@ -690,7 +713,7 @@ export default function SettingsPage() {
       setIntegrations((prev) =>
         prev.map((i) => (i.provider === providerKey ? { ...i, status: 'error' } : i))
       );
-      return { ok: false, message: errorMessage(data, 'Check settings.') };
+      return { ok: false, message: errorMessage(data, 'Check settings.'), diagnostics: errorDiagnostics(data) };
     } catch (err) {
       return { ok: false, message: formatErrorMessage(err, 'Connection test failed') };
     }

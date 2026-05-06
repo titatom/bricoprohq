@@ -31,7 +31,7 @@ from .schemas import (
     PostMetricIn,
 )
 from .auth import verify_password, create_access_token, hash_password, SECRET_KEY, ALGORITHM
-from .services.connectors import validate_paperless_gpt_base_url, ConnectorNotConfigured
+from .services.connectors import validate_paperless_gpt_base_url, ConnectorNotConfigured, ConnectorError
 
 log = logging.getLogger("bricopro")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -595,7 +595,7 @@ def update_integration(
 def test_integration(provider: str, request: Request, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     """Attempt a live connection test for an integration."""
     try:
-        from .services.connectors import get_connector, ConnectorNotConfigured, ConnectorError
+        from .services.connectors import get_connector
         connector = get_connector(provider, db)
         if provider == "paperless-gpt":
             validate_paperless_gpt_base_url(connector.base_url, _request_app_base_urls(request))
@@ -613,9 +613,23 @@ def test_integration(provider: str, request: Request, _: User = Depends(auth_use
         if i:
             i.status = "error"
             db.commit()
-        from .services.connectors import ConnectorNotConfigured
         if isinstance(exc, ConnectorNotConfigured):
             raise HTTPException(400, str(exc))
+        if isinstance(exc, ConnectorError):
+            log.warning(
+                "Integration test failed for %s: %s",
+                provider,
+                exc.message,
+                extra={
+                    "provider": provider,
+                    "error_type": exc.error_type,
+                    "target_url": exc.target_url,
+                    "upstream_status": exc.upstream_status,
+                    "configured_base_url": exc.configured_base_url,
+                },
+            )
+            detail = exc.as_detail() if exc.structured else str(exc)
+            raise HTTPException(exc.status_code, detail)
         raise HTTPException(502, str(exc))
 
 

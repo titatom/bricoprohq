@@ -34,7 +34,43 @@ class ConnectorNotConfigured(Exception):
 
 
 class ConnectorError(Exception):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 502,
+        error_type: str = "connector_error",
+        target_url: str = "",
+        upstream_status: int | None = None,
+        configured_base_url: str = "",
+        hint: str = "",
+        response_summary: str = "",
+        structured: bool = False,
+    ):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.error_type = error_type
+        self.target_url = target_url
+        self.upstream_status = upstream_status
+        self.configured_base_url = configured_base_url
+        self.hint = hint
+        self.response_summary = response_summary
+        self.structured = structured
+
+    def as_detail(self) -> dict:
+        detail = {"message": self.message, "type": self.error_type}
+        if self.target_url:
+            detail["target_url"] = self.target_url
+        if self.upstream_status is not None:
+            detail["upstream_status"] = self.upstream_status
+        if self.configured_base_url:
+            detail["configured_base_url"] = self.configured_base_url
+        if self.hint:
+            detail["hint"] = self.hint
+        if self.response_summary:
+            detail["response_summary"] = self.response_summary
+        return detail
 
 
 def _normalized_origin(url: str) -> tuple[str, str, int | None, str] | None:
@@ -58,15 +94,39 @@ def _normalized_origin(url: str) -> tuple[str, str, int | None, str] | None:
 
 
 def validate_paperless_gpt_base_url(base_url: str, app_base_url: str = "") -> None:
-    normalized = _normalized_origin(base_url)
-    if not normalized:
+    raw_url = (base_url or "").strip()
+    if not raw_url:
         return
 
+    normalized = _normalized_origin(raw_url)
+    if not normalized:
+        raise ConnectorNotConfigured(
+            "paperless-gpt: base_url must be a full http(s) URL, for example "
+            "http://paperless-gpt.local:8080"
+        )
+
+    parsed = urlparse(raw_url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ConnectorNotConfigured(
+            "paperless-gpt: base_url must start with http:// or https://"
+        )
+    if parsed.query or parsed.fragment:
+        raise ConnectorNotConfigured(
+            "paperless-gpt: base_url must not include query strings or fragments."
+        )
+
     _, _, _, path = normalized
-    if path.lower() == "/api" or path.lower().endswith("/api"):
+    path_lower = path.lower()
+    if path_lower == "/api" or path_lower.endswith("/api"):
         raise ConnectorNotConfigured(
             "paperless-gpt: base_url must be the Paperless-GPT service root without '/api'. "
             "Example: http://paperless-gpt.local:8080"
+        )
+    if "/api/bricoprohq/v1" in path_lower:
+        raise ConnectorNotConfigured(
+            "paperless-gpt: base_url must be the Paperless-GPT service root, not a "
+            "BricoproHQ API endpoint. Remove '/api/bricoprohq/v1' and any endpoint "
+            "suffix such as '/health', '/stats', or '/documents'."
         )
 
     app_base_urls = [value.strip() for value in str(app_base_url or "").split(",") if value.strip()]
@@ -687,6 +747,7 @@ class PaperlessConnector(BaseConnector):
 class PaperlessGptConnector(BaseConnector):
     provider = "paperless-gpt"
     api_prefix = "/api/bricoprohq/v1"
+    timeout = httpx.Timeout(10.0, connect=5.0)
 
     def _require_config(self):
         if not self.base_url:
@@ -700,17 +761,90 @@ class PaperlessGptConnector(BaseConnector):
     def _headers(self) -> dict:
         return {"X-API-Key": self.api_key}
 
+    def _connector_error(
+        self,
+        message: str,
+        *,
+        status_code: int = 502,
+        error_type: str = "paperless_gpt_error",
+        target_url: str = "",
+        upstream_status: int | None = None,
+        hint: str = "",
+        response_summary: str = "",
+    ) -> ConnectorError:
+        return ConnectorError(
+            message,
+            status_code=status_code,
+            error_type=error_type,
+            target_url=target_url,
+            upstream_status=upstream_status,
+            configured_base_url=self.base_url,
+            hint=hint,
+            response_summary=response_summary,
+            structured=True,
+        )
+
     def _handle_http_status(self, exc: httpx.HTTPStatusError) -> None:
         status = exc.response.status_code
+        target = str(exc.request.url)
+        path = exc.request.url.path
+        summary = _response_snippet(exc.response)
         if status == 401:
-            raise ConnectorError(
-                "API key rejected. Generate/copy the key again from Paperless-GPT."
+            raise self._connector_error(
+                "API key rejected. Generate/copy the key again from Paperless-GPT.",
+                status_code=401,
+                error_type="unauthorized",
+                target_url=target,
+                upstream_status=status,
+                hint="Verify the BricoproHQ API key in Paperless-GPT and paste it again.",
+                response_summary=summary,
             ) from exc
-        if status in {500, 502}:
-            raise ConnectorError(
-                "Paperless-GPT reached Paperless-ngx but could not fetch documents."
+        if status == 403:
+            raise self._connector_error(
+                "Paperless-GPT rejected the API key.",
+                status_code=403,
+                error_type="forbidden",
+                target_url=target,
+                upstream_status=status,
+                hint="Verify the key has access to the BricoproHQ API in Paperless-GPT.",
+                response_summary=summary,
             ) from exc
-        raise ConnectorError("Could not reach Paperless-GPT at this local URL.") from exc
+        if status == 404:
+            raise self._connector_error(
+                f"Paperless-GPT endpoint was not found at {path}.",
+                status_code=404,
+                error_type="not_found",
+                target_url=target,
+                upstream_status=status,
+                hint=(
+                    "Enter the Paperless-GPT base URL only, not the full "
+                    "/api/bricoprohq/v1 endpoint. Confirm this Paperless-GPT version exposes "
+                    "the BricoproHQ API."
+                ),
+                response_summary=summary,
+            ) from exc
+        if status in {500, 502, 503, 504}:
+            raise self._connector_error(
+                f"Paperless-GPT returned HTTP {status} while testing {path}.",
+                status_code=502,
+                error_type="upstream_error",
+                target_url=target,
+                upstream_status=status,
+                hint=(
+                    "Paperless-GPT was reachable from the Bricopro HQ backend, but it returned "
+                    "an upstream error. Check Paperless-GPT and reverse-proxy logs."
+                ),
+                response_summary=summary,
+            ) from exc
+        raise self._connector_error(
+            f"Paperless-GPT returned HTTP {status} while testing {path}.",
+            status_code=502,
+            error_type="http_error",
+            target_url=target,
+            upstream_status=status,
+            hint="Check the configured base URL and Paperless-GPT API compatibility.",
+            response_summary=summary,
+        ) from exc
 
     def _get_json(self, path: str, params: dict | None = None) -> dict:
         url = f"{self._api_base()}{path}"
@@ -719,22 +853,77 @@ class PaperlessGptConnector(BaseConnector):
                 url,
                 params=params,
                 headers=self._headers(),
-                timeout=10,
+                timeout=self.timeout,
+                follow_redirects=False,
             )
             response.raise_for_status()
             try:
                 data = response.json()
             except ValueError as exc:
-                raise ConnectorError("Could not reach Paperless-GPT at this local URL.") from exc
+                raise self._connector_error(
+                    "Paperless-GPT returned a non-JSON response.",
+                    error_type="invalid_response",
+                    target_url=str(response.request.url),
+                    upstream_status=response.status_code,
+                    hint="The base URL may point to a web page or reverse-proxy error page instead of Paperless-GPT.",
+                    response_summary=_response_snippet(response),
+                ) from exc
             if not isinstance(data, dict):
-                raise ConnectorError("Could not reach Paperless-GPT at this local URL.")
+                raise self._connector_error(
+                    "Paperless-GPT returned an unexpected JSON response.",
+                    error_type="invalid_response",
+                    target_url=str(response.request.url),
+                    upstream_status=response.status_code,
+                    hint="Confirm this Paperless-GPT version exposes the BricoproHQ API.",
+                )
             return data
         except httpx.HTTPStatusError as exc:
             self._handle_http_status(exc)
         except ConnectorError:
             raise
+        except httpx.InvalidURL as exc:
+            raise self._connector_error(
+                "Paperless-GPT URL is malformed.",
+                status_code=400,
+                error_type="malformed_url",
+                target_url=url,
+                hint="Enter a full Paperless-GPT base URL such as http://paperless-gpt.local:8080.",
+            ) from exc
+        except httpx.ConnectTimeout as exc:
+            raise self._connector_error(
+                "Timed out connecting to Paperless-GPT from the Bricopro HQ backend.",
+                error_type="timeout",
+                target_url=url,
+                hint=(
+                    "The connectivity test runs inside the Bricopro HQ backend runtime. "
+                    "Docker/container installs may need a service hostname or container-reachable URL."
+                ),
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise self._connector_error(
+                "Timed out waiting for Paperless-GPT to respond to the Bricopro HQ backend.",
+                error_type="timeout",
+                target_url=url,
+                hint="Check Paperless-GPT load, reverse proxy timeouts, and backend-container network reachability.",
+            ) from exc
+        except httpx.ConnectError as exc:
+            raise self._connector_error(
+                "Could not connect to Paperless-GPT from the Bricopro HQ backend.",
+                error_type="connection_failed",
+                target_url=url,
+                hint=(
+                    "Manual curl from the host can succeed even when the backend container cannot reach "
+                    "that address. For Docker, try the Paperless-GPT service name, container hostname, "
+                    "or another URL reachable from the Bricopro HQ backend."
+                ),
+            ) from exc
         except httpx.RequestError as exc:
-            raise ConnectorError("Could not reach Paperless-GPT at this local URL.") from exc
+            raise self._connector_error(
+                "Paperless-GPT request failed from the Bricopro HQ backend.",
+                error_type="network_error",
+                target_url=url,
+                hint="Check DNS, routing, firewall rules, and whether the URL is reachable from the backend runtime.",
+            ) from exc
 
     def _normalize_document(self, doc: dict) -> dict:
         doc_id = doc.get("id")
@@ -762,11 +951,16 @@ class PaperlessGptConnector(BaseConnector):
         validate_paperless_gpt_base_url(self.base_url)
         health = self._get_json("/health")
         if health.get("ok") is not True or health.get("service") != "paperless-gpt":
-            raise ConnectorError("Could not reach Paperless-GPT at this local URL.")
-        documents = self._documents_payload(self._get_json("/documents", params={"limit": 1}))
+            raise self._connector_error(
+                "Paperless-GPT health response did not identify the Paperless-GPT BricoproHQ API.",
+                error_type="invalid_health_response",
+                target_url=f"{self._api_base()}/health",
+                hint="Confirm the base URL points to Paperless-GPT and not Paperless-ngx or Bricopro HQ.",
+            )
+        stats = self._get_json("/stats")
         return {
             "health": health,
-            "documents": documents,
+            "stats": stats,
         }
 
     def fetch(self) -> dict:
