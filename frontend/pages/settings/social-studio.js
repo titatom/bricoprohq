@@ -6,10 +6,21 @@ import LoginForm from '../../components/LoginForm';
 const DEFAULTS = {
   default_album_id: '',
   image_model: 'openai/gpt-4o-mini',
+  image_generation_model: '',
   copy_model: 'openai/gpt-4o-mini',
   default_language: 'fr',
   default_platforms: 'facebook,instagram,gbp',
+  default_tone: 'local',
+  default_city: 'Montréal',
+  default_cta: 'request_quote',
   brand_voice: 'Friendly, local, practical, trustworthy Bricopro expert.',
+  image_picker_prompt: 'Help identify clear project photos, but let the user make the final selection.',
+  copy_prompt: 'Write practical, local, trustworthy Bricopro social posts based only on the provided job details and selected images.',
+  facebook_prompt: 'Facebook: conversational, helpful, local, and clear about the service.',
+  instagram_prompt: 'Instagram: concise caption, strong opening line, tasteful emojis, and relevant hashtags.',
+  gbp_prompt: 'Google Business Profile: professional, service-focused, local, and direct.',
+  before_after_prompt: 'If the user marks photos as before/after candidates, propose or generate a clean side-by-side montage without inventing results.',
+  safety_prompt: 'Never invent reviews, client names, addresses, prices, certifications, or regulated trade work.',
   facebook_account: '',
   instagram_account: '',
   google_business_account: '',
@@ -84,6 +95,10 @@ export default function SocialStudioSettingsPage() {
               <input className="input" value={form.copy_model} onChange={(e) => setForm({ ...form, copy_model: e.target.value })} />
             </div>
             <div>
+              <label className="label">Before / after image generation model</label>
+              <input className="input" value={form.image_generation_model} onChange={(e) => setForm({ ...form, image_generation_model: e.target.value })} placeholder="Optional image model" />
+            </div>
+            <div>
               <label className="label">Default language</label>
               <select className="select" value={form.default_language} onChange={(e) => setForm({ ...form, default_language: e.target.value })}>
                 <option value="fr">Français</option>
@@ -94,6 +109,18 @@ export default function SocialStudioSettingsPage() {
             <div>
               <label className="label">Default platforms</label>
               <input className="input" value={form.default_platforms} onChange={(e) => setForm({ ...form, default_platforms: e.target.value })} />
+            </div>
+            <div>
+              <label className="label">Default tone</label>
+              <input className="input" value={form.default_tone} onChange={(e) => setForm({ ...form, default_tone: e.target.value })} placeholder="local, friendly, professional..." />
+            </div>
+            <div>
+              <label className="label">Default city / neighbourhood</label>
+              <input className="input" value={form.default_city} onChange={(e) => setForm({ ...form, default_city: e.target.value })} />
+            </div>
+            <div>
+              <label className="label">Default CTA</label>
+              <input className="input" value={form.default_cta} onChange={(e) => setForm({ ...form, default_cta: e.target.value })} />
             </div>
           </div>
         </section>
@@ -111,6 +138,43 @@ export default function SocialStudioSettingsPage() {
                 <option value="true">Enabled when image pairs are available</option>
                 <option value="false">Disabled</option>
               </select>
+            </div>
+          </div>
+        </section>
+
+        <section className="card">
+          <h3 className="font-semibold text-gray-800 mb-4">Workflow prompts</h3>
+          <div className="space-y-4">
+            <div>
+              <label className="label">Image picker prompt</label>
+              <textarea className="input h-20 resize-y" value={form.image_picker_prompt} onChange={(e) => setForm({ ...form, image_picker_prompt: e.target.value })} />
+              <p className="text-xs text-gray-400 mt-1">Guidance shown to the workflow. Final image picks are still human-selected in Social Studio.</p>
+            </div>
+            <div>
+              <label className="label">Base copy prompt</label>
+              <textarea className="input h-24 resize-y" value={form.copy_prompt} onChange={(e) => setForm({ ...form, copy_prompt: e.target.value })} />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="label">Facebook prompt</label>
+                <textarea className="input h-28 resize-y" value={form.facebook_prompt} onChange={(e) => setForm({ ...form, facebook_prompt: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Instagram prompt</label>
+                <textarea className="input h-28 resize-y" value={form.instagram_prompt} onChange={(e) => setForm({ ...form, instagram_prompt: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">GBP prompt</label>
+                <textarea className="input h-28 resize-y" value={form.gbp_prompt} onChange={(e) => setForm({ ...form, gbp_prompt: e.target.value })} />
+              </div>
+            </div>
+            <div>
+              <label className="label">Before / after prompt</label>
+              <textarea className="input h-20 resize-y" value={form.before_after_prompt} onChange={(e) => setForm({ ...form, before_after_prompt: e.target.value })} />
+            </div>
+            <div>
+              <label className="label">Safety / compliance prompt</label>
+              <textarea className="input h-20 resize-y" value={form.safety_prompt} onChange={(e) => setForm({ ...form, safety_prompt: e.target.value })} />
             </div>
           </div>
         </section>
