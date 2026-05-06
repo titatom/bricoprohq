@@ -86,22 +86,36 @@ function transientErrorCode(err) {
   return null;
 }
 
+const SLOW_ENDPOINTS = ['/social/generate-image-actual', '/social/generate-pack'];
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 60_000;
+const SLOW_UPSTREAM_TIMEOUT_MS = 200_000;
+
+function upstreamTimeoutMs(path) {
+  const apiPath = path.replace(/^\/api(?=\/|$)/, '') || '/';
+  if (SLOW_ENDPOINTS.some((ep) => apiPath.startsWith(ep))) return SLOW_UPSTREAM_TIMEOUT_MS;
+  return DEFAULT_UPSTREAM_TIMEOUT_MS;
+}
+
 export default async function handler(req, res) {
   const targetUrl = buildTargetUrl(req);
   const hasBody = !['GET', 'HEAD'].includes(req.method);
-  // Read the body once up-front so we can safely retry the upstream fetch.
   const body = hasBody ? await readRequestBody(req) : undefined;
   const headers = copyRequestHeaders(req);
+  const timeoutMs = upstreamTimeoutMs(req.url);
 
   let lastError;
   for (let attempt = 1; attempt <= MAX_PROXY_ATTEMPTS; attempt += 1) {
     try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       const upstream = await fetch(targetUrl, {
         method: req.method,
         headers,
         body,
         redirect: 'manual',
+        signal: controller.signal,
       });
+      clearTimeout(timer);
 
       copyResponseHeaders(upstream, res);
       res.status(upstream.status);

@@ -465,7 +465,7 @@ function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAs
 // ── Image Generation Tab ──────────────────────────────────────────────────────
 
 function ImageGenerationTab({ albums, settings, apiFetch }) {
-  const [imgForm, setImgForm] = useState({ album_id: '', prompt: '', preset: '', size: '1024x1024', quality: 'standard', refine_prompt: true });
+  const [imgForm, setImgForm] = useState({ album_id: '', prompt: '', preset: '', size: '1024x1024', quality: 'auto', refine_prompt: true });
   const [assets, setAssets] = useState([]);
   const [selectedAssets, setSelectedAssets] = useState([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
@@ -698,14 +698,18 @@ function ImageGenerationTab({ albums, settings, apiFetch }) {
               <label className="label">Size</label>
               <select className="select" value={imgForm.size} onChange={(e) => setImgForm({ ...imgForm, size: e.target.value })}>
                 <option value="1024x1024">1024 x 1024 (Square)</option>
-                <option value="1792x1024">1792 x 1024 (Landscape)</option>
-                <option value="1024x1792">1024 x 1792 (Portrait)</option>
+                <option value="1536x1024">1536 x 1024 (Landscape)</option>
+                <option value="1024x1536">1024 x 1536 (Portrait)</option>
+                <option value="auto">Auto</option>
               </select>
             </div>
             <div>
               <label className="label">Quality</label>
               <select className="select" value={imgForm.quality} onChange={(e) => setImgForm({ ...imgForm, quality: e.target.value })}>
+                <option value="auto">Auto</option>
+                <option value="low">Low</option>
                 <option value="standard">Standard</option>
+                <option value="high">High</option>
                 <option value="hd">HD</option>
               </select>
             </div>
@@ -747,7 +751,7 @@ function ImageGenerationTab({ albums, settings, apiFetch }) {
                 src={result.image_url}
                 alt="Generated image"
                 className="w-full max-w-2xl mx-auto block"
-                style={{ aspectRatio: imgForm.size === '1792x1024' ? '1792/1024' : imgForm.size === '1024x1792' ? '1024/1792' : '1/1' }}
+                style={{ aspectRatio: (imgForm.size === '1792x1024' || imgForm.size === '1536x1024') ? '3/2' : (imgForm.size === '1024x1792' || imgForm.size === '1024x1536') ? '2/3' : '1/1' }}
               />
             </div>
 

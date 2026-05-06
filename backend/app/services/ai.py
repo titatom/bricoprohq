@@ -319,12 +319,129 @@ def generate_image_prompt(prompt: str, social_cfg: dict, db: Session) -> dict:
     }
 
 
+def _is_gpt_image_model(model: str) -> bool:
+    """Return True for OpenAI GPT-image family models (gpt-image-1, gpt-image-2, etc.)."""
+    return model.startswith("gpt-image")
+
+
+_DALLE_QUALITY_TO_GPT = {"standard": "medium", "hd": "high"}
+_DALLE_SIZE_TO_GPT = {"1792x1024": "1536x1024", "1024x1792": "1024x1536"}
+
+
+def _build_image_gen_body(model: str, prompt: str, size: str, quality: str) -> dict:
+    """Build the JSON body for /images/generations, adapting for model family."""
+    if _is_gpt_image_model(model):
+        mapped_quality = _DALLE_QUALITY_TO_GPT.get(quality, quality)
+        if mapped_quality not in ("low", "medium", "high", "auto"):
+            mapped_quality = "auto"
+        mapped_size = _DALLE_SIZE_TO_GPT.get(size, size)
+        return {
+            "model": model,
+            "prompt": prompt,
+            "n": 1,
+            "size": mapped_size,
+            "quality": mapped_quality,
+        }
+
+    return {
+        "model": model,
+        "prompt": prompt,
+        "n": 1,
+        "size": size,
+        "quality": quality,
+        "response_format": "b64_json",
+    }
+
+
+def _generate_image_openrouter(
+    api_key: str,
+    base_url: str,
+    model: str,
+    prompt: str,
+    size: str,
+    quality: str,
+) -> dict:
+    """Generate an image via OpenRouter's chat/completions with image modalities."""
+    effective_base = base_url or OPENROUTER_DEFAULT_BASE
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://bricopro.ca",
+        "X-Title": "Bricopro HQ",
+    }
+
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "modalities": ["image"],
+        "max_tokens": 4096,
+    }
+
+    log.info("AI image generation (OpenRouter chat): model=%s size=%s", model, size)
+
+    try:
+        r = httpx.post(
+            f"{effective_base.rstrip('/')}/chat/completions",
+            json=body,
+            headers=headers,
+            timeout=180,
+        )
+        r.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        log.error("OpenRouter image gen HTTP %s: %s", exc.response.status_code, exc.response.text[:500])
+        raise AIError(f"Image generation HTTP {exc.response.status_code}: {exc.response.text[:500]}") from exc
+    except httpx.RequestError as exc:
+        log.error("OpenRouter image gen request failed: %s", exc)
+        raise AIError(f"Image generation request failed: {exc}") from exc
+
+    try:
+        data = r.json()
+        choices = data.get("choices", [])
+        if not choices:
+            raise AIError("OpenRouter returned no choices for image generation.")
+
+        message = choices[0].get("message", {})
+        content = message.get("content")
+
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    image_url = part.get("image_url", {})
+                    url = image_url.get("url", "") if isinstance(image_url, dict) else str(image_url)
+                    if url.startswith("data:image/"):
+                        import base64 as _b64
+                        b64_data = url.split(",", 1)[1] if "," in url else ""
+                        return {
+                            "image_b64": b64_data,
+                            "image_url": "",
+                            "revised_prompt": prompt,
+                            "model": model,
+                            "size": size,
+                        }
+                    return {
+                        "image_b64": "",
+                        "image_url": url,
+                        "revised_prompt": prompt,
+                        "model": model,
+                        "size": size,
+                    }
+
+        raise AIError(
+            "OpenRouter image generation did not return image data. "
+            "Make sure the model supports image output (check OpenRouter docs for image-capable models)."
+        )
+    except AIError:
+        raise
+    except Exception as exc:
+        raise AIError(f"Unexpected OpenRouter image response: {exc}") from exc
+
+
 def generate_image_dall_e(prompt: str, social_cfg: dict, db: Session, size: str = "1024x1024", quality: str = "standard") -> dict:
     """
-    Actually generate an image using the OpenAI DALL-E API (or compatible endpoint).
+    Generate an image using the OpenAI Images API (or compatible endpoint).
 
-    Returns dict with 'image_url' or 'image_b64' depending on response format,
-    plus metadata about the generation.
+    Supports dall-e-2, dall-e-3, gpt-image-1, gpt-image-2, and OpenRouter
+    image models. Automatically maps parameters for each model family.
     """
     cfg = _get_settings(db)
     provider = cfg.get("ai_provider", "").strip()
@@ -336,7 +453,7 @@ def generate_image_dall_e(prompt: str, social_cfg: dict, db: Session, size: str 
     base_url = cfg.get("ai_base_url", "").strip()
 
     if provider == "ollama":
-        raise AIError("Ollama does not support image generation. Use OpenAI or OpenRouter with a DALL-E model.")
+        raise AIError("Ollama does not support image generation. Use OpenAI or OpenRouter with an image model.")
 
     if not api_key:
         raise AINotConfigured(f"API key not configured for {provider}. Go to Settings → AI Provider.")
@@ -344,41 +461,39 @@ def generate_image_dall_e(prompt: str, social_cfg: dict, db: Session, size: str 
     image_model = (social_cfg.get("image_generation_model") or "").strip()
     effective_model = image_model or "dall-e-3"
 
-    if provider == "openai":
-        effective_base = base_url or OPENAI_DEFAULT_BASE
-    else:
-        effective_base = base_url or OPENROUTER_DEFAULT_BASE
+    log.info(
+        "AI image generation: provider=%s model=%s size=%s quality=%s",
+        provider, effective_model, size, quality,
+    )
+
+    if provider == "openrouter":
+        return _generate_image_openrouter(api_key, base_url, effective_model, prompt, size, quality)
+
+    effective_base = base_url or OPENAI_DEFAULT_BASE
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    if provider == "openrouter":
-        headers["HTTP-Referer"] = "https://bricopro.ca"
-        headers["X-Title"] = "Bricopro HQ"
 
-    body = {
-        "model": effective_model,
-        "prompt": prompt,
-        "n": 1,
-        "size": size,
-        "quality": quality,
-        "response_format": "b64_json",
-    }
-
-    log.info("AI image generation: provider=%s model=%s size=%s", provider, effective_model, size)
+    body = _build_image_gen_body(effective_model, prompt, size, quality)
 
     try:
         r = httpx.post(
             f"{effective_base.rstrip('/')}/images/generations",
             json=body,
             headers=headers,
-            timeout=120,
+            timeout=180,
         )
         r.raise_for_status()
     except httpx.HTTPStatusError as exc:
+        log.error(
+            "Image generation HTTP %s from %s: %s",
+            exc.response.status_code, provider, exc.response.text[:500],
+        )
         raise AIError(f"Image generation HTTP {exc.response.status_code}: {exc.response.text[:500]}") from exc
     except httpx.RequestError as exc:
+        log.error("Image generation request to %s failed: %s", provider, exc)
         raise AIError(f"Image generation request failed: {exc}") from exc
 
     try:
@@ -391,6 +506,7 @@ def generate_image_dall_e(prompt: str, social_cfg: dict, db: Session, size: str 
             "size": size,
         }
     except (KeyError, IndexError) as exc:
+        log.error("Unexpected image generation response from %s: %s", provider, exc)
         raise AIError(f"Unexpected image generation response format: {exc}") from exc
 
 
