@@ -196,50 +196,76 @@ def _call_ollama(base_url: str, model: str, system: str, user: str) -> dict:
         raise AIError(f"Could not parse Ollama response: {exc}") from exc
 
 
-def generate_social_content(payload: dict, db: Session) -> dict:
-    """
-    Call the configured AI provider and return a structured content dict.
-    Raises AINotConfigured if no provider is set up, AIError on call failures.
-    """
-    cfg = _get_settings(db)
-    provider = cfg.get("ai_provider", "").strip()
-    api_key  = cfg.get("ai_api_key",  "").strip()
+def _resolve_model(cfg: dict, provider: str, model_override: str = "") -> str:
+    """Pick the effective model: explicit override > global ai_model > provider default."""
+    override = (model_override or "").strip()
+    if override:
+        return override
+    global_model = cfg.get("ai_model", "").strip()
+    if global_model:
+        return global_model
+    return DEFAULT_MODELS.get(provider, "gpt-4o-mini")
+
+
+def _dispatch_llm(
+    cfg: dict,
+    provider: str,
+    model: str,
+    system: str,
+    user: str,
+) -> dict:
+    """Route a chat-completion call to the right backend."""
+    api_key = cfg.get("ai_api_key", "").strip()
     base_url = cfg.get("ai_base_url", "").strip()
-    model    = cfg.get("ai_model",    "").strip()
-
-    if not provider:
-        raise AINotConfigured("No AI provider configured. Go to Settings → AI Provider.")
-
-    system = _build_system_prompt()
-    user   = _build_user_prompt(payload)
-
-    log.info("AI generate: provider=%s model=%s platform=%s lang=%s",
-             provider, model, payload.get("platform"), payload.get("language"))
 
     if provider == "ollama":
-        effective_base  = base_url or OLLAMA_DEFAULT_BASE
-        effective_model = model or DEFAULT_MODELS["ollama"]
-        result = _call_ollama(effective_base, effective_model, system, user)
+        effective_base = base_url or OLLAMA_DEFAULT_BASE
+        return _call_ollama(effective_base, model, system, user)
 
-    elif provider in ("openai", "openrouter"):
+    if provider in ("openai", "openrouter"):
         if not api_key:
             raise AINotConfigured(f"API key not configured for {provider}. Go to Settings → AI Provider.")
         if provider == "openai":
-            effective_base  = base_url or OPENAI_DEFAULT_BASE
-            effective_model = model or DEFAULT_MODELS["openai"]
+            effective_base = base_url or OPENAI_DEFAULT_BASE
             extra = None
         else:
-            effective_base  = base_url or OPENROUTER_DEFAULT_BASE
-            effective_model = model or DEFAULT_MODELS["openrouter"]
+            effective_base = base_url or OPENROUTER_DEFAULT_BASE
             extra = {
                 "HTTP-Referer": "https://bricopro.ca",
                 "X-Title":      "Bricopro HQ",
             }
-        result = _call_openai_compatible(effective_base, api_key, effective_model, system, user, extra_headers=extra)
-    else:
-        raise AINotConfigured(f"Unknown provider '{provider}'. Choose openai, openrouter, or ollama in Settings.")
+        return _call_openai_compatible(effective_base, api_key, model, system, user, extra_headers=extra)
 
-    # Normalise — ensure all expected keys exist
+    raise AINotConfigured(f"Unknown provider '{provider}'. Choose openai, openrouter, or ollama in Settings.")
+
+
+def generate_social_content(payload: dict, db: Session, model_override: str = "") -> dict:
+    """
+    Call the configured AI provider and return a structured content dict.
+
+    ``model_override`` lets callers pass a Social-Studio-specific model
+    (e.g. the ``copy_model`` setting) that takes priority over the global
+    ``ai_model`` from Settings → AI Provider.
+
+    Raises AINotConfigured if no provider is set up, AIError on call failures.
+    """
+    cfg = _get_settings(db)
+    provider = cfg.get("ai_provider", "").strip()
+
+    if not provider:
+        raise AINotConfigured("No AI provider configured. Go to Settings → AI Provider.")
+
+    effective_model = _resolve_model(cfg, provider, model_override)
+
+    system = _build_system_prompt()
+    user   = _build_user_prompt(payload)
+
+    log.info("AI generate: provider=%s model=%s (override=%s) platform=%s lang=%s",
+             provider, effective_model, model_override or "<none>",
+             payload.get("platform"), payload.get("language"))
+
+    result = _dispatch_llm(cfg, provider, effective_model, system, user)
+
     return {
         "main_copy":       result.get("main_copy", ""),
         "short_variation": result.get("short_variation", ""),
@@ -249,32 +275,61 @@ def generate_social_content(payload: dict, db: Session) -> dict:
     }
 
 
+def generate_image_prompt(prompt: str, social_cfg: dict, db: Session) -> dict:
+    """
+    Send an image generation prompt to the configured image generation model.
+
+    Model priority: image_generation_model > copy_model > global ai_model.
+    """
+    cfg = _get_settings(db)
+    provider = cfg.get("ai_provider", "").strip()
+
+    if not provider:
+        raise AINotConfigured("No AI provider configured. Go to Settings → AI Provider.")
+
+    image_model = (social_cfg.get("image_generation_model") or "").strip()
+    copy_model = (social_cfg.get("copy_model") or "").strip()
+    model_override = image_model or copy_model
+    effective_model = _resolve_model(cfg, provider, model_override)
+
+    system = (
+        "You are an AI image generation assistant for Bricopro, a Montreal home renovation contractor. "
+        "You help create image prompts and visual descriptions for social media content. "
+        "Given the user's description, generate a detailed image generation prompt suitable for "
+        "DALL-E, Stable Diffusion, or similar tools.\n\n"
+        "Return a JSON object with these keys:\n"
+        '{\n'
+        '  "image_prompt": "detailed prompt for image generation",\n'
+        '  "style": "suggested style (photo-realistic, illustration, etc.)",\n'
+        '  "aspect_ratio": "suggested aspect ratio (1:1, 4:5, 16:9)",\n'
+        '  "notes": "any notes for the user about the generated image"\n'
+        '}\n'
+        "Return only valid JSON. No markdown fences."
+    )
+
+    log.info("AI image generate: provider=%s model=%s (override=%s)", provider, effective_model, model_override or "<none>")
+
+    result = _dispatch_llm(cfg, provider, effective_model, system, prompt)
+
+    return {
+        "image_prompt": result.get("image_prompt", prompt),
+        "style": result.get("style", "photo-realistic"),
+        "aspect_ratio": result.get("aspect_ratio", "1:1"),
+        "notes": result.get("notes", "Review the prompt before generating."),
+    }
+
+
 def test_connection(db: Session) -> dict:
     """Send a minimal prompt to verify the provider is reachable and the key works."""
     cfg = _get_settings(db)
     provider = cfg.get("ai_provider", "").strip()
-    api_key  = cfg.get("ai_api_key",  "").strip()
-    base_url = cfg.get("ai_base_url", "").strip()
-    model    = cfg.get("ai_model",    "").strip()
 
     if not provider:
         raise AINotConfigured("No AI provider configured.")
 
+    effective_model = _resolve_model(cfg, provider)
     ping_prompt = 'Reply with exactly this JSON: {"ok": true, "message": "Bricopro HQ connection test successful"}'
 
-    if provider == "ollama":
-        effective_base  = base_url or OLLAMA_DEFAULT_BASE
-        effective_model = model or DEFAULT_MODELS["ollama"]
-        result = _call_ollama(effective_base, effective_model, "You are a helpful assistant.", ping_prompt)
-    elif provider in ("openai", "openrouter"):
-        if not api_key:
-            raise AINotConfigured(f"API key not configured for {provider}.")
-        effective_base  = base_url  or (OPENAI_DEFAULT_BASE if provider == "openai" else OPENROUTER_DEFAULT_BASE)
-        effective_model = model or DEFAULT_MODELS.get(provider, "gpt-4o-mini")
-        extra = ({"HTTP-Referer": "https://bricopro.ca", "X-Title": "Bricopro HQ"} if provider == "openrouter" else None)
-        result = _call_openai_compatible(effective_base, api_key, effective_model,
-                                         "You are a helpful assistant.", ping_prompt, extra_headers=extra, timeout=15)
-    else:
-        raise AINotConfigured(f"Unknown provider '{provider}'.")
+    result = _dispatch_llm(cfg, provider, effective_model, "You are a helpful assistant.", ping_prompt)
 
     return {"ok": True, "message": result.get("message", "Connection successful"), "provider": provider, "model": effective_model}

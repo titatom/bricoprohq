@@ -429,14 +429,64 @@ class JobberConnector(BaseConnector):
     provider = "jobber"
 
     def _get_bearer_token(self) -> str:
-        """Return OAuth access token if available, otherwise fall back to legacy api_key."""
-        if self.integration.oauth_access_token:
-            return self.integration.oauth_access_token
+        """Return OAuth access token, refreshing automatically if expired."""
+        intg = self.integration
+        if intg.oauth_access_token:
+            now = datetime.now(timezone.utc)
+            expires_at = intg.oauth_token_expires_at
+            if expires_at and expires_at.replace(tzinfo=timezone.utc) <= now + timedelta(seconds=60):
+                self._refresh_token()
+            return intg.oauth_access_token
         if self.api_key:
             return self.api_key
         raise ConnectorNotConfigured(
             "jobber: not connected via OAuth. Click 'Connect with Jobber' in Settings."
         )
+
+    def _refresh_token(self) -> None:
+        intg = self.integration
+        if not intg.oauth_refresh_token:
+            raise ConnectorNotConfigured(
+                "jobber: access token expired and no refresh token stored. "
+                "Reconnect via Settings → Integrations."
+            )
+        config = self.config
+        client_id = config.get("client_id", "")
+        client_secret = config.get("client_secret", "")
+        if not client_id or not client_secret:
+            raise ConnectorNotConfigured(
+                "jobber: client_id/client_secret missing for token refresh."
+            )
+        try:
+            resp = httpx.post(
+                "https://api.getjobber.com/api/oauth/token",
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "refresh_token": intg.oauth_refresh_token,
+                    "grant_type": "refresh_token",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            token_data = resp.json()
+        except httpx.HTTPStatusError as exc:
+            log.error("Jobber token refresh failed: %s %s", exc.response.status_code, exc.response.text)
+            raise ConnectorError(f"Jobber token refresh failed: {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise ConnectorError(f"Jobber token refresh request failed: {exc}") from exc
+
+        expires_in = token_data.get("expires_in", 3600)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+        intg.oauth_access_token = token_data["access_token"]
+        if token_data.get("refresh_token"):
+            intg.oauth_refresh_token = token_data["refresh_token"]
+        intg.oauth_token_expires_at = expires_at
+        session = object_session(intg)
+        if session:
+            session.commit()
+        log.info("Jobber OAuth token refreshed successfully")
 
     def _post_graphql(self, graphql_url: str, bearer: str, query: str) -> dict:
         try:
@@ -450,6 +500,19 @@ class JobberConnector(BaseConnector):
                 },
                 timeout=10,
             )
+            if r.status_code == 401:
+                log.info("Jobber returned 401, attempting token refresh")
+                self._refresh_token()
+                r = httpx.post(
+                    graphql_url,
+                    json={"query": query},
+                    headers={
+                        "Authorization": f"Bearer {self.integration.oauth_access_token}",
+                        "Content-Type": "application/json",
+                        "X-JOBBER-GRAPHQL-VERSION": JOBBER_GRAPHQL_VERSION,
+                    },
+                    timeout=10,
+                )
             r.raise_for_status()
         except httpx.HTTPStatusError as exc:
             _raise_http_status(exc, "Jobber")
