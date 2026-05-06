@@ -871,11 +871,13 @@ def _template_fallback(payload: SocialGenerateIn) -> dict:
 def social_generate(payload: SocialGenerateIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     from .services.ai import generate_social_content, AINotConfigured, AIError
 
+    social_cfg = _social_settings_map(db)
+    copy_model = social_cfg.get("copy_model", "")
     title = f"{payload.service_category} — {payload.platform}"
     ai_used = True
 
     try:
-        generated = generate_social_content(payload.model_dump(), db)
+        generated = generate_social_content(payload.model_dump(), db, model_override=copy_model)
     except AINotConfigured as exc:
         log.warning("AI not configured, using template fallback: %s", exc)
         generated = _template_fallback(payload)
@@ -1249,6 +1251,7 @@ def social_generate_pack(payload: dict, _: User = Depends(auth_user), db: Sessio
     from .services.ai import generate_social_content, AINotConfigured, AIError
 
     social_cfg = _social_settings_map(db)
+    copy_model = social_cfg.get("copy_model", "")
     raw_platforms = payload.get("platforms")
     if isinstance(raw_platforms, str):
         platforms = [p.strip() for p in raw_platforms.split(",") if p.strip()]
@@ -1291,7 +1294,7 @@ def social_generate_pack(payload: dict, _: User = Depends(auth_user), db: Sessio
         }
         ai_used = True
         try:
-            generated = generate_social_content(draft_payload, db)
+            generated = generate_social_content(draft_payload, db, model_override=copy_model)
         except AINotConfigured:
             generated = _template_fallback(SimpleNamespace(**draft_payload))
             ai_used = False
