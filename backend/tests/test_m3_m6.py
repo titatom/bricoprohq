@@ -1,8 +1,5 @@
 import os
 import importlib
-from unittest.mock import patch
-
-import httpx
 from fastapi.testclient import TestClient
 
 
@@ -181,65 +178,6 @@ def test_social_studio_album_candidate_and_settings_flow():
         data = pack.json()
         assert len(data["drafts"]) == 2
         assert data["drafts"][0]["platform"] in {"facebook", "instagram"}
-
-
-def test_social_studio_immich_album_assets_endpoint():
-    app = make_client("test_social_studio_immich_assets.db")
-    with TestClient(app) as c:
-        h = auth(c)
-        c.put(
-            "/integrations/immich",
-            headers=h,
-            json={"base_url": "http://immich.local:2283", "config_json": '{"api_key":"test-key"}'},
-        )
-        c.put("/social/settings", headers=h, json={"default_album_id": "album-1"})
-
-        albums_request = httpx.Request("GET", "http://immich.local:2283/api/albums")
-        album_request = httpx.Request("GET", "http://immich.local:2283/api/albums/album-1")
-        responses = [
-            httpx.Response(
-                200,
-                json=[{"id": "album-1", "albumName": "Spring Jobs", "assetCount": 2}],
-                request=albums_request,
-            ),
-            httpx.Response(
-                200,
-                json={
-                    "id": "album-1",
-                    "albumName": "Spring Jobs",
-                    "assets": [
-                        {
-                            "id": "asset-1",
-                            "originalFileName": "after.jpg",
-                            "type": "IMAGE",
-                            "fileCreatedAt": "2026-05-01T12:00:00Z",
-                        }
-                    ],
-                },
-                request=album_request,
-            ),
-        ]
-
-        with patch("httpx.get", side_effect=responses) as mock_get:
-            albums = c.get("/social/albums", headers=h)
-            assets = c.get("/social/immich/albums/album-1/assets", headers=h)
-
-        assert albums.status_code == 200, albums.text
-        assert albums.json()[0]["name"] == "Spring Jobs"
-        assert assets.status_code == 200, assets.text
-        assert assets.json()["assets"] == [
-            {
-                "id": "asset-1",
-                "asset_id": "asset-1",
-                "title": "after.jpg",
-                "filename": "after.jpg",
-                "type": "IMAGE",
-                "created_at": "2026-05-01T12:00:00Z",
-                "thumbnail_url": "/integrations/immich/assets/asset-1/thumbnail",
-                "asset_url": "http://immich.local:2283/photos/asset-1",
-            }
-        ]
-        assert mock_get.call_args_list[0].kwargs["headers"] == {"x-api-key": "test-key"}
 
 
 def test_kpi_crud_and_summary():

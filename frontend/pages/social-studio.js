@@ -18,53 +18,52 @@ const SERVICE_CATEGORIES = [
 ];
 
 const PLATFORMS = [
-  { value: 'facebook', label: 'Facebook' },
-  { value: 'instagram', label: 'Instagram' },
-  { value: 'gbp', label: 'Google Business Profile' },
-  { value: 'linkedin', label: 'LinkedIn' },
-  { value: 'website', label: 'Website / Gallery' },
-  { value: 'ad', label: 'Ad concept' },
-  { value: 'email_sms', label: 'Email / SMS' },
+  { value: 'facebook',   label: 'Facebook' },
+  { value: 'instagram',  label: 'Instagram' },
+  { value: 'gbp',        label: 'Google Business Profile' },
+  { value: 'linkedin',   label: 'LinkedIn' },
+  { value: 'website',    label: 'Website / Gallery' },
+  { value: 'ad',         label: 'Ad concept' },
+  { value: 'email_sms',  label: 'Email / SMS' },
 ];
 
 const LANGUAGES = [
-  { value: 'fr', label: 'Français' },
-  { value: 'en', label: 'English' },
+  { value: 'fr',        label: 'Français' },
+  { value: 'en',        label: 'English' },
   { value: 'bilingual', label: 'Bilingual' },
 ];
 
 const TONES = [
-  { value: 'professional', label: 'Professional' },
-  { value: 'friendly', label: 'Friendly' },
-  { value: 'local', label: 'Local / Neighbourly' },
-  { value: 'premium', label: 'Premium' },
-  { value: 'educational', label: 'Educational' },
-  { value: 'urgent', label: 'Urgent / Seasonal' },
-  { value: 'trust', label: 'Trust-building' },
-  { value: 'before_after', label: 'Before / After Showcase' },
+  { value: 'professional',  label: 'Professional' },
+  { value: 'friendly',      label: 'Friendly' },
+  { value: 'local',         label: 'Local / Neighbourly' },
+  { value: 'premium',       label: 'Premium' },
+  { value: 'educational',   label: 'Educational' },
+  { value: 'urgent',        label: 'Urgent / Seasonal' },
+  { value: 'trust',         label: 'Trust-building' },
+  { value: 'before_after',  label: 'Before / After Showcase' },
 ];
 
 const CTAS = [
-  { value: 'request_quote', label: 'Request a quote' },
-  { value: 'book_spring', label: 'Book spring work' },
-  { value: 'book_winter', label: 'Book before winter' },
-  { value: 'visit_website', label: 'Visit website' },
-  { value: 'call_message', label: 'Call / message us' },
-  { value: 'ask_availability', label: 'Ask about availability' },
-  { value: 'leave_review', label: 'Leave a review' },
-  { value: 'see_projects', label: 'See more projects' },
+  { value: 'request_quote',   label: 'Request a quote' },
+  { value: 'book_spring',     label: 'Book spring work' },
+  { value: 'book_winter',     label: 'Book before winter' },
+  { value: 'visit_website',   label: 'Visit website' },
+  { value: 'call_message',    label: 'Call / message us' },
+  { value: 'ask_availability',label: 'Ask about availability' },
+  { value: 'leave_review',    label: 'Leave a review' },
+  { value: 'see_projects',    label: 'See more projects' },
 ];
 
 const DEFAULT_FORM = {
-  album_id: '',
+  album_id: 'album-exteriors',
   service_category: SERVICE_CATEGORIES[0],
-  platforms: ['facebook', 'instagram', 'gbp'],
+  platform: 'facebook',
   language: 'fr',
-  tone: 'local',
+  tone: 'professional',
   job_description: '',
   city: 'Montréal',
   cta: 'request_quote',
-  before_after_requested: false,
 };
 
 const SEASONAL_CAMPAIGN_IDEAS = [
@@ -88,79 +87,31 @@ const SEASONAL_CAMPAIGN_IDEAS = [
   },
 ];
 
-function platformDefaults(value = '') {
-  const parsed = String(value || '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
-  return parsed.length ? parsed : DEFAULT_FORM.platforms;
-}
-
-function ImmichPickerThumbnail({ asset }) {
-  const { apiFetch } = useAuth();
-  const [src, setSrc] = useState('');
-  const [failed, setFailed] = useState(false);
-  const assetId = asset?.id;
-
-  useEffect(() => {
-    let objectUrl = '';
-    let cancelled = false;
-
-    async function loadThumbnail() {
-      if (!assetId) return;
-      setFailed(false);
-      setSrc('');
-      try {
-        const response = await apiFetch(`/integrations/immich/assets/${encodeURIComponent(assetId)}/thumbnail`, {
-          headers: {},
-        });
-        if (!response.ok) throw new Error('thumbnail failed');
-        const blob = await response.blob();
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setSrc(objectUrl);
-      } catch (err) {
-        if (!cancelled) setFailed(true);
-      }
-    }
-
-    loadThumbnail();
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [apiFetch, assetId]);
-
-  if (src && !failed) {
-    return <img src={src} alt={asset.filename || 'Immich asset'} className="w-full h-full object-cover group-hover:scale-105 transition-transform" loading="lazy" />;
-  }
-
-  return (
-    <div className="w-full h-full flex items-center justify-center text-xs text-gray-400 p-3 text-center">
-      {failed ? 'Preview unavailable' : asset.filename || 'Photo'}
-    </div>
-  );
-}
-
-function ImmichImageCard({ asset, selected, onToggle }) {
+function CandidateCard({ candidate, selected, onToggle }) {
   return (
     <button
       type="button"
       onClick={onToggle}
-      className={`group text-left rounded-2xl border overflow-hidden bg-white transition-all ${
-        selected ? 'border-accent-500 ring-2 ring-accent-100' : 'border-gray-100 hover:border-brand-200'
+      className={`text-left rounded-2xl border p-4 transition-colors ${
+        selected ? 'border-accent-500 bg-accent-50' : 'border-gray-100 bg-white hover:border-brand-200'
       }`}
     >
-      <div className="aspect-square bg-gray-100 overflow-hidden">
-        <ImmichPickerThumbnail asset={asset} />
-      </div>
-      <div className="p-3">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-sm font-medium text-gray-800 truncate">{asset.filename || 'Untitled photo'}</p>
-          <span className={`w-5 h-5 rounded-full border flex items-center justify-center text-xs ${selected ? 'bg-accent-500 border-accent-500 text-white' : 'border-gray-200 text-transparent'}`}>✓</span>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-semibold text-gray-900">{candidate.title}</p>
+          <p className="text-xs text-gray-500 mt-1">{candidate.service_category}</p>
         </div>
-        {asset.created_at && <p className="text-xs text-gray-400 mt-1">{new Date(asset.created_at).toLocaleDateString()}</p>}
+        <span className="badge bg-brand-100 text-brand-700">{candidate.score}%</span>
       </div>
+      <p className="text-sm text-gray-600 mt-3">{candidate.reason}</p>
+      <div className="flex flex-wrap gap-1.5 mt-3">
+        {(candidate.labels || []).map((label) => (
+          <span key={label} className="badge bg-gray-100 text-gray-600">{label}</span>
+        ))}
+      </div>
+      {candidate.before_after_pair && (
+        <p className="text-xs text-accent-700 font-medium mt-3">Before/after candidate available</p>
+      )}
     </button>
   );
 }
@@ -174,27 +125,18 @@ function ResultCard({ result, onSave, saving }) {
 
   return (
     <div className="card mt-6 border-l-4 border-accent-500">
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+      <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="font-semibold text-gray-800">4. Review generated posts</h3>
-          <p className="text-xs text-gray-400">Edit each platform draft before saving to the publishing queue.</p>
+          <h3 className="font-semibold text-gray-800">Editable content pack</h3>
+          <p className="text-xs text-gray-400">Every field below can be changed before saving.</p>
         </div>
-        <div className="flex gap-2">
-          <button className="btn-primary" onClick={() => onSave(editedDrafts)} disabled={saving}>
-            {saving ? 'Saving...' : 'Save to Publishing Queue'}
-          </button>
-          <button className="btn-secondary" type="button" disabled title="Direct publishing will be enabled once platform publishing endpoints are connected.">
-            Post directly
-          </button>
-        </div>
+        <button className="btn-primary" onClick={() => onSave(editedDrafts)} disabled={saving}>
+          {saving ? 'Saving…' : 'Save to Publishing Queue'}
+        </button>
       </div>
       <div className="space-y-5">
         {editedDrafts.map((draft, idx) => (
           <div key={`${draft.platform}-${idx}`} className="rounded-2xl border border-gray-100 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <span className="badge bg-brand-100 text-brand-700">{draft.platform}</span>
-              {draft.ai_used === false && <span className="badge bg-yellow-100 text-yellow-700">Template fallback</span>}
-            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="label">Title</label>
@@ -207,31 +149,30 @@ function ResultCard({ result, onSave, saving }) {
                 </select>
               </div>
               <div>
-                <label className="label">Main copy</label>
-                <textarea className="input h-40 resize-y" value={draft.main_copy || ''} onChange={(e) => updateDraft(idx, { main_copy: e.target.value })} />
+                <label className="label">Main Copy</label>
+                <textarea className="input h-36 resize-y" value={draft.main_copy || ''} onChange={(e) => updateDraft(idx, { main_copy: e.target.value })} />
               </div>
               <div>
-                <label className="label">Short variation</label>
-                <textarea className="input h-40 resize-y" value={draft.short_variation || ''} onChange={(e) => updateDraft(idx, { short_variation: e.target.value })} />
+                <label className="label">Short Variation</label>
+                <textarea className="input h-36 resize-y" value={draft.short_variation || ''} onChange={(e) => updateDraft(idx, { short_variation: e.target.value })} />
               </div>
               <div>
                 <label className="label">Hashtags</label>
                 <input className="input" value={draft.hashtags || ''} onChange={(e) => updateDraft(idx, { hashtags: e.target.value })} />
               </div>
               <div>
-                <label className="label">Call to action</label>
+                <label className="label">Call to Action</label>
                 <input className="input" value={draft.cta || ''} onChange={(e) => updateDraft(idx, { cta: e.target.value })} />
               </div>
               <div>
-                <label className="label">Selected Immich assets</label>
+                <label className="label">Selected Assets</label>
                 <textarea className="input h-20 resize-y" value={(draft.selected_assets || []).join(', ')} readOnly />
               </div>
               <div>
-                <label className="label">Visual direction</label>
+                <label className="label">Before / After Direction</label>
                 <textarea className="input h-20 resize-y" value={draft.visual_direction || ''} onChange={(e) => updateDraft(idx, { visual_direction: e.target.value })} />
               </div>
             </div>
-            {draft.notes && <p className="text-xs text-gray-400 mt-3">{draft.notes}</p>}
           </div>
         ))}
       </div>
@@ -242,14 +183,13 @@ function ResultCard({ result, onSave, saving }) {
 export default function SocialStudioPage() {
   const { isLoggedIn, apiFetch } = useAuth();
   const [form, setForm] = useState(DEFAULT_FORM);
-  const [settings, setSettings] = useState({});
   const [albums, setAlbums] = useState([]);
-  const [assets, setAssets] = useState([]);
+  const [candidates, setCandidates] = useState([]);
   const [selectedAssets, setSelectedAssets] = useState([]);
   const [result, setResult] = useState(null);
   const [campaigns, setCampaigns] = useState([]);
-  const [loadingAssets, setLoadingAssets] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [kpiSaving, setKpiSaving] = useState(false);
   const [error, setError] = useState('');
@@ -259,33 +199,14 @@ export default function SocialStudioPage() {
     engagement_rate: 0, notes: '',
   });
 
-  const applySettings = (data) => {
-    setSettings(data);
-    setForm((prev) => ({
-      ...prev,
-      album_id: data.default_album_id || prev.album_id,
-      platforms: platformDefaults(data.default_platforms),
-      language: data.default_language || prev.language,
-      tone: data.default_tone || prev.tone,
-      city: data.default_city || prev.city,
-      cta: data.default_cta || prev.cta,
-      before_after_requested: data.before_after_enabled === 'true' ? prev.before_after_requested : false,
-    }));
-  };
-
-  const loadSettings = useCallback(async () => {
-    const r = await apiFetch('/social/settings');
-    if (r.ok) applySettings(await r.json());
-  }, [apiFetch]);
-
   const loadAlbums = useCallback(async () => {
     const r = await apiFetch('/social/albums');
     if (r.ok) {
       const data = await r.json();
       setAlbums(data);
-      setForm((prev) => ({ ...prev, album_id: prev.album_id || data[0]?.id || '' }));
+      if (data.length && !form.album_id) setForm((prev) => ({ ...prev, album_id: data[0].id }));
     }
-  }, [apiFetch]);
+  }, [apiFetch, form.album_id]);
 
   const loadCampaigns = useCallback(async () => {
     const r = await apiFetch('/campaigns');
@@ -294,72 +215,64 @@ export default function SocialStudioPage() {
 
   useEffect(() => {
     if (!isLoggedIn) return;
-    loadSettings();
     loadAlbums();
     loadCampaigns();
   }, [isLoggedIn]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const loadAlbumAssets = async () => {
-    if (!form.album_id) {
-      setError('Choose an Immich album first.');
-      return;
-    }
-    setLoadingAssets(true);
-    setError('');
-    setResult(null);
-    const r = await apiFetch(`/social/immich/albums/${encodeURIComponent(form.album_id)}/assets?limit=80`);
-    setLoadingAssets(false);
-    if (!r.ok) {
-      let msg = 'Could not load Immich album photos. Check Social Studio settings and the Immich integration.';
-      try { const data = await r.json(); msg = data.detail || msg; } catch {}
-      setError(msg);
-      setAssets([]);
-      return;
-    }
-    const data = await r.json();
-    setAssets(data.assets || []);
-    setSelectedAssets([]);
-  };
-
-  const togglePlatform = (platform) => {
-    setForm((prev) => {
-      const hasPlatform = prev.platforms.includes(platform);
-      const platforms = hasPlatform
-        ? prev.platforms.filter((item) => item !== platform)
-        : [...prev.platforms, platform];
-      return { ...prev, platforms: platforms.length ? platforms : [platform] };
+  const analyzeAlbum = async () => {
+    setAnalyzing(true); setError(''); setResult(null);
+    const r = await apiFetch('/social/analyze-album', {
+      method: 'POST',
+      body: JSON.stringify({ album_id: form.album_id, service_category: form.service_category }),
     });
+    if (r.ok) {
+      const data = await r.json();
+      setCandidates(data.candidates || []);
+      setSelectedAssets((data.candidates || []).slice(0, 2).map((c) => c.asset_id));
+    } else {
+      setError('Album analysis failed.');
+    }
+    setAnalyzing(false);
   };
 
   const generate = async (e) => {
     e.preventDefault();
-    setGenerating(true);
-    setError('');
-    setResult(null);
-    const selected = assets.filter((asset) => selectedAssets.includes(asset.id));
+    setGenerating(true); setError(''); setResult(null);
+    const selected = candidates.filter((c) => selectedAssets.includes(c.asset_id));
     const r = await apiFetch('/social/generate-pack', {
       method: 'POST',
       body: JSON.stringify({
         album_id: form.album_id,
-        asset_ids: selected.map((asset) => asset.id),
-        platforms: form.platforms,
+        asset_ids: selected.map((c) => c.asset_id),
+        platforms: [form.platform],
         service_category: form.service_category,
         language: form.language,
         tone: form.tone,
         city: form.city,
         cta: form.cta,
-        before_after_requested: form.before_after_requested,
-        job_description: form.job_description || selected.map((asset) => asset.filename || asset.title).join('\n'),
+        job_description: form.job_description || selected.map((c) => `${c.title}: ${c.reason}`).join('\n'),
       }),
     });
-    setGenerating(false);
     if (r.ok) {
-      setResult(await r.json());
-      return;
+      const data = await r.json();
+      setResult({
+        drafts: (data.drafts || []).map((draft) => ({
+          ...draft,
+          visual_direction: draft.visual_direction || (
+            selected.some((c) => c.before_after_pair)
+              ? 'Create before/after image if the selected assets pair cleanly.'
+              : 'Use the strongest single finished-work image.'
+          ),
+        })),
+      });
+    } else {
+      let msg = 'Generation failed.';
+      try { const d = await r.json(); msg = d.detail || msg; } catch {}
+      if (r.status === 502) msg = `AI provider error: ${msg}`;
+      if (r.status === 400) msg = `Configuration issue: ${msg}`;
+      setError(msg);
     }
-    let msg = 'Generation failed.';
-    try { const data = await r.json(); msg = data.detail || msg; } catch {}
-    setError(msg);
+    setGenerating(false);
   };
 
   const saveDraft = async (drafts) => {
@@ -371,7 +284,7 @@ export default function SocialStudioPage() {
         method: 'POST',
         body: JSON.stringify({
           title: draft.title,
-          platform: draft.platform,
+          platform: draft.platform || form.platform,
           language: form.language,
           tone: form.tone,
           service_category: form.service_category,
@@ -379,17 +292,17 @@ export default function SocialStudioPage() {
           short_body: draft.short_variation,
           hashtags: draft.hashtags,
           cta: draft.cta,
-          status: 'needs_review',
+          status: 'draft_generated',
         }),
       });
       if (!r.ok) {
-        savedAll = false;
         setError('Saving draft failed. Please review the generated content and try again.');
+        savedAll = false;
         break;
       }
     }
     setSaving(false);
-    if (savedAll) setError('Drafts saved to the publishing queue for review.');
+    if (savedAll) setError('Drafts saved to the publishing queue.');
   };
 
   const createCampaign = async (idea) => {
@@ -429,201 +342,204 @@ export default function SocialStudioPage() {
   if (!isLoggedIn) return <LoginForm />;
 
   return (
-    <div className="p-6 max-w-7xl">
+    <div className="p-6 max-w-6xl">
       <div className="flex items-start justify-between gap-4 mb-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-900 mb-1">AI Social Studio</h2>
           <p className="text-gray-500 text-sm">
-            Pick project photos from Immich, choose post options, generate editable platform posts, then save or publish.
+            Analyze Immich albums, pick social-worthy images, generate editable copy, plan campaigns, and track results.
           </p>
         </div>
         <Link href="/settings/social-studio" className="btn-secondary text-sm">Social Studio Settings</Link>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div className="xl:col-span-2 space-y-6">
-          <div className="card">
-            <h3 className="font-semibold text-gray-800 mb-4">1. Pick images from Immich</h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="md:col-span-2">
-                <label className="label">Configured Immich album</label>
-                <select className="select" value={form.album_id} onChange={(e) => setForm({ ...form, album_id: e.target.value })}>
-                  <option value="">Choose album...</option>
-                  {albums.map((album) => <option key={album.id} value={album.id}>{album.name} {album.asset_count ? `(${album.asset_count})` : ''}</option>)}
-                </select>
-                <p className="text-xs text-gray-400 mt-1">
-                  Album source is configured in Social Studio settings. Photos shown here are unfiltered; you choose the best ones.
-                </p>
-              </div>
-              <div className="flex items-end">
-                <button className="btn-primary w-full" type="button" onClick={loadAlbumAssets} disabled={loadingAssets || !form.album_id}>
-                  {loadingAssets ? 'Loading photos...' : 'Load Photos'}
-                </button>
-              </div>
-            </div>
-            {settings.image_picker_prompt && (
-              <div className="mt-4 rounded-xl bg-brand-50 border border-brand-100 p-3 text-sm text-brand-700">
-                {settings.image_picker_prompt}
-              </div>
-            )}
-            {assets.length > 0 && (
-              <div className="mt-5">
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-sm text-gray-500">{selectedAssets.length} of {assets.length} photos selected</p>
-                  <button className="btn-secondary text-xs py-1 px-3" type="button" onClick={() => setSelectedAssets([])}>Clear selection</button>
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
-                  {assets.map((asset) => (
-                    <ImmichImageCard
-                      key={asset.id}
-                      asset={asset}
-                      selected={selectedAssets.includes(asset.id)}
-                      onToggle={() => setSelectedAssets((prev) => (
-                        prev.includes(asset.id) ? prev.filter((id) => id !== asset.id) : [...prev, asset.id]
-                      ))}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
+      <div className="card">
+        <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <span>🖼️</span> 1. Analyze an Immich album
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="label">Immich Album</label>
+            <select
+              className="select"
+              value={form.album_id}
+              onChange={(e) => setForm({ ...form, album_id: e.target.value })}
+            >
+              {albums.map((album) => <option key={album.id} value={album.id}>{album.name}</option>)}
+            </select>
           </div>
+          <div>
+            <label className="label">Service Category</label>
+            <select
+              className="select"
+              value={form.service_category}
+              onChange={(e) => setForm({ ...form, service_category: e.target.value })}
+            >
+              {SERVICE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button type="button" className="btn-primary w-full" onClick={analyzeAlbum} disabled={analyzing}>
+              {analyzing ? 'Analyzing…' : 'Analyze Album'}
+            </button>
+          </div>
+        </div>
+      </div>
 
-          <div className="card">
-            <h3 className="font-semibold text-gray-800 mb-4">2. Choose post options</h3>
-            <form onSubmit={generate} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="label">Service category</label>
-                <select className="select" value={form.service_category} onChange={(e) => setForm({ ...form, service_category: e.target.value })}>
-                  {SERVICE_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">Language</label>
-                <select className="select" value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })}>
-                  {LANGUAGES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">Tone</label>
-                <select className="select" value={form.tone} onChange={(e) => setForm({ ...form, tone: e.target.value })}>
-                  {TONES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">City / neighbourhood</label>
-                <input className="input" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
-              </div>
-              <div>
-                <label className="label">Call to action</label>
-                <select className="select" value={form.cta} onChange={(e) => setForm({ ...form, cta: e.target.value })}>
-                  {CTAS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">Before / after montage</label>
-                <label className="flex items-center gap-2 h-11 rounded-lg border border-gray-200 px-3 text-sm text-gray-700">
-                  <input
-                    type="checkbox"
-                    checked={form.before_after_requested}
-                    disabled={settings.before_after_enabled === 'false'}
-                    onChange={(e) => setForm({ ...form, before_after_requested: e.target.checked })}
-                  />
-                  Selected photos are before/after candidates
-                </label>
-              </div>
-              <div className="md:col-span-2">
-                <label className="label">Platforms</label>
-                <div className="flex flex-wrap gap-2">
-                  {PLATFORMS.filter((p) => ['facebook', 'instagram', 'gbp'].includes(p.value)).map(({ value, label }) => (
-                    <button
-                      type="button"
-                      key={value}
-                      onClick={() => togglePlatform(value)}
-                      className={`px-3 py-2 rounded-lg border text-sm ${form.platforms.includes(value) ? 'bg-brand-600 border-brand-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-brand-200'}`}
-                    >
-                      {label}
-                    </button>
-                  ))}
+      {candidates.length > 0 && (
+        <div className="card mt-6">
+          <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+            <span>🎯</span> 2. Select best candidates
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {candidates.map((candidate) => (
+              <CandidateCard
+                key={candidate.asset_id}
+                candidate={candidate}
+                selected={selectedAssets.includes(candidate.asset_id)}
+                onToggle={() => setSelectedAssets((prev) => (
+                  prev.includes(candidate.asset_id)
+                    ? prev.filter((id) => id !== candidate.asset_id)
+                    : [...prev, candidate.asset_id]
+                ))}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="card mt-6">
+        <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <span>✍️</span> 3. Generate platform copy
+        </h3>
+        <form onSubmit={generate} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="label">Platform</label>
+            <select
+              className="select"
+              value={form.platform}
+              onChange={(e) => setForm({ ...form, platform: e.target.value })}
+            >
+              {PLATFORMS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Language</label>
+            <select
+              className="select"
+              value={form.language}
+              onChange={(e) => setForm({ ...form, language: e.target.value })}
+            >
+              {LANGUAGES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Tone</label>
+            <select
+              className="select"
+              value={form.tone}
+              onChange={(e) => setForm({ ...form, tone: e.target.value })}
+            >
+              {TONES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">City / Neighbourhood</label>
+            <input
+              className="input"
+              value={form.city}
+              onChange={(e) => setForm({ ...form, city: e.target.value })}
+              placeholder="Montréal, Plateau-Mont-Royal…"
+            />
+          </div>
+          <div>
+            <label className="label">Call to Action</label>
+            <select
+              className="select"
+              value={form.cta}
+              onChange={(e) => setForm({ ...form, cta: e.target.value })}
+            >
+              {CTAS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <div className="col-span-full">
+            <label className="label">Job Description</label>
+            <textarea
+              className="input h-24 resize-y"
+              value={form.job_description}
+              onChange={(e) => setForm({ ...form, job_description: e.target.value })}
+              placeholder="Brief description of the work done. E.g. Repainted salon walls in Benjamin Moore Swiss Coffee, fixed two small drywall cracks…"
+            />
+          </div>
+          {error && <p className="col-span-full text-sm text-red-600">{error}</p>}
+          <div className="col-span-full flex gap-3">
+            <button type="submit" className="btn-primary" disabled={generating}>
+              {generating ? 'Generating…' : 'Generate Content Pack'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setForm(DEFAULT_FORM)}
+            >
+              Reset
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {result && (
+        <ResultCard result={result} form={form} onSave={saveDraft} saving={saving} />
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+        <div className="card">
+          <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+            <span>🎯</span> Campaign suggestions
+          </h3>
+          <div className="space-y-3">
+            {SEASONAL_CAMPAIGN_IDEAS.map((idea) => (
+              <div key={idea.title} className="rounded-xl border border-gray-100 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-gray-900">{idea.title}</p>
+                    <p className="text-xs text-accent-700 font-medium mt-1">{idea.season}</p>
+                    <p className="text-sm text-gray-600 mt-2">{idea.focus}</p>
+                  </div>
+                  <button className="btn-secondary text-xs" onClick={() => createCampaign(idea)}>Add</button>
                 </div>
               </div>
-              <div className="md:col-span-2">
-                <label className="label">Short job description</label>
-                <textarea
-                  className="input h-28 resize-y"
-                  value={form.job_description}
-                  onChange={(e) => setForm({ ...form, job_description: e.target.value })}
-                  placeholder="Example: Repainted salon walls, fixed two drywall cracks, cleaned trim, finished in a warm neutral colour..."
-                />
-              </div>
-              {error && <p className="md:col-span-2 text-sm text-red-600">{error}</p>}
-              <div className="md:col-span-2 flex gap-3">
-                <button type="submit" className="btn-primary" disabled={generating || selectedAssets.length === 0}>
-                  {generating ? 'Generating...' : '3. Generate posts'}
-                </button>
-                <button type="button" className="btn-secondary" onClick={() => setForm({ ...DEFAULT_FORM, album_id: form.album_id })}>Reset options</button>
-              </div>
-            </form>
+            ))}
           </div>
-
-          {result && <ResultCard result={result} onSave={saveDraft} saving={saving} />}
+          <p className="text-xs text-gray-400 mt-4">{campaigns.length} campaign{campaigns.length !== 1 ? 's' : ''} currently saved.</p>
         </div>
 
-        <div className="space-y-6">
-          <div className="card">
-            <h3 className="font-semibold text-gray-800 mb-3">Workflow status</h3>
-            <div className="space-y-3 text-sm">
-              <div className="flex items-center justify-between"><span className="text-gray-500">Album</span><span className="font-medium text-gray-800">{form.album_id || 'Not selected'}</span></div>
-              <div className="flex items-center justify-between"><span className="text-gray-500">Photos loaded</span><span className="font-medium text-gray-800">{assets.length}</span></div>
-              <div className="flex items-center justify-between"><span className="text-gray-500">Photos selected</span><span className="font-medium text-gray-800">{selectedAssets.length}</span></div>
-              <div className="flex items-center justify-between"><span className="text-gray-500">Platforms</span><span className="font-medium text-gray-800">{form.platforms.join(', ')}</span></div>
-            </div>
-          </div>
-
-          <div className="card">
-            <h3 className="font-semibold text-gray-800 mb-4">Campaign suggestions</h3>
-            <div className="space-y-3">
-              {SEASONAL_CAMPAIGN_IDEAS.map((idea) => (
-                <div key={idea.title} className="rounded-xl border border-gray-100 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-gray-900">{idea.title}</p>
-                      <p className="text-xs text-accent-700 font-medium mt-1">{idea.season}</p>
-                      <p className="text-sm text-gray-600 mt-2">{idea.focus}</p>
-                    </div>
-                    <button className="btn-secondary text-xs" onClick={() => createCampaign(idea)}>Add</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <p className="text-xs text-gray-400 mt-4">{campaigns.length} campaign{campaigns.length !== 1 ? 's' : ''} currently saved.</p>
-          </div>
-
-          <div className="card">
-            <h3 className="font-semibold text-gray-800 mb-4">Track post / ad KPI</h3>
-            <form onSubmit={saveKpi} className="grid grid-cols-1 gap-3">
-              <input className="input" placeholder="Post or ad title" value={kpiForm.title} onChange={(e) => setKpiForm({ ...kpiForm, title: e.target.value })} required />
-              <select className="select" value={kpiForm.platform} onChange={(e) => setKpiForm({ ...kpiForm, platform: e.target.value })}>
-                {PLATFORMS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
-              </select>
-              <input className="input" placeholder="Campaign name" value={kpiForm.campaign_name} onChange={(e) => setKpiForm({ ...kpiForm, campaign_name: e.target.value })} />
-              <input className="input" placeholder="Post/ad URL" value={kpiForm.post_url} onChange={(e) => setKpiForm({ ...kpiForm, post_url: e.target.value })} />
-              {['spend', 'impressions', 'reach', 'clicks', 'leads', 'messages', 'calls', 'engagement_rate'].map((field) => (
-                <input
-                  key={field}
-                  className="input"
-                  type="number"
-                  step={field === 'spend' || field === 'engagement_rate' ? '0.01' : '1'}
-                  placeholder={field.replace('_', ' ')}
-                  value={kpiForm[field]}
-                  onChange={(e) => setKpiForm({ ...kpiForm, [field]: Number(e.target.value) })}
-                />
-              ))}
-              <textarea className="input h-20 resize-y" placeholder="Notes" value={kpiForm.notes} onChange={(e) => setKpiForm({ ...kpiForm, notes: e.target.value })} />
-              <button type="submit" className="btn-primary" disabled={kpiSaving}>
-                {kpiSaving ? 'Saving...' : 'Save KPI record'}
-              </button>
-            </form>
-          </div>
+        <div className="card">
+          <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+            <span>📈</span> Track post / ad KPI
+          </h3>
+          <form onSubmit={saveKpi} className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <input className="input md:col-span-2" placeholder="Post or ad title" value={kpiForm.title} onChange={(e) => setKpiForm({ ...kpiForm, title: e.target.value })} required />
+            <select className="select" value={kpiForm.platform} onChange={(e) => setKpiForm({ ...kpiForm, platform: e.target.value })}>
+              {PLATFORMS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+            </select>
+            <input className="input" placeholder="Campaign name" value={kpiForm.campaign_name} onChange={(e) => setKpiForm({ ...kpiForm, campaign_name: e.target.value })} />
+            <input className="input md:col-span-2" placeholder="Post/ad URL" value={kpiForm.post_url} onChange={(e) => setKpiForm({ ...kpiForm, post_url: e.target.value })} />
+            {['spend', 'impressions', 'reach', 'clicks', 'leads', 'messages', 'calls', 'engagement_rate'].map((field) => (
+              <input
+                key={field}
+                className="input"
+                type="number"
+                step={field === 'spend' || field === 'engagement_rate' ? '0.01' : '1'}
+                placeholder={field.replace('_', ' ')}
+                value={kpiForm[field]}
+                onChange={(e) => setKpiForm({ ...kpiForm, [field]: Number(e.target.value) })}
+              />
+            ))}
+            <textarea className="input md:col-span-2 h-20 resize-y" placeholder="Notes" value={kpiForm.notes} onChange={(e) => setKpiForm({ ...kpiForm, notes: e.target.value })} />
+            <button type="submit" className="btn-primary md:col-span-2" disabled={kpiSaving}>
+              {kpiSaving ? 'Saving…' : 'Save KPI record'}
+            </button>
+          </form>
         </div>
       </div>
     </div>

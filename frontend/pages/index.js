@@ -1,21 +1,16 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import LoginForm from '../components/LoginForm';
 
 const SOURCES = ['google_calendar', 'jobber', 'immich', 'paperless', 'paperless-gpt'];
-const AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-const DASHBOARD_LAYOUT_ORDER_KEY = 'dashboard.layout.order';
-const DASHBOARD_LAYOUT_HIDDEN_KEY = 'dashboard.layout.hidden';
 
 const SOURCE_META = {
-  google_calendar: { label: 'Google Calendar', icon: '📅', logoDomain: 'calendar.google.com', color: 'brand' },
-  jobber:          { label: 'Jobber',          icon: '🔧', logoDomain: 'jobber.com', color: 'brand' },
-  immich:          { label: 'Immich / Photos', icon: '🖼️', logoDomain: 'immich.app', color: 'brand' },
-  paperless:       { label: 'Paperless',       icon: '📄', logoDomain: 'docs.paperless-ngx.com', color: 'brand' },
-  'paperless-gpt': { label: 'Paperless-GPT',   icon: '🤖', logoDomain: 'github.com', color: 'brand' },
+  google_calendar: { label: 'Google Calendar', icon: '📅', color: 'brand' },
+  jobber:          { label: 'Jobber',          icon: '🔧', color: 'brand' },
+  immich:          { label: 'Immich / Photos', icon: '🖼️', color: 'brand' },
+  paperless:       { label: 'Paperless',       icon: '📄', color: 'brand' },
+  'paperless-gpt': { label: 'Paperless-GPT',   icon: '🤖', color: 'brand' },
 };
-
-const DEFAULT_DASHBOARD_ORDER = ['quick_links', ...SOURCES];
 
 const DEFAULT_WIDGET_SETTINGS = {
   paperless: { tag: 'ai-processed', limit: '5' },
@@ -33,15 +28,15 @@ const DEFAULT_WIDGET_SETTINGS = {
 };
 
 const DEFAULT_QUICK_LINKS = [
-  { title: 'Jobber',               icon: 'link', url: 'https://app.jobber.com',              category: 'Operations' },
-  { title: 'Google Calendar',      icon: 'link', url: 'https://calendar.google.com',          category: 'Operations' },
-  { title: 'Gmail',                icon: 'link', url: 'https://mail.google.com',              category: 'Operations' },
-  { title: 'Paperless-ngx',        icon: 'link', url: 'http://paperless.local',               category: 'Documents'  },
-  { title: 'Immich',               icon: 'link', url: 'http://immich.local',                  category: 'Photos'     },
-  { title: 'WordPress Admin',      icon: 'link', url: 'https://bricopro.ca/wp-admin',         category: 'Marketing'  },
-  { title: 'Meta Business Suite',  icon: 'link', url: 'https://business.facebook.com',        category: 'Marketing'  },
-  { title: 'Google Business',      icon: 'link', url: 'https://business.google.com',           category: 'Marketing'  },
-  { title: 'Canva',                icon: 'link', url: 'https://canva.com',                    category: 'Marketing'  },
+  { title: 'Jobber',               icon: '🔧', url: 'https://app.jobber.com',              category: 'Operations' },
+  { title: 'Google Calendar',      icon: '📅', url: 'https://calendar.google.com',          category: 'Operations' },
+  { title: 'Gmail',                icon: '✉️', url: 'https://mail.google.com',              category: 'Operations' },
+  { title: 'Paperless-ngx',        icon: '📄', url: 'http://paperless.local',               category: 'Documents'  },
+  { title: 'Immich',               icon: '🖼️', url: 'http://immich.local',                  category: 'Photos'     },
+  { title: 'WordPress Admin',      icon: '🌐', url: 'https://bricopro.ca/wp-admin',         category: 'Marketing'  },
+  { title: 'Meta Business Suite',  icon: '📣', url: 'https://business.facebook.com',        category: 'Marketing'  },
+  { title: 'Google Business',      icon: '⭐', url: 'https://business.google.com',           category: 'Marketing'  },
+  { title: 'Canva',                icon: '🎨', url: 'https://canva.com',                    category: 'Marketing'  },
 ];
 
 const QUICK_LINK_LOGO_DOMAINS = {
@@ -71,35 +66,21 @@ function logoUrlFor(link) {
   return `https://www.google.com/s2/favicons?domain=${logoDomainFor(link)}&sz=64`;
 }
 
-function initialsFor(text = '') {
-  return String(text || 'Link')
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join('') || 'L';
-}
-
 function QuickLinkIcon({ link }) {
-  const [failed, setFailed] = useState(false);
   const icon = (link.icon || '').trim();
-
-  if (failed) {
-    return (
-      <span className="w-7 h-7 rounded-lg bg-brand-50 text-brand-700 text-xs font-bold flex items-center justify-center">
-        {initialsFor(link.title)}
-      </span>
-    );
+  if (icon && icon !== 'link') {
+    if (/^https?:\/\//i.test(icon)) {
+      return <img src={icon} alt="" className="w-6 h-6 object-contain" loading="lazy" referrerPolicy="no-referrer" />;
+    }
+    return <span className="text-xl leading-none">{icon}</span>;
   }
-
   return (
     <img
-      src={/^https?:\/\//i.test(icon) ? icon : logoUrlFor(link)}
+      src={logoUrlFor(link)}
       alt=""
-      className="w-7 h-7 object-contain"
+      className="w-6 h-6 object-contain"
       loading="lazy"
       referrerPolicy="no-referrer"
-      onError={() => setFailed(true)}
     />
   );
 }
@@ -551,7 +532,7 @@ function QuickLinkForm({ form, setForm, onSubmit, onCancel, submitLabel }) {
       className="flex flex-wrap justify-center gap-2 mb-4 p-3 bg-gray-50 rounded-lg"
       onSubmit={onSubmit}
     >
-      <input className="input w-28" placeholder="Logo URL" value={form.icon} onChange={(e) => setForm({ ...form, icon: e.target.value })} />
+      <input className="input w-20" placeholder="Icon" value={form.icon} onChange={(e) => setForm({ ...form, icon: e.target.value })} />
       <input className="input flex-1 min-w-32" placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required />
       <input className="input flex-1 min-w-48" placeholder="https://..." value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} required />
       <input className="input w-36" placeholder="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
@@ -656,103 +637,47 @@ function QuickLinksWidget({ links, onAdd, onUpdate, onDelete }) {
   );
 }
 
-function safeParseJson(value, fallback) {
-  if (!value) return fallback;
-  try {
-    const parsed = JSON.parse(value);
-    return parsed ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function dashboardCardTitle(cardId) {
-  if (cardId === 'quick_links') return 'Quick Links';
-  return SOURCE_META[cardId]?.label || cardId;
-}
-
-function normalizeDashboardOrder(rawOrder) {
-  const parsed = safeParseJson(rawOrder, DEFAULT_DASHBOARD_ORDER);
-  const order = Array.isArray(parsed) ? parsed : DEFAULT_DASHBOARD_ORDER;
-  return [
-    ...order.filter((id) => DEFAULT_DASHBOARD_ORDER.includes(id)),
-    ...DEFAULT_DASHBOARD_ORDER.filter((id) => !order.includes(id)),
-  ];
-}
-
-function normalizeDashboardHidden(rawHidden) {
-  const parsed = safeParseJson(rawHidden, []);
-  return new Set(Array.isArray(parsed) ? parsed.filter((id) => DEFAULT_DASHBOARD_ORDER.includes(id)) : []);
-}
-
-function DashboardStats({ dashboard }) {
-  const jobber = dashboard.jobber?.data || {};
-  const integrationValues = SOURCES.map((src) => dashboard[src] || {});
-  const connectedCount = integrationValues.filter((item) => item.status === 'ok').length;
-  const staleCount = integrationValues.filter((item) => item.stale).length;
-  const stats = [
+function ProcessingSummary({ summary }) {
+  const cards = [
     {
-      label: 'Upcoming jobs',
-      value: jobber.upcoming_jobs?.length || 0,
-      detail: 'from Jobber',
+      label: 'Images',
+      value: summary?.images_pending ?? 0,
+      detail: 'pending in Immich-GPT',
+      icon: '🧠',
+      color: 'from-brand-600 to-brand-700',
     },
     {
-      label: 'Open requests',
-      value: jobber.pending_requests?.length || 0,
-      detail: 'new work to review',
+      label: 'Documents',
+      value: summary?.documents_pending ?? 0,
+      detail: 'pending in Paperless / Paperless-GPT',
+      icon: '📄',
+      color: 'from-accent-500 to-accent-600',
     },
     {
-      label: 'Pending invoices',
-      value: jobber.pending_invoices?.length || 0,
-      detail: 'awaiting payment',
-    },
-    {
-      label: 'Connected services',
-      value: `${connectedCount}/${SOURCES.length}`,
-      detail: staleCount ? `${staleCount} stale` : 'all current',
+      label: 'Review',
+      value: summary?.needs_review ?? 0,
+      detail: 'items need attention',
+      icon: '👀',
+      color: 'from-gray-700 to-gray-900',
     },
   ];
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-6">
-      {stats.map((stat) => (
-        <div key={stat.label} className="rounded-2xl bg-white border border-gray-100 p-4 shadow-sm">
-          <p className="text-xs font-medium uppercase tracking-wide text-gray-400">{stat.label}</p>
-          <p className="text-3xl font-black text-gray-900 mt-2">{stat.value}</p>
-          <p className="text-xs text-gray-500 mt-1">{stat.detail}</p>
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      {cards.map((card) => (
+        <div key={card.label} className={`rounded-2xl bg-gradient-to-br ${card.color} p-5 text-white shadow-sm`}>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm text-white/75">{card.label} to process</p>
+              <p className="text-4xl font-black mt-2">{card.value}</p>
+            </div>
+            <span className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center text-xl">
+              {card.icon}
+            </span>
+          </div>
+          <p className="text-xs text-white/70 mt-4">{card.detail}</p>
         </div>
       ))}
-    </div>
-  );
-}
-
-function DashboardCustomizePanel({ order, hidden, onMove, onToggle, onReset, onClose }) {
-  return (
-    <div className="card mb-6 border-l-4 border-accent-500">
-      <div className="flex items-start justify-between gap-3 mb-4">
-        <div>
-          <h3 className="font-semibold text-gray-900">Customize dashboard</h3>
-          <p className="text-sm text-gray-500 mt-0.5">Hide cards and choose the order that best matches your day-to-day view.</p>
-        </div>
-        <button className="text-sm text-gray-400 hover:text-gray-700" onClick={onClose}>Close</button>
-      </div>
-      <div className="space-y-2">
-        {order.map((cardId, idx) => (
-          <div key={cardId} className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
-            <label className="flex flex-1 min-w-48 items-center gap-2 text-sm font-medium text-gray-700">
-              <input
-                type="checkbox"
-                checked={!hidden.has(cardId)}
-                onChange={() => onToggle(cardId)}
-              />
-              {dashboardCardTitle(cardId)}
-            </label>
-            <button className="btn-secondary text-xs py-1 px-2" onClick={() => onMove(cardId, -1)} disabled={idx === 0}>Up</button>
-            <button className="btn-secondary text-xs py-1 px-2" onClick={() => onMove(cardId, 1)} disabled={idx === order.length - 1}>Down</button>
-          </div>
-        ))}
-      </div>
-      <button className="btn-secondary text-sm mt-4" onClick={onReset}>Reset dashboard</button>
     </div>
   );
 }
@@ -762,19 +687,13 @@ export default function DashboardPage() {
   const [dashboard, setDashboard] = useState({});
   const [settings, setSettings] = useState({});
   const [quickLinks, setQuickLinks] = useState([]);
+  const [processingSummary, setProcessingSummary] = useState(null);
   const [refreshing, setRefreshing] = useState({});
   const [settingsSource, setSettingsSource] = useState(null);
-  const [customizing, setCustomizing] = useState(false);
-  const [autoRefreshing, setAutoRefreshing] = useState(false);
-  const [lastRefreshedAt, setLastRefreshedAt] = useState(null);
-  const refreshAllInFlight = useRef(false);
 
   const loadDashboard = useCallback(async () => {
     const r = await apiFetch('/dashboard');
-    if (r.ok) {
-      setDashboard(await r.json());
-      setLastRefreshedAt(new Date());
-    }
+    if (r.ok) setDashboard(await r.json());
   }, [apiFetch]);
 
   const loadSettings = useCallback(async () => {
@@ -791,6 +710,11 @@ export default function DashboardPage() {
     if (r.ok) setQuickLinks(await r.json());
   }, [apiFetch]);
 
+  const loadProcessingSummary = useCallback(async () => {
+    const r = await apiFetch('/processing/summary');
+    if (r.ok) setProcessingSummary(await r.json());
+  }, [apiFetch]);
+
   const seedLinks = useCallback(async () => {
     for (const link of DEFAULT_QUICK_LINKS) {
       await apiFetch('/quick-links', {
@@ -805,6 +729,7 @@ export default function DashboardPage() {
     if (!isLoggedIn) return;
     loadDashboard();
     loadSettings();
+    loadProcessingSummary();
     loadQuickLinks().then(async () => {
       const r = await apiFetch('/quick-links');
       if (r.ok) {
@@ -814,56 +739,20 @@ export default function DashboardPage() {
     });
   }, [isLoggedIn]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const refreshSource = useCallback(async (source) => {
+  const refreshSource = async (source) => {
     setRefreshing((p) => ({ ...p, [source]: true }));
-    try {
-      await apiFetch(`/dashboard/refresh/${source}`, { method: 'POST' });
-      await loadDashboard();
-    } finally {
-      setRefreshing((p) => ({ ...p, [source]: false }));
-    }
-  }, [apiFetch, loadDashboard]);
-
-  const refreshAll = useCallback(async ({ background = false } = {}) => {
-    if (refreshAllInFlight.current) return;
-    refreshAllInFlight.current = true;
-    if (background) setAutoRefreshing(true);
-    setRefreshing((prev) => ({
-      ...prev,
-      ...Object.fromEntries(SOURCES.map((source) => [source, true])),
-    }));
-    try {
-      await Promise.all(SOURCES.map((source) => apiFetch(`/dashboard/refresh/${source}`, { method: 'POST' })));
-      await loadDashboard();
-    } finally {
-      refreshAllInFlight.current = false;
-      setAutoRefreshing(false);
-      setRefreshing((prev) => ({
-        ...prev,
-        ...Object.fromEntries(SOURCES.map((source) => [source, false])),
-      }));
-    }
-  }, [apiFetch, loadDashboard]);
-
-  useEffect(() => {
-    if (!isLoggedIn) return;
-    refreshAll({ background: true });
-  }, [isLoggedIn]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!isLoggedIn) return undefined;
-    const interval = window.setInterval(() => {
-      refreshAll({ background: true });
-    }, AUTO_REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(interval);
-  }, [isLoggedIn, refreshAll]);
+    await apiFetch(`/dashboard/refresh/${source}`, { method: 'POST' });
+    await loadDashboard();
+    await loadProcessingSummary();
+    setRefreshing((p) => ({ ...p, [source]: false }));
+  };
 
   const addQuickLink = async (form) => {
     await apiFetch('/quick-links', {
       method: 'POST',
       body: JSON.stringify({
         ...form,
-        icon: form.icon || 'link',
+        icon: form.icon || '🔗',
         sort_order: 0,
         is_active: true,
       }),
@@ -877,7 +766,7 @@ export default function DashboardPage() {
       body: JSON.stringify({
         ...link,
         ...form,
-        icon: form.icon || 'link',
+        icon: form.icon || '🔗',
         is_active: true,
       }),
     });
@@ -943,67 +832,6 @@ export default function DashboardPage() {
   const visibleQuickLinks = quickLinks.filter(
     (link) => link.is_active && link.title?.toLowerCase() !== 'actual budget'
   );
-  const dashboardOrder = normalizeDashboardOrder(settings[DASHBOARD_LAYOUT_ORDER_KEY]);
-  const hiddenCards = normalizeDashboardHidden(settings[DASHBOARD_LAYOUT_HIDDEN_KEY]);
-  const visibleCards = dashboardOrder.filter((cardId) => !hiddenCards.has(cardId));
-
-  const saveDashboardSetting = async (key, value) => {
-    await apiFetch(`/settings/${key}`, { method: 'PUT', body: JSON.stringify({ value }) });
-    await loadSettings();
-  };
-
-  const moveDashboardCard = async (cardId, direction) => {
-    const currentIndex = dashboardOrder.indexOf(cardId);
-    const nextIndex = currentIndex + direction;
-    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= dashboardOrder.length) return;
-    const next = [...dashboardOrder];
-    [next[currentIndex], next[nextIndex]] = [next[nextIndex], next[currentIndex]];
-    await saveDashboardSetting(DASHBOARD_LAYOUT_ORDER_KEY, JSON.stringify(next));
-  };
-
-  const toggleDashboardCard = async (cardId) => {
-    const next = new Set(hiddenCards);
-    if (next.has(cardId)) next.delete(cardId);
-    else next.add(cardId);
-    await saveDashboardSetting(DASHBOARD_LAYOUT_HIDDEN_KEY, JSON.stringify([...next]));
-  };
-
-  const resetDashboardLayout = async () => {
-    await saveDashboardSetting(DASHBOARD_LAYOUT_ORDER_KEY, JSON.stringify(DEFAULT_DASHBOARD_ORDER));
-    await saveDashboardSetting(DASHBOARD_LAYOUT_HIDDEN_KEY, JSON.stringify([]));
-  };
-
-  const renderDashboardCard = (cardId) => {
-    if (cardId === 'quick_links') {
-      return (
-        <QuickLinksWidget
-          key={cardId}
-          links={visibleQuickLinks}
-          onAdd={addQuickLink}
-          onUpdate={updateQuickLink}
-          onDelete={deleteQuickLink}
-        />
-      );
-    }
-    const meta = SOURCE_META[cardId];
-    if (!meta) return null;
-    const w = dashboard[cardId] || {};
-    return (
-      <WidgetCard
-        key={cardId}
-        source={cardId}
-        title={meta.label}
-        icon={meta.icon}
-        status={w.status || 'unknown'}
-        stale={w.stale}
-        data={w.data || {}}
-        settings={widgetSettingsFor(cardId)}
-        onRefresh={() => refreshSource(cardId)}
-        loading={refreshing[cardId]}
-        onConfigure={['paperless', 'immich', 'jobber'].includes(cardId) ? () => setSettingsSource(cardId) : null}
-      />
-    );
-  };
 
   return (
     <div className="p-6">
@@ -1016,41 +844,49 @@ export default function DashboardPage() {
         />
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+      <QuickLinksWidget
+        links={visibleQuickLinks}
+        onAdd={addQuickLink}
+        onUpdate={updateQuickLink}
+        onDelete={deleteQuickLink}
+      />
+
+      <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Dashboard</h2>
-          <p className="text-gray-500 text-sm mt-0.5">
-            Business overview - auto-refreshes every {Math.round(AUTO_REFRESH_INTERVAL_MS / 60000)} minutes
-            {lastRefreshedAt ? ` · last updated ${lastRefreshedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
-            {autoRefreshing ? ' · refreshing...' : ''}
-          </p>
+          <p className="text-gray-500 text-sm mt-0.5">Business overview — today at a glance</p>
         </div>
-        <div className="flex gap-2">
-          <button className="btn-secondary" onClick={() => setCustomizing((value) => !value)}>
-            {customizing ? 'Done' : 'Customize'}
-          </button>
-          <button className="btn-primary" onClick={() => refreshAll()}>
-            Refresh All
-          </button>
-        </div>
+        <button
+          className="btn-primary"
+          onClick={() => { SOURCES.forEach((s) => refreshSource(s)); }}
+        >
+          Refresh All
+        </button>
       </div>
 
-      {customizing && (
-        <DashboardCustomizePanel
-          order={dashboardOrder}
-          hidden={hiddenCards}
-          onMove={moveDashboardCard}
-          onToggle={toggleDashboardCard}
-          onReset={resetDashboardLayout}
-          onClose={() => setCustomizing(false)}
-        />
-      )}
-
-      <DashboardStats dashboard={dashboard} />
+      <ProcessingSummary summary={processingSummary} />
 
       {/* Integration widgets */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        {visibleCards.map(renderDashboardCard)}
+        {SOURCES.map((src) => {
+          const meta = SOURCE_META[src];
+          const w = dashboard[src] || {};
+          return (
+            <WidgetCard
+              key={src}
+              source={src}
+              title={meta.label}
+              icon={meta.icon}
+              status={w.status || 'unknown'}
+              stale={w.stale}
+              data={w.data || {}}
+              settings={widgetSettingsFor(src)}
+              onRefresh={() => refreshSource(src)}
+              loading={refreshing[src]}
+              onConfigure={['paperless', 'immich', 'jobber'].includes(src) ? () => setSettingsSource(src) : null}
+            />
+          );
+        })}
       </div>
 
     </div>
