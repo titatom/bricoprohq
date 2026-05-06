@@ -427,7 +427,7 @@ function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAs
 // ── Image Generation Tab ──────────────────────────────────────────────────────
 
 function ImageGenerationTab({ albums, settings, apiFetch }) {
-  const [imgForm, setImgForm] = useState({ album_id: '', prompt: '', preset: '' });
+  const [imgForm, setImgForm] = useState({ album_id: '', prompt: '', preset: '', size: '1024x1024', quality: 'standard', refine_prompt: true });
   const [assets, setAssets] = useState([]);
   const [selectedAssets, setSelectedAssets] = useState([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
@@ -436,6 +436,9 @@ function ImageGenerationTab({ albums, settings, apiFetch }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [editingPreset, setEditingPreset] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState(null);
+  const [uploadAlbumId, setUploadAlbumId] = useState('');
 
   useEffect(() => {
     loadPresets();
@@ -493,20 +496,47 @@ function ImageGenerationTab({ albums, settings, apiFetch }) {
     setGenerating(true);
     setError('');
     setResult(null);
-    const r = await apiFetch('/social/generate-image', {
+    setUploadResult(null);
+    const r = await apiFetch('/social/generate-image-actual', {
       method: 'POST',
       body: JSON.stringify({
         prompt: imgForm.prompt,
         preset: imgForm.preset,
         asset_ids: selectedAssets,
+        size: imgForm.size,
+        quality: imgForm.quality,
+        refine_prompt: imgForm.refine_prompt,
       }),
     });
     setGenerating(false);
     if (r.ok) {
-      setResult(await r.json());
+      const data = await r.json();
+      setResult(data);
+      setUploadAlbumId(imgForm.album_id || '');
       return;
     }
     let msg = 'Image generation failed.';
+    try { const data = await r.json(); msg = data.detail || msg; } catch {}
+    setError(msg);
+  };
+
+  const uploadToImmich = async () => {
+    if (!result?.image_id) return;
+    setUploading(true);
+    setUploadResult(null);
+    const r = await apiFetch(`/social/generated-images/${result.image_id}/upload-to-immich`, {
+      method: 'POST',
+      body: JSON.stringify({
+        album_id: uploadAlbumId,
+        filename: `bricopro-generated-${result.image_id}.png`,
+      }),
+    });
+    setUploading(false);
+    if (r.ok) {
+      setUploadResult(await r.json());
+      return;
+    }
+    let msg = 'Upload to Immich failed.';
     try { const data = await r.json(); msg = data.detail || msg; } catch {}
     setError(msg);
   };
@@ -625,6 +655,35 @@ function ImageGenerationTab({ albums, settings, apiFetch }) {
             />
           </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="label">Size</label>
+              <select className="select" value={imgForm.size} onChange={(e) => setImgForm({ ...imgForm, size: e.target.value })}>
+                <option value="1024x1024">1024 x 1024 (Square)</option>
+                <option value="1792x1024">1792 x 1024 (Landscape)</option>
+                <option value="1024x1792">1024 x 1792 (Portrait)</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Quality</label>
+              <select className="select" value={imgForm.quality} onChange={(e) => setImgForm({ ...imgForm, quality: e.target.value })}>
+                <option value="standard">Standard</option>
+                <option value="hd">HD</option>
+              </select>
+            </div>
+            <div className="flex items-end">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={imgForm.refine_prompt}
+                  onChange={(e) => setImgForm({ ...imgForm, refine_prompt: e.target.checked })}
+                  className="w-4 h-4 rounded border-gray-300 text-accent-500 focus:ring-accent-500"
+                />
+                <span className="text-sm text-gray-700">Refine prompt with AI first</span>
+              </label>
+            </div>
+          </div>
+
           {error && <p className="text-sm text-red-600">{error}</p>}
 
           <button
@@ -633,36 +692,87 @@ function ImageGenerationTab({ albums, settings, apiFetch }) {
             onClick={generateImage}
             disabled={generating || (!imgForm.prompt && !imgForm.preset)}
           >
-            {generating ? 'Generating...' : 'Generate Image'}
+            {generating ? 'Generating image...' : 'Generate Image'}
           </button>
+          {generating && (
+            <p className="text-xs text-gray-400 mt-1">Image generation can take 15-60 seconds depending on the model and settings.</p>
+          )}
         </div>
       </div>
 
       {result && (
         <div className="card border-l-4 border-accent-500">
-          <h3 className="font-semibold text-gray-800 mb-3">Generated Result</h3>
-          <div className="space-y-3">
-            <div>
-              <label className="label">Image prompt</label>
-              <textarea className="input h-28 resize-y" value={result.result?.image_prompt || ''} readOnly />
+          <h3 className="font-semibold text-gray-800 mb-3">Generated Image</h3>
+          <div className="space-y-4">
+            <div className="rounded-xl overflow-hidden border border-gray-200 bg-gray-50">
+              <img
+                src={result.image_url}
+                alt="Generated image"
+                className="w-full max-w-2xl mx-auto block"
+                style={{ aspectRatio: imgForm.size === '1792x1024' ? '1792/1024' : imgForm.size === '1024x1792' ? '1024/1792' : '1/1' }}
+              />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+            {result.revised_prompt && (
               <div>
-                <label className="label">Style</label>
-                <input className="input" value={result.result?.style || ''} readOnly />
+                <label className="label">Prompt used by the model</label>
+                <textarea className="input h-24 resize-y text-sm" value={result.revised_prompt} readOnly />
               </div>
-              <div>
-                <label className="label">Aspect ratio</label>
-                <input className="input" value={result.result?.aspect_ratio || ''} readOnly />
+            )}
+
+            {result.refined_prompt && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="label">Suggested style</label>
+                  <input className="input" value={result.refined_prompt?.style || ''} readOnly />
+                </div>
+                <div>
+                  <label className="label">Aspect ratio</label>
+                  <input className="input" value={result.refined_prompt?.aspect_ratio || ''} readOnly />
+                </div>
+                <div>
+                  <label className="label">Notes</label>
+                  <input className="input" value={result.refined_prompt?.notes || ''} readOnly />
+                </div>
               </div>
-              <div>
-                <label className="label">Notes</label>
-                <input className="input" value={result.result?.notes || ''} readOnly />
+            )}
+
+            <div className="border-t border-gray-100 pt-4">
+              <h4 className="font-medium text-gray-700 mb-3">Send to Immich</h4>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                <div className="md:col-span-2">
+                  <label className="label">Destination album</label>
+                  <select className="select" value={uploadAlbumId} onChange={(e) => setUploadAlbumId(e.target.value)}>
+                    <option value="">No album (upload to library only)</option>
+                    {albums.map((album) => <option key={album.id} value={album.id}>{album.name} {album.asset_count ? `(${album.asset_count})` : ''}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    className="btn-primary w-full"
+                    onClick={uploadToImmich}
+                    disabled={uploading}
+                  >
+                    {uploading ? 'Uploading...' : 'Upload to Immich'}
+                  </button>
+                </div>
               </div>
+              {uploadResult && (
+                <div className="mt-3 rounded-lg bg-green-50 border border-green-200 p-3">
+                  <p className="text-sm text-green-700 font-medium">
+                    Image uploaded successfully to Immich{uploadResult.album_id ? ' and added to album' : ''}.
+                  </p>
+                  <p className="text-xs text-green-600 mt-1">Asset ID: {uploadResult.asset_id}</p>
+                </div>
+              )}
             </div>
-            <p className="text-xs text-gray-400">
-              Copy the image prompt above and use it with your preferred image generation tool. Results can be uploaded to Immich.
-            </p>
+
+            <div className="flex items-center gap-2 text-xs text-gray-400">
+              <span>Model: {result.model}</span>
+              <span>|</span>
+              <span>Size: {result.size}</span>
+            </div>
           </div>
         </div>
       )}

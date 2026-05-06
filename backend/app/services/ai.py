@@ -319,6 +319,81 @@ def generate_image_prompt(prompt: str, social_cfg: dict, db: Session) -> dict:
     }
 
 
+def generate_image_dall_e(prompt: str, social_cfg: dict, db: Session, size: str = "1024x1024", quality: str = "standard") -> dict:
+    """
+    Actually generate an image using the OpenAI DALL-E API (or compatible endpoint).
+
+    Returns dict with 'image_url' or 'image_b64' depending on response format,
+    plus metadata about the generation.
+    """
+    cfg = _get_settings(db)
+    provider = cfg.get("ai_provider", "").strip()
+
+    if not provider:
+        raise AINotConfigured("No AI provider configured. Go to Settings → AI Provider.")
+
+    api_key = cfg.get("ai_api_key", "").strip()
+    base_url = cfg.get("ai_base_url", "").strip()
+
+    if provider == "ollama":
+        raise AIError("Ollama does not support image generation. Use OpenAI or OpenRouter with a DALL-E model.")
+
+    if not api_key:
+        raise AINotConfigured(f"API key not configured for {provider}. Go to Settings → AI Provider.")
+
+    image_model = (social_cfg.get("image_generation_model") or "").strip()
+    effective_model = image_model or "dall-e-3"
+
+    if provider == "openai":
+        effective_base = base_url or OPENAI_DEFAULT_BASE
+    else:
+        effective_base = base_url or OPENROUTER_DEFAULT_BASE
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if provider == "openrouter":
+        headers["HTTP-Referer"] = "https://bricopro.ca"
+        headers["X-Title"] = "Bricopro HQ"
+
+    body = {
+        "model": effective_model,
+        "prompt": prompt,
+        "n": 1,
+        "size": size,
+        "quality": quality,
+        "response_format": "b64_json",
+    }
+
+    log.info("AI image generation: provider=%s model=%s size=%s", provider, effective_model, size)
+
+    try:
+        r = httpx.post(
+            f"{effective_base.rstrip('/')}/images/generations",
+            json=body,
+            headers=headers,
+            timeout=120,
+        )
+        r.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise AIError(f"Image generation HTTP {exc.response.status_code}: {exc.response.text[:500]}") from exc
+    except httpx.RequestError as exc:
+        raise AIError(f"Image generation request failed: {exc}") from exc
+
+    try:
+        data = r.json()["data"][0]
+        return {
+            "image_b64": data.get("b64_json", ""),
+            "image_url": data.get("url", ""),
+            "revised_prompt": data.get("revised_prompt", prompt),
+            "model": effective_model,
+            "size": size,
+        }
+    except (KeyError, IndexError) as exc:
+        raise AIError(f"Unexpected image generation response format: {exc}") from exc
+
+
 def test_connection(db: Session) -> dict:
     """Send a minimal prompt to verify the provider is reachable and the key works."""
     cfg = _get_settings(db)
