@@ -684,6 +684,21 @@ def refresh(source: str, _: User = Depends(auth_user), db: Session = Depends(get
     return {"status": "ok", "source": source}
 
 
+@app.get("/dashboard/jobber-stats")
+def jobber_stats(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Fetch Jobber stats directly for the dashboard header (independent from card limits)."""
+    from .services.connectors import JobberConnector, ConnectorNotConfigured, ConnectorError
+    integration = db.query(Integration).filter(Integration.provider == "jobber").first()
+    if not integration:
+        return {"upcoming_unscheduled_count": 0, "action_required_count": 0, "new_requests_count": 0, "pending_invoice_count": 0}
+    try:
+        connector = JobberConnector(integration)
+        return connector.fetch_stats()
+    except (ConnectorNotConfigured, ConnectorError) as exc:
+        log.warning("Jobber stats fetch failed: %s", exc)
+        return {"upcoming_unscheduled_count": 0, "action_required_count": 0, "new_requests_count": 0, "pending_invoice_count": 0, "error": str(exc)}
+
+
 @app.get("/integrations/immich/assets/{asset_id}/thumbnail")
 def immich_asset_thumbnail(asset_id: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     i = db.query(Integration).filter(Integration.provider == "immich").first()
@@ -1501,6 +1516,12 @@ def drafts(
             "status": d.status,
             "planned_date": d.planned_date.isoformat() if d.planned_date else None,
             "campaign_id": d.campaign_id,
+            "body": d.body,
+            "short_body": d.short_body,
+            "hashtags": d.hashtags,
+            "cta": d.cta,
+            "tone": d.tone,
+            "service_category": d.service_category,
         }
         for d in q.all()
     ]
@@ -1512,6 +1533,41 @@ def create_draft(payload: DraftIn, _: User = Depends(auth_user), db: Session = D
     d = ContentDraft(**payload.model_dump(exclude={"planned_date"}), planned_date=pd)
     db.add(d); db.commit(); db.refresh(d)
     return {"id": d.id}
+
+
+@app.put("/publishing/drafts/{draft_id}")
+def update_draft(
+    draft_id: int,
+    payload: dict,
+    _: User = Depends(auth_user),
+    db: Session = Depends(get_db),
+):
+    """Full draft update - title, body, status, planned_date, etc."""
+    from .schemas import DRAFT_STATUSES
+    d = db.query(ContentDraft).filter(ContentDraft.id == draft_id).first()
+    if not d:
+        raise HTTPException(404, "Draft not found")
+
+    if "title" in payload:
+        d.title = payload["title"]
+    if "body" in payload:
+        d.body = payload["body"]
+    if "short_body" in payload:
+        d.short_body = payload["short_body"]
+    if "hashtags" in payload:
+        d.hashtags = payload["hashtags"]
+    if "cta" in payload:
+        d.cta = payload["cta"]
+    if "status" in payload:
+        if payload["status"] not in DRAFT_STATUSES:
+            raise HTTPException(422, f"Invalid draft status '{payload['status']}'")
+        d.status = payload["status"]
+    if "planned_date" in payload:
+        pd_val = payload["planned_date"]
+        d.planned_date = date.fromisoformat(pd_val) if pd_val else None
+    d.updated_at = datetime.utcnow()
+    db.commit()
+    return {"updated": True, "id": d.id}
 
 
 @app.put("/publishing/drafts/{draft_id}/status")

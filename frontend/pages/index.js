@@ -29,6 +29,9 @@ const DEFAULT_WIDGET_SETTINGS = {
     show_client: 'true',
     show_status: 'true',
     show_date: 'true',
+    job_filter: 'upcoming',
+    request_filter: 'new',
+    invoice_filter: 'late,awaiting_payment',
   },
 };
 
@@ -190,23 +193,50 @@ function WidgetSettingsModal({ source, settings, onClose, onSave }) {
             </div>
           )}
           {isJobber && (
-            <div className="grid grid-cols-1 gap-2 rounded-lg bg-gray-50 p-3">
-              {[
-                ['show_jobs', 'Show jobs'],
-                ['show_requests', 'Show requests'],
-                ['show_quotes', 'Show quotes'],
-                ['show_invoices', 'Show invoices'],
-              ].map(([key, label]) => (
-                <label key={key} className="flex items-center gap-2 text-sm text-gray-700">
-                  <input
-                    type="checkbox"
-                    checked={form[key] !== 'false'}
-                    onChange={(e) => setForm({ ...form, [key]: e.target.checked ? 'true' : 'false' })}
-                  />
-                  {label}
-                </label>
-              ))}
-            </div>
+            <>
+              <div className="grid grid-cols-1 gap-2 rounded-lg bg-gray-50 p-3">
+                {[
+                  ['show_jobs', 'Show jobs'],
+                  ['show_requests', 'Show requests'],
+                  ['show_quotes', 'Show quotes'],
+                  ['show_invoices', 'Show invoices'],
+                ].map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={form[key] !== 'false'}
+                      onChange={(e) => setForm({ ...form, [key]: e.target.checked ? 'true' : 'false' })}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <div>
+                <label className="label">Job filter</label>
+                <select className="input" value={form.job_filter || 'upcoming'} onChange={(e) => setForm({ ...form, job_filter: e.target.value })}>
+                  <option value="upcoming">Upcoming / Active</option>
+                  <option value="unscheduled">Unscheduled</option>
+                  <option value="late">Late</option>
+                  <option value="archived">Archived</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Request filter</label>
+                <select className="input" value={form.request_filter || 'new'} onChange={(e) => setForm({ ...form, request_filter: e.target.value })}>
+                  <option value="new">New only</option>
+                  <option value="all">All pending</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Invoice filter</label>
+                <select className="input" value={form.invoice_filter || 'late,awaiting_payment'} onChange={(e) => setForm({ ...form, invoice_filter: e.target.value })}>
+                  <option value="late,awaiting_payment">Late + Awaiting payment</option>
+                  <option value="late">Late only</option>
+                  <option value="awaiting_payment">Awaiting payment only</option>
+                  <option value="all">All pending</option>
+                </select>
+              </div>
+            </>
           )}
           <div>
             <label className="label">Items to show</label>
@@ -232,21 +262,58 @@ function WidgetSettingsModal({ source, settings, onClose, onSave }) {
 
 function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading, onConfigure, isPaperlessGpt = false }) {
   const docs = isPaperlessGpt ? (data?.documents || []) : (data?.recent_documents || []);
+  const stats = data?.stats || {};
+  const health = data?.health || {};
 
   return (
     <div className="card flex flex-col gap-3">
       <WidgetHeader title={title} icon={icon} status={status} stale={stale} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />
       {status === 'not_connected' ? (
         <p className="text-sm text-red-500">Integration not connected. Configure in Settings.</p>
+      ) : isPaperlessGpt ? (
+        <div className="space-y-3">
+          {health.service && (
+            <div className="flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${health.ok ? 'bg-green-500' : 'bg-red-400'}`}></span>
+              <span className="text-xs text-gray-500">{health.service} {health.ok ? 'online' : 'unreachable'}</span>
+            </div>
+          )}
+          {Object.keys(stats).length > 0 && (
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(stats).map(([key, value]) => (
+                <div key={key} className="rounded-lg bg-gray-50 border border-gray-100 p-2.5">
+                  <p className="text-xs text-gray-400 capitalize">{key.replace(/_/g, ' ')}</p>
+                  <p className="text-lg font-bold text-gray-800">{typeof value === 'number' ? value : String(value)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {docs.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-400">{data?.count ?? docs.length} documents</p>
+              {docs.slice(0, 3).map((doc) => (
+                <a
+                  key={doc.id || doc.title}
+                  href={doc.document_url || '#'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block rounded-lg border border-gray-100 p-3 hover:border-brand-200 hover:bg-brand-50 transition-colors"
+                >
+                  <div className="font-medium text-sm text-gray-800">{doc.title || 'Untitled document'}</div>
+                  {doc.added && <div className="text-xs text-gray-400 mt-1">{new Date(doc.added).toLocaleString()}</div>}
+                </a>
+              ))}
+            </div>
+          )}
+          {!Object.keys(stats).length && docs.length === 0 && (
+            <p className="text-sm text-gray-500">No data from Paperless-GPT yet.</p>
+          )}
+        </div>
       ) : docs.length > 0 ? (
         <div className="space-y-2">
-          {isPaperlessGpt ? (
-            <p className="text-xs text-gray-400">{data?.count ?? docs.length} documents available from Paperless-GPT</p>
-          ) : (
-            <p className="text-xs text-gray-400">
-              Latest documents tagged <span className="font-medium text-gray-600">{data?.tag || 'ai-processed'}</span>
-            </p>
-          )}
+          <p className="text-xs text-gray-400">
+            Latest documents tagged <span className="font-medium text-gray-600">{data?.tag || 'ai-processed'}</span>
+          </p>
           {docs.map((doc) => (
             <a
               key={doc.id || doc.title}
@@ -261,9 +328,7 @@ function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading,
           ))}
         </div>
       ) : (
-        <p className="text-sm text-gray-500">
-          {isPaperlessGpt ? 'No documents returned from Paperless-GPT.' : 'No matching documents found. Use the settings wheel to change the tag.'}
-        </p>
+        <p className="text-sm text-gray-500">No matching documents found. Use the settings wheel to change the tag.</p>
       )}
     </div>
   );
@@ -685,26 +750,26 @@ function normalizeDashboardHidden(rawHidden) {
   return new Set(Array.isArray(parsed) ? parsed.filter((id) => DEFAULT_DASHBOARD_ORDER.includes(id)) : []);
 }
 
-function DashboardStats({ dashboard }) {
-  const jobber = dashboard.jobber?.data || {};
+function DashboardStats({ dashboard, jobberStats }) {
   const integrationValues = SOURCES.map((src) => dashboard[src] || {});
   const connectedCount = integrationValues.filter((item) => item.status === 'ok').length;
   const staleCount = integrationValues.filter((item) => item.stale).length;
   const stats = [
     {
       label: 'Upcoming jobs',
-      value: jobber.upcoming_jobs?.length || 0,
-      detail: 'from Jobber',
+      value: jobberStats.upcoming_unscheduled_count ?? 0,
+      detail: 'unscheduled / action needed',
+      secondary: jobberStats.action_required_count ? `${jobberStats.action_required_count} action required` : '',
     },
     {
       label: 'Open requests',
-      value: jobber.pending_requests?.length || 0,
-      detail: 'new work to review',
+      value: jobberStats.new_requests_count ?? 0,
+      detail: 'new requests to review',
     },
     {
       label: 'Pending invoices',
-      value: jobber.pending_invoices?.length || 0,
-      detail: 'awaiting payment',
+      value: jobberStats.pending_invoice_count ?? 0,
+      detail: 'late + awaiting payment',
     },
     {
       label: 'Connected services',
@@ -720,6 +785,7 @@ function DashboardStats({ dashboard }) {
           <p className="text-xs font-medium uppercase tracking-wide text-gray-400">{stat.label}</p>
           <p className="text-3xl font-black text-gray-900 mt-2">{stat.value}</p>
           <p className="text-xs text-gray-500 mt-1">{stat.detail}</p>
+          {stat.secondary && <p className="text-xs text-orange-500 mt-0.5">{stat.secondary}</p>}
         </div>
       ))}
     </div>
@@ -767,6 +833,7 @@ export default function DashboardPage() {
   const [customizing, setCustomizing] = useState(false);
   const [autoRefreshing, setAutoRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState(null);
+  const [jobberStats, setJobberStats] = useState({});
   const refreshAllInFlight = useRef(false);
 
   const loadDashboard = useCallback(async () => {
@@ -775,6 +842,11 @@ export default function DashboardPage() {
       setDashboard(await r.json());
       setLastRefreshedAt(new Date());
     }
+  }, [apiFetch]);
+
+  const loadJobberStats = useCallback(async () => {
+    const r = await apiFetch('/dashboard/jobber-stats');
+    if (r.ok) setJobberStats(await r.json());
   }, [apiFetch]);
 
   const loadSettings = useCallback(async () => {
@@ -805,6 +877,7 @@ export default function DashboardPage() {
     if (!isLoggedIn) return;
     loadDashboard();
     loadSettings();
+    loadJobberStats();
     loadQuickLinks().then(async () => {
       const r = await apiFetch('/quick-links');
       if (r.ok) {
@@ -834,7 +907,7 @@ export default function DashboardPage() {
     }));
     try {
       await Promise.all(SOURCES.map((source) => apiFetch(`/dashboard/refresh/${source}`, { method: 'POST' })));
-      await loadDashboard();
+      await Promise.all([loadDashboard(), loadJobberStats()]);
     } finally {
       refreshAllInFlight.current = false;
       setAutoRefreshing(false);
@@ -843,7 +916,7 @@ export default function DashboardPage() {
         ...Object.fromEntries(SOURCES.map((source) => [source, false])),
       }));
     }
-  }, [apiFetch, loadDashboard]);
+  }, [apiFetch, loadDashboard, loadJobberStats]);
 
   useEffect(() => {
     if (!isLoggedIn) return;
@@ -913,6 +986,9 @@ export default function DashboardPage() {
         show_requests: settings['dashboard.jobber.show_requests'] || defaults.show_requests,
         show_quotes: settings['dashboard.jobber.show_quotes'] || defaults.show_quotes,
         show_invoices: settings['dashboard.jobber.show_invoices'] || defaults.show_invoices,
+        job_filter: settings['dashboard.jobber.job_filter'] || defaults.job_filter,
+        request_filter: settings['dashboard.jobber.request_filter'] || defaults.request_filter,
+        invoice_filter: settings['dashboard.jobber.invoice_filter'] || defaults.invoice_filter,
       };
     }
     return defaults;
@@ -928,6 +1004,9 @@ export default function DashboardPage() {
             'dashboard.jobber.show_requests': form.show_requests || 'true',
             'dashboard.jobber.show_quotes': form.show_quotes || 'true',
             'dashboard.jobber.show_invoices': form.show_invoices || 'true',
+            'dashboard.jobber.job_filter': form.job_filter || 'upcoming',
+            'dashboard.jobber.request_filter': form.request_filter || 'new',
+            'dashboard.jobber.invoice_filter': form.invoice_filter || 'late,awaiting_payment',
           }
         : { 'dashboard.immich.album_id': form.album_id || '', 'dashboard.immich.limit': form.limit || '6' };
     for (const [key, value] of Object.entries(entries)) {
@@ -1046,7 +1125,7 @@ export default function DashboardPage() {
         />
       )}
 
-      <DashboardStats dashboard={dashboard} />
+      <DashboardStats dashboard={dashboard} jobberStats={jobberStats} />
 
       {/* Integration widgets */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">

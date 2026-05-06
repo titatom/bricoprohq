@@ -394,9 +394,10 @@ def test_paperless_gpt_dashboard_fetches_documents_with_limit():
             r = client.post("/dashboard/refresh/paperless-gpt", headers=h)
 
         assert r.status_code == 200
-        assert str(mock_get.call_args.args[0]) == "http://192.168.1.50:8080/api/bricoprohq/v1/documents"
-        assert mock_get.call_args.kwargs["params"] == {"limit": 25}
-        assert mock_get.call_args.kwargs["headers"] == {"X-API-Key": "secret-token"}
+        documents_call = mock_get.call_args_list[0]
+        assert str(documents_call.args[0]) == "http://192.168.1.50:8080/api/bricoprohq/v1/documents"
+        assert documents_call.kwargs["params"] == {"limit": 25}
+        assert documents_call.kwargs["headers"] == {"X-API-Key": "secret-token"}
         payload = client.get("/dashboard", headers=h).json()
         assert payload["paperless-gpt"]["data"]["documents"] == [
             {
