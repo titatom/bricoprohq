@@ -189,6 +189,24 @@ function ImmichImageCard({ asset, selected, onToggle }) {
   );
 }
 
+function SelectedAssetThumbnails({ assets, selectedAssets }) {
+  if (!selectedAssets.length) return null;
+  const selected = assets.filter((a) => selectedAssets.includes(a.id));
+  if (!selected.length) return null;
+  return (
+    <div className="mt-3">
+      <p className="text-xs text-gray-500 mb-2">{selected.length} photo{selected.length > 1 ? 's' : ''} selected for AI context</p>
+      <div className="flex flex-wrap gap-2">
+        {selected.map((asset) => (
+          <div key={asset.id} className="w-16 h-16 rounded-lg overflow-hidden border border-brand-200 bg-gray-100">
+            <ImmichPickerThumbnail asset={asset} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ImmichImagePicker({ albums, assets, selectedAssets, setSelectedAssets, loadAlbumAssets, loadingAssets, form, setForm, settings, error, setError }) {
   return (
     <div className="card">
@@ -208,11 +226,6 @@ function ImmichImagePicker({ albums, assets, selectedAssets, setSelectedAssets, 
           </button>
         </div>
       </div>
-      {settings.image_picker_prompt && (
-        <div className="mt-4 rounded-xl bg-brand-50 border border-brand-100 p-3 text-sm text-brand-700">
-          {settings.image_picker_prompt}
-        </div>
-      )}
       {assets.length > 0 && (
         <div className="mt-5">
           <div className="flex items-center justify-between mb-3">
@@ -233,18 +246,21 @@ function ImmichImagePicker({ albums, assets, selectedAssets, setSelectedAssets, 
           </div>
         </div>
       )}
+      <SelectedAssetThumbnails assets={assets} selectedAssets={selectedAssets} />
     </div>
   );
 }
 
 // ── Result card ───────────────────────────────────────────────────────────────
 
-function ResultCard({ result, onSave, saving }) {
+function ResultCard({ result, onSave, onSaveSingle, saving, assets, selectedAssets }) {
   const [editedDrafts, setEditedDrafts] = useState(result.drafts || []);
 
   const updateDraft = (idx, patch) => {
     setEditedDrafts((prev) => prev.map((draft, i) => (i === idx ? { ...draft, ...patch } : draft)));
   };
+
+  const selectedPhotos = (assets || []).filter((a) => (selectedAssets || []).includes(a.id));
 
   return (
     <div className="card mt-6 border-l-4 border-accent-500">
@@ -255,16 +271,32 @@ function ResultCard({ result, onSave, saving }) {
         </div>
         <div className="flex gap-2">
           <button className="btn-primary" onClick={() => onSave(editedDrafts)} disabled={saving}>
-            {saving ? 'Saving...' : 'Save to Publishing Queue'}
+            {saving ? 'Saving...' : 'Save All to Queue'}
           </button>
         </div>
       </div>
+
+      {selectedPhotos.length > 0 && (
+        <div className="mb-4 p-3 bg-gray-50 rounded-xl">
+          <p className="text-xs text-gray-500 mb-2">Selected photos sent to AI for analysis</p>
+          <div className="flex flex-wrap gap-2">
+            {selectedPhotos.map((asset) => (
+              <div key={asset.id} className="w-14 h-14 rounded-lg overflow-hidden border border-brand-200 bg-gray-100">
+                <ImmichPickerThumbnail asset={asset} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="space-y-5">
         {editedDrafts.map((draft, idx) => (
           <div key={`${draft.platform}-${idx}`} className="rounded-2xl border border-gray-100 p-4">
             <div className="flex items-center justify-between mb-3">
               <span className="badge bg-brand-100 text-brand-700">{draft.platform}</span>
-              {draft.ai_used === false && <span className="badge bg-yellow-100 text-yellow-700">Template fallback</span>}
+              <div className="flex items-center gap-2">
+                {draft.ai_used === false && <span className="badge bg-yellow-100 text-yellow-700">Template fallback</span>}
+              </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -293,16 +325,22 @@ function ResultCard({ result, onSave, saving }) {
                 <label className="label">Call to action</label>
                 <input className="input" value={draft.cta || ''} onChange={(e) => updateDraft(idx, { cta: e.target.value })} />
               </div>
-              <div>
-                <label className="label">Selected Immich assets</label>
-                <textarea className="input h-20 resize-y" value={(draft.selected_assets || []).join(', ')} readOnly />
-              </div>
-              <div>
-                <label className="label">Visual direction</label>
-                <textarea className="input h-20 resize-y" value={draft.visual_direction || ''} onChange={(e) => updateDraft(idx, { visual_direction: e.target.value })} />
-              </div>
             </div>
             {draft.notes && <p className="text-xs text-gray-400 mt-3">{draft.notes}</p>}
+            <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-gray-100">
+              <button className="px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 text-purple-700 text-xs font-medium hover:bg-purple-100 transition-colors" onClick={() => onSaveSingle(editedDrafts[idx], 'idea')} disabled={saving}>
+                Save as Idea
+              </button>
+              <button className="px-3 py-1.5 rounded-lg border border-yellow-200 bg-yellow-50 text-yellow-700 text-xs font-medium hover:bg-yellow-100 transition-colors" onClick={() => onSaveSingle(editedDrafts[idx], 'draft_generated')} disabled={saving}>
+                Save as Draft
+              </button>
+              <button className="px-3 py-1.5 rounded-lg border border-orange-200 bg-orange-50 text-orange-700 text-xs font-medium hover:bg-orange-100 transition-colors" onClick={() => onSaveSingle(editedDrafts[idx], 'needs_review')} disabled={saving}>
+                Send to Review
+              </button>
+              <button className="px-3 py-1.5 rounded-lg border border-green-200 bg-green-50 text-green-700 text-xs font-medium hover:bg-green-100 transition-colors" onClick={() => onSaveSingle(editedDrafts[idx], 'approved')} disabled={saving}>
+                Approve
+              </button>
+            </div>
           </div>
         ))}
       </div>
@@ -312,7 +350,7 @@ function ResultCard({ result, onSave, saving }) {
 
 // ── Post Generation Tab ───────────────────────────────────────────────────────
 
-function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAssets, setSelectedAssets, loadAlbumAssets, loadingAssets, generate, generating, result, saveDraft, saving, error, setError }) {
+function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAssets, setSelectedAssets, loadAlbumAssets, loadingAssets, generate, generating, result, saveDraft, saveSingleDraft, saving, error, setError }) {
   const togglePlatform = (platform) => {
     setForm((prev) => {
       const hasPlatform = prev.platforms.includes(platform);
@@ -419,7 +457,7 @@ function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAs
         </form>
       </div>
 
-      {result && <ResultCard result={result} onSave={saveDraft} saving={saving} />}
+      {result && <ResultCard result={result} onSave={saveDraft} onSaveSingle={saveSingleDraft} saving={saving} assets={assets} selectedAssets={selectedAssets} />}
     </div>
   );
 }
@@ -427,7 +465,7 @@ function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAs
 // ── Image Generation Tab ──────────────────────────────────────────────────────
 
 function ImageGenerationTab({ albums, settings, apiFetch }) {
-  const [imgForm, setImgForm] = useState({ album_id: '', prompt: '', preset: '' });
+  const [imgForm, setImgForm] = useState({ album_id: '', prompt: '', preset: '', size: '1024x1024', quality: 'standard', refine_prompt: true });
   const [assets, setAssets] = useState([]);
   const [selectedAssets, setSelectedAssets] = useState([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
@@ -436,6 +474,9 @@ function ImageGenerationTab({ albums, settings, apiFetch }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [editingPreset, setEditingPreset] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState(null);
+  const [uploadAlbumId, setUploadAlbumId] = useState('');
 
   useEffect(() => {
     loadPresets();
@@ -493,20 +534,47 @@ function ImageGenerationTab({ albums, settings, apiFetch }) {
     setGenerating(true);
     setError('');
     setResult(null);
-    const r = await apiFetch('/social/generate-image', {
+    setUploadResult(null);
+    const r = await apiFetch('/social/generate-image-actual', {
       method: 'POST',
       body: JSON.stringify({
         prompt: imgForm.prompt,
         preset: imgForm.preset,
         asset_ids: selectedAssets,
+        size: imgForm.size,
+        quality: imgForm.quality,
+        refine_prompt: imgForm.refine_prompt,
       }),
     });
     setGenerating(false);
     if (r.ok) {
-      setResult(await r.json());
+      const data = await r.json();
+      setResult(data);
+      setUploadAlbumId(imgForm.album_id || '');
       return;
     }
     let msg = 'Image generation failed.';
+    try { const data = await r.json(); msg = data.detail || msg; } catch {}
+    setError(msg);
+  };
+
+  const uploadToImmich = async () => {
+    if (!result?.image_id) return;
+    setUploading(true);
+    setUploadResult(null);
+    const r = await apiFetch(`/social/generated-images/${result.image_id}/upload-to-immich`, {
+      method: 'POST',
+      body: JSON.stringify({
+        album_id: uploadAlbumId,
+        filename: `bricopro-generated-${result.image_id}.png`,
+      }),
+    });
+    setUploading(false);
+    if (r.ok) {
+      setUploadResult(await r.json());
+      return;
+    }
+    let msg = 'Upload to Immich failed.';
     try { const data = await r.json(); msg = data.detail || msg; } catch {}
     setError(msg);
   };
@@ -625,6 +693,35 @@ function ImageGenerationTab({ albums, settings, apiFetch }) {
             />
           </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="label">Size</label>
+              <select className="select" value={imgForm.size} onChange={(e) => setImgForm({ ...imgForm, size: e.target.value })}>
+                <option value="1024x1024">1024 x 1024 (Square)</option>
+                <option value="1792x1024">1792 x 1024 (Landscape)</option>
+                <option value="1024x1792">1024 x 1792 (Portrait)</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Quality</label>
+              <select className="select" value={imgForm.quality} onChange={(e) => setImgForm({ ...imgForm, quality: e.target.value })}>
+                <option value="standard">Standard</option>
+                <option value="hd">HD</option>
+              </select>
+            </div>
+            <div className="flex items-end">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={imgForm.refine_prompt}
+                  onChange={(e) => setImgForm({ ...imgForm, refine_prompt: e.target.checked })}
+                  className="w-4 h-4 rounded border-gray-300 text-accent-500 focus:ring-accent-500"
+                />
+                <span className="text-sm text-gray-700">Refine prompt with AI first</span>
+              </label>
+            </div>
+          </div>
+
           {error && <p className="text-sm text-red-600">{error}</p>}
 
           <button
@@ -633,36 +730,87 @@ function ImageGenerationTab({ albums, settings, apiFetch }) {
             onClick={generateImage}
             disabled={generating || (!imgForm.prompt && !imgForm.preset)}
           >
-            {generating ? 'Generating...' : 'Generate Image'}
+            {generating ? 'Generating image...' : 'Generate Image'}
           </button>
+          {generating && (
+            <p className="text-xs text-gray-400 mt-1">Image generation can take 15-60 seconds depending on the model and settings.</p>
+          )}
         </div>
       </div>
 
       {result && (
         <div className="card border-l-4 border-accent-500">
-          <h3 className="font-semibold text-gray-800 mb-3">Generated Result</h3>
-          <div className="space-y-3">
-            <div>
-              <label className="label">Image prompt</label>
-              <textarea className="input h-28 resize-y" value={result.result?.image_prompt || ''} readOnly />
+          <h3 className="font-semibold text-gray-800 mb-3">Generated Image</h3>
+          <div className="space-y-4">
+            <div className="rounded-xl overflow-hidden border border-gray-200 bg-gray-50">
+              <img
+                src={result.image_url}
+                alt="Generated image"
+                className="w-full max-w-2xl mx-auto block"
+                style={{ aspectRatio: imgForm.size === '1792x1024' ? '1792/1024' : imgForm.size === '1024x1792' ? '1024/1792' : '1/1' }}
+              />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+            {result.revised_prompt && (
               <div>
-                <label className="label">Style</label>
-                <input className="input" value={result.result?.style || ''} readOnly />
+                <label className="label">Prompt used by the model</label>
+                <textarea className="input h-24 resize-y text-sm" value={result.revised_prompt} readOnly />
               </div>
-              <div>
-                <label className="label">Aspect ratio</label>
-                <input className="input" value={result.result?.aspect_ratio || ''} readOnly />
+            )}
+
+            {result.refined_prompt && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="label">Suggested style</label>
+                  <input className="input" value={result.refined_prompt?.style || ''} readOnly />
+                </div>
+                <div>
+                  <label className="label">Aspect ratio</label>
+                  <input className="input" value={result.refined_prompt?.aspect_ratio || ''} readOnly />
+                </div>
+                <div>
+                  <label className="label">Notes</label>
+                  <input className="input" value={result.refined_prompt?.notes || ''} readOnly />
+                </div>
               </div>
-              <div>
-                <label className="label">Notes</label>
-                <input className="input" value={result.result?.notes || ''} readOnly />
+            )}
+
+            <div className="border-t border-gray-100 pt-4">
+              <h4 className="font-medium text-gray-700 mb-3">Send to Immich</h4>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                <div className="md:col-span-2">
+                  <label className="label">Destination album</label>
+                  <select className="select" value={uploadAlbumId} onChange={(e) => setUploadAlbumId(e.target.value)}>
+                    <option value="">No album (upload to library only)</option>
+                    {albums.map((album) => <option key={album.id} value={album.id}>{album.name} {album.asset_count ? `(${album.asset_count})` : ''}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    className="btn-primary w-full"
+                    onClick={uploadToImmich}
+                    disabled={uploading}
+                  >
+                    {uploading ? 'Uploading...' : 'Upload to Immich'}
+                  </button>
+                </div>
               </div>
+              {uploadResult && (
+                <div className="mt-3 rounded-lg bg-green-50 border border-green-200 p-3">
+                  <p className="text-sm text-green-700 font-medium">
+                    Image uploaded successfully to Immich{uploadResult.album_id ? ' and added to album' : ''}.
+                  </p>
+                  <p className="text-xs text-green-600 mt-1">Asset ID: {uploadResult.asset_id}</p>
+                </div>
+              )}
             </div>
-            <p className="text-xs text-gray-400">
-              Copy the image prompt above and use it with your preferred image generation tool. Results can be uploaded to Immich.
-            </p>
+
+            <div className="flex items-center gap-2 text-xs text-gray-400">
+              <span>Model: {result.model}</span>
+              <span>|</span>
+              <span>Size: {result.size}</span>
+            </div>
           </div>
         </div>
       )}
@@ -824,49 +972,127 @@ function CampaignsTab({ apiFetch }) {
 
 // ── Publishing Queue Tab ──────────────────────────────────────────────────────
 
-function DraftModal({ draft, onClose, onStatusChange }) {
+function DraftModal({ draft, onClose, onStatusChange, onUpdate, apiFetch }) {
   const [status, setStatus] = useState(draft.status);
+  const [title, setTitle] = useState(draft.title || '');
+  const [body, setBody] = useState(draft.body || '');
+  const [shortBody, setShortBody] = useState(draft.short_body || '');
+  const [hashtags, setHashtags] = useState(draft.hashtags || '');
+  const [cta, setCta] = useState(draft.cta || '');
+  const [plannedDate, setPlannedDate] = useState(draft.planned_date || '');
   const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState('');
 
-  const save = async () => {
+  const saveStatus = async () => {
     setSaving(true);
     await onStatusChange(draft.id, status);
     setSaving(false);
-    onClose();
+    setFeedback('Status updated.');
+  };
+
+  const saveAll = async () => {
+    setSaving(true);
+    setFeedback('');
+    const r = await apiFetch(`/publishing/drafts/${draft.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ title, body, short_body: shortBody, hashtags, cta, planned_date: plannedDate || null, status }),
+    });
+    setSaving(false);
+    if (r.ok) {
+      setFeedback('Draft saved.');
+      if (onUpdate) onUpdate();
+    } else {
+      setFeedback('Save failed.');
+    }
+  };
+
+  const markPosted = async () => {
+    setSaving(true);
+    await onStatusChange(draft.id, 'posted');
+    setSaving(false);
+    setFeedback('Marked as posted.');
   };
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-4">
-          <h3 className="font-semibold text-gray-900 text-lg">{draft.title}</h3>
+          <h3 className="font-semibold text-gray-900 text-lg">Edit Draft</h3>
           <button className="text-gray-400 hover:text-gray-600 text-xl leading-none" onClick={onClose}>×</button>
         </div>
-        <div className="space-y-2 text-sm text-gray-600 mb-4">
-          <div className="flex gap-4">
-            <span><strong>Platform:</strong> {draft.platform}</span>
-            <span><strong>Date:</strong> {draft.planned_date || '—'}</span>
+
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="label">Title</label>
+              <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Platform</label>
+              <input className="input" value={draft.platform} readOnly />
+            </div>
           </div>
-          {draft.campaign_id && <p><strong>Campaign:</strong> #{draft.campaign_id}</p>}
+
+          <div>
+            <label className="label">Main copy</label>
+            <textarea className="input h-32 resize-y" value={body} onChange={(e) => setBody(e.target.value)} />
+          </div>
+
+          <div>
+            <label className="label">Short variation</label>
+            <textarea className="input h-20 resize-y" value={shortBody} onChange={(e) => setShortBody(e.target.value)} />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="label">Hashtags</label>
+              <input className="input" value={hashtags} onChange={(e) => setHashtags(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Call to action</label>
+              <input className="input" value={cta} onChange={(e) => setCta(e.target.value)} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="label">Scheduled date</label>
+              <input className="input" type="date" value={plannedDate} onChange={(e) => setPlannedDate(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Status</label>
+              <select className="select" value={status} onChange={(e) => setStatus(e.target.value)}>
+                {DRAFT_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+              </select>
+            </div>
+          </div>
+
+          {draft.campaign_id && <p className="text-sm text-gray-500">Campaign: #{draft.campaign_id}</p>}
+          {feedback && <p className="text-sm text-green-600 font-medium">{feedback}</p>}
         </div>
-        <div className="mb-4">
-          <label className="label">Move to status</label>
-          <select className="select" value={status} onChange={(e) => setStatus(e.target.value)}>
-            {DRAFT_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
-          </select>
-        </div>
-        <div className="flex gap-2 justify-end">
-          <button className="btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={save} disabled={saving}>
-            {saving ? 'Saving…' : 'Update Status'}
-          </button>
+
+        <div className="flex flex-wrap gap-2 justify-between mt-6 pt-4 border-t border-gray-100">
+          <div className="flex gap-2">
+            <button className="px-3 py-2 rounded-lg border border-green-200 bg-green-50 text-green-700 text-sm font-medium hover:bg-green-100 transition-colors" onClick={markPosted} disabled={saving}>
+              Mark as Posted
+            </button>
+            <button className="px-3 py-2 rounded-lg border border-cyan-200 bg-cyan-50 text-cyan-700 text-sm font-medium hover:bg-cyan-100 transition-colors" onClick={() => { setStatus('scheduled'); }} disabled={saving}>
+              Schedule
+            </button>
+          </div>
+          <div className="flex gap-2">
+            <button className="btn-secondary" onClick={onClose}>Close</button>
+            <button className="btn-primary" onClick={saveAll} disabled={saving}>
+              {saving ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function KanbanBoard({ drafts, onStatusChange }) {
+function KanbanBoard({ drafts, onStatusChange, onUpdate, apiFetch }) {
   const [selected, setSelected] = useState(null);
   const grouped = {};
   KANBAN_COLS.forEach(({ key }) => { grouped[key] = []; });
@@ -877,7 +1103,7 @@ function KanbanBoard({ drafts, onStatusChange }) {
 
   return (
     <>
-      {selected && <DraftModal draft={selected} onClose={() => setSelected(null)} onStatusChange={onStatusChange} />}
+      {selected && <DraftModal draft={selected} onClose={() => { setSelected(null); if (onUpdate) onUpdate(); }} onStatusChange={onStatusChange} onUpdate={onUpdate} apiFetch={apiFetch} />}
       <div className="flex gap-3 overflow-x-auto pb-4">
         {KANBAN_COLS.map(({ key, label, color }) => (
           <div key={key} className={`flex-shrink-0 w-56 rounded-xl border p-3 ${color}`}>
@@ -1041,7 +1267,7 @@ function PublishingQueueTab({ apiFetch }) {
       </div>
 
       <div className="card">
-        {view === 'kanban'   && <KanbanBoard drafts={drafts} onStatusChange={updateStatus} />}
+        {view === 'kanban'   && <KanbanBoard drafts={drafts} onStatusChange={updateStatus} onUpdate={() => { loadDrafts(); loadCalendar(); }} apiFetch={apiFetch} />}
         {view === 'calendar' && <CalendarView drafts={calendar} />}
         {view === 'list'     && <ListView drafts={drafts} onStatusChange={updateStatus} />}
       </div>
@@ -1126,18 +1352,23 @@ export default function SocialStudioPage() {
     setError('');
     setResult(null);
     const selected = assets.filter((asset) => selectedAssets.includes(asset.id));
+    const imageContext = selected.map((asset) => `${asset.filename || asset.title} (ID: ${asset.id})`).join(', ');
+    const jobDesc = form.job_description
+      ? `${form.job_description}\n\nSelected project photos for visual reference: ${imageContext}`
+      : `Selected project photos for visual reference: ${imageContext}`;
     const r = await apiFetch('/social/generate-pack', {
       method: 'POST',
       body: JSON.stringify({
         album_id: form.album_id,
         asset_ids: selected.map((asset) => asset.id),
+        asset_filenames: selected.map((asset) => asset.filename || asset.title),
         platforms: form.platforms,
         service_category: form.service_category,
         language: form.language,
         tone: form.tone,
         city: form.city,
         cta: form.cta,
-        job_description: form.job_description || selected.map((asset) => asset.filename || asset.title).join('\n'),
+        job_description: jobDesc,
       }),
     });
     setGenerating(false);
@@ -1178,6 +1409,32 @@ export default function SocialStudioPage() {
     }
     setSaving(false);
     if (savedAll) setError('Drafts saved to the publishing queue for review.');
+  };
+
+  const saveSingleDraft = async (draft, status) => {
+    setSaving(true);
+    setError('');
+    const r = await apiFetch('/publishing/drafts', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: draft.title,
+        platform: draft.platform,
+        language: form.language,
+        tone: form.tone,
+        service_category: form.service_category,
+        body: draft.main_copy,
+        short_body: draft.short_variation,
+        hashtags: draft.hashtags,
+        cta: draft.cta,
+        status: status,
+      }),
+    });
+    setSaving(false);
+    if (r.ok) {
+      setError(`Draft saved as "${status.replace(/_/g, ' ')}".`);
+    } else {
+      setError('Saving draft failed.');
+    }
   };
 
   if (!isLoggedIn) return <LoginForm />;
@@ -1226,6 +1483,7 @@ export default function SocialStudioPage() {
           generating={generating}
           result={result}
           saveDraft={saveDraft}
+          saveSingleDraft={saveSingleDraft}
           saving={saving}
           error={error}
           setError={setError}

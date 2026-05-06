@@ -684,6 +684,21 @@ def refresh(source: str, _: User = Depends(auth_user), db: Session = Depends(get
     return {"status": "ok", "source": source}
 
 
+@app.get("/dashboard/jobber-stats")
+def jobber_stats(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Fetch Jobber stats directly for the dashboard header (independent from card limits)."""
+    from .services.connectors import JobberConnector, ConnectorNotConfigured, ConnectorError
+    integration = db.query(Integration).filter(Integration.provider == "jobber").first()
+    if not integration:
+        return {"upcoming_unscheduled_count": 0, "action_required_count": 0, "new_requests_count": 0, "pending_invoice_count": 0}
+    try:
+        connector = JobberConnector(integration)
+        return connector.fetch_stats()
+    except (ConnectorNotConfigured, ConnectorError) as exc:
+        log.warning("Jobber stats fetch failed: %s", exc)
+        return {"upcoming_unscheduled_count": 0, "action_required_count": 0, "new_requests_count": 0, "pending_invoice_count": 0, "error": str(exc)}
+
+
 @app.get("/integrations/immich/assets/{asset_id}/thumbnail")
 def immich_asset_thumbnail(asset_id: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     i = db.query(Integration).filter(Integration.provider == "immich").first()
@@ -1223,7 +1238,159 @@ def social_generate_image(payload: dict, _: User = Depends(auth_user), db: Sessi
     }
 
 
-@app.post("/social/image-presets")
+@app.post("/social/generate-image-actual")
+def social_generate_image_actual(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Generate an actual image using the configured image generation model (DALL-E or compatible)."""
+    import base64
+    from pathlib import Path
+    from .services.ai import generate_image_prompt, generate_image_dall_e, AINotConfigured, AIError
+
+    social_cfg = _social_settings_map(db)
+    prompt = payload.get("prompt", "").strip()
+    preset = payload.get("preset", "").strip()
+    asset_ids = payload.get("asset_ids", [])
+    size = payload.get("size", "1024x1024")
+    quality = payload.get("quality", "standard")
+    refine_prompt = payload.get("refine_prompt", True)
+
+    if not prompt and not preset:
+        raise HTTPException(400, "A prompt or preset is required.")
+
+    effective_prompt = prompt
+    if preset == "before_after":
+        ba_prompt = social_cfg.get("before_after_prompt", "")
+        effective_prompt = f"{ba_prompt}\n\n{prompt}".strip() if prompt else ba_prompt
+    if social_cfg.get("brand_voice"):
+        effective_prompt = f"Brand voice: {social_cfg['brand_voice']}\n\n{effective_prompt}".strip()
+    if asset_ids:
+        effective_prompt = f"{effective_prompt}\n\nReference Immich asset IDs: {', '.join(map(str, asset_ids))}.".strip()
+
+    final_prompt = effective_prompt
+    refined_result = None
+    if refine_prompt:
+        try:
+            refined_result = generate_image_prompt(effective_prompt, social_cfg, db)
+            final_prompt = refined_result.get("image_prompt", effective_prompt)
+        except (AINotConfigured, AIError):
+            pass
+
+    try:
+        result = generate_image_dall_e(final_prompt, social_cfg, db, size=size, quality=quality)
+    except AINotConfigured as exc:
+        raise HTTPException(400, str(exc))
+    except AIError as exc:
+        raise HTTPException(502, f"Image generation failed: {exc}")
+
+    image_id = secrets.token_hex(12)
+    image_b64 = result.get("image_b64", "")
+    image_url = result.get("image_url", "")
+
+    if image_b64:
+        data_dir = Path(os.getenv("DATA_DIR", "/data"))
+        images_dir = data_dir / "generated_images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        image_path = images_dir / f"{image_id}.png"
+        image_path.write_bytes(base64.b64decode(image_b64))
+        serve_url = f"/social/generated-images/{image_id}"
+    elif image_url:
+        serve_url = image_url
+    else:
+        raise HTTPException(502, "No image data returned from the generation model.")
+
+    return {
+        "image_id": image_id,
+        "image_url": serve_url,
+        "revised_prompt": result.get("revised_prompt", final_prompt),
+        "refined_prompt": refined_result if refined_result else None,
+        "model": result.get("model", ""),
+        "size": result.get("size", size),
+        "prompt_used": final_prompt,
+    }
+
+
+@app.get("/social/generated-images/{image_id}")
+def social_generated_image(image_id: str, _: User = Depends(auth_user)):
+    """Serve a previously generated image."""
+    from pathlib import Path
+    import re
+
+    if not re.match(r'^[a-f0-9]+$', image_id):
+        raise HTTPException(400, "Invalid image ID")
+
+    data_dir = Path(os.getenv("DATA_DIR", "/data"))
+    image_path = data_dir / "generated_images" / f"{image_id}.png"
+    if not image_path.exists():
+        raise HTTPException(404, "Generated image not found")
+
+    return Response(
+        content=image_path.read_bytes(),
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+@app.post("/social/generated-images/{image_id}/upload-to-immich")
+def upload_generated_image_to_immich(image_id: str, payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Upload a generated image to an Immich album."""
+    from pathlib import Path
+    import re
+
+    if not re.match(r'^[a-f0-9]+$', image_id):
+        raise HTTPException(400, "Invalid image ID")
+
+    data_dir = Path(os.getenv("DATA_DIR", "/data"))
+    image_path = data_dir / "generated_images" / f"{image_id}.png"
+    if not image_path.exists():
+        raise HTTPException(404, "Generated image not found")
+
+    album_id = payload.get("album_id", "").strip()
+    _, base_url, api_key = _immich_ready(db)
+
+    image_bytes = image_path.read_bytes()
+    filename = payload.get("filename", f"bricopro-generated-{image_id}.png")
+
+    try:
+        upload_resp = httpx.post(
+            f"{base_url}/api/assets",
+            headers={"x-api-key": api_key},
+            files={"assetData": (filename, image_bytes, "image/png")},
+            data={
+                "deviceAssetId": f"bricopro-{image_id}",
+                "deviceId": "bricopro-hq",
+                "fileCreatedAt": datetime.now(timezone.utc).isoformat(),
+                "fileModifiedAt": datetime.now(timezone.utc).isoformat(),
+            },
+            timeout=60,
+        )
+        upload_resp.raise_for_status()
+        asset_data = upload_resp.json()
+        asset_id = asset_data.get("id", "")
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(exc.response.status_code, f"Immich upload failed: {exc.response.text[:300]}") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(502, f"Immich upload failed: {exc}") from exc
+
+    if album_id and asset_id:
+        try:
+            add_resp = httpx.put(
+                f"{base_url}/api/albums/{album_id}/assets",
+                headers={"x-api-key": api_key, "Content-Type": "application/json"},
+                json={"ids": [asset_id]},
+                timeout=20,
+            )
+            add_resp.raise_for_status()
+        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+            log.warning("Failed to add asset to album %s: %s", album_id, exc)
+
+    return {
+        "ok": True,
+        "asset_id": asset_id,
+        "album_id": album_id,
+        "filename": filename,
+    }
+
+
+@app.get("/social/image-presets")
 def social_image_presets(_: User = Depends(auth_user), db: Session = Depends(get_db)):
     """Return saved image generation presets."""
     presets_raw = db.query(Setting).filter(Setting.key == "social_image_presets").first()
@@ -1349,6 +1516,12 @@ def drafts(
             "status": d.status,
             "planned_date": d.planned_date.isoformat() if d.planned_date else None,
             "campaign_id": d.campaign_id,
+            "body": d.body,
+            "short_body": d.short_body,
+            "hashtags": d.hashtags,
+            "cta": d.cta,
+            "tone": d.tone,
+            "service_category": d.service_category,
         }
         for d in q.all()
     ]
@@ -1360,6 +1533,41 @@ def create_draft(payload: DraftIn, _: User = Depends(auth_user), db: Session = D
     d = ContentDraft(**payload.model_dump(exclude={"planned_date"}), planned_date=pd)
     db.add(d); db.commit(); db.refresh(d)
     return {"id": d.id}
+
+
+@app.put("/publishing/drafts/{draft_id}")
+def update_draft(
+    draft_id: int,
+    payload: dict,
+    _: User = Depends(auth_user),
+    db: Session = Depends(get_db),
+):
+    """Full draft update - title, body, status, planned_date, etc."""
+    from .schemas import DRAFT_STATUSES
+    d = db.query(ContentDraft).filter(ContentDraft.id == draft_id).first()
+    if not d:
+        raise HTTPException(404, "Draft not found")
+
+    if "title" in payload:
+        d.title = payload["title"]
+    if "body" in payload:
+        d.body = payload["body"]
+    if "short_body" in payload:
+        d.short_body = payload["short_body"]
+    if "hashtags" in payload:
+        d.hashtags = payload["hashtags"]
+    if "cta" in payload:
+        d.cta = payload["cta"]
+    if "status" in payload:
+        if payload["status"] not in DRAFT_STATUSES:
+            raise HTTPException(422, f"Invalid draft status '{payload['status']}'")
+        d.status = payload["status"]
+    if "planned_date" in payload:
+        pd_val = payload["planned_date"]
+        d.planned_date = date.fromisoformat(pd_val) if pd_val else None
+    d.updated_at = datetime.utcnow()
+    db.commit()
+    return {"updated": True, "id": d.id}
 
 
 @app.put("/publishing/drafts/{draft_id}/status")

@@ -540,13 +540,41 @@ class JobberConnector(BaseConnector):
             log.warning("Jobber optional collection %s failed, retrying simpler query: %s", key, exc)
             return self._optional_collection(graphql_url, bearer, fallback_query, key)
 
+    def _get_job_filter(self) -> str:
+        """Read the job status filter setting. Defaults to unscheduled+active jobs."""
+        raw = self._setting("dashboard.jobber.job_filter", "upcoming").strip()
+        return raw or "upcoming"
+
+    def _get_request_filter(self) -> str:
+        raw = self._setting("dashboard.jobber.request_filter", "new").strip()
+        return raw or "new"
+
+    def _get_invoice_filter(self) -> str:
+        raw = self._setting("dashboard.jobber.invoice_filter", "late,awaiting_payment").strip()
+        return raw or "late,awaiting_payment"
+
     def fetch(self) -> dict:
         bearer = self._get_bearer_token()
         graphql_url = self.base_url or "https://api.getjobber.com/api/graphql"
         limit = self._int_setting("dashboard.jobber.limit", 5)
+
+        job_filter = self._get_job_filter()
+        request_filter = self._get_request_filter()
+        invoice_filter = self._get_invoice_filter()
+
+        job_status_filter = ""
+        if job_filter == "upcoming":
+            job_status_filter = ', filter: {status: active}'
+        elif job_filter == "unscheduled":
+            job_status_filter = ', filter: {status: active}'
+        elif job_filter == "archived":
+            job_status_filter = ', filter: {status: archived}'
+        elif job_filter == "late":
+            job_status_filter = ', filter: {status: late}'
+
         jobs_query = f"""
         query {{
-          jobs(first: {limit}) {{
+          jobs(first: {limit}{job_status_filter}) {{
             nodes {{
               id
               title
@@ -637,11 +665,79 @@ class JobberConnector(BaseConnector):
                 "quotes_count": len(quotes),
                 "invoices_count": len(invoices),
                 "limit": limit,
+                "job_filter": job_filter,
+                "request_filter": request_filter,
+                "invoice_filter": invoice_filter,
             }
         except httpx.HTTPStatusError as exc:
             raise ConnectorError(f"Jobber HTTP error: {exc.response.status_code}") from exc
         except httpx.RequestError as exc:
             raise ConnectorError(f"Jobber request failed: {exc}") from exc
+
+    def fetch_stats(self) -> dict:
+        """Fetch summary stats for the dashboard header independently from card limits."""
+        bearer = self._get_bearer_token()
+        graphql_url = self.base_url or "https://api.getjobber.com/api/graphql"
+
+        upcoming_jobs_query = """
+        query {
+          jobs(first: 50, filter: {status: active}) {
+            nodes { id jobStatus startAt }
+          }
+        }
+        """
+        requests_query = """
+        query {
+          requests(first: 50) {
+            nodes { id requestStatus }
+          }
+        }
+        """
+        invoices_query = """
+        query {
+          invoices(first: 50) {
+            nodes { id invoiceStatus }
+          }
+        }
+        """
+
+        stats = {
+            "upcoming_unscheduled_count": 0,
+            "action_required_count": 0,
+            "new_requests_count": 0,
+            "pending_invoice_count": 0,
+        }
+
+        try:
+            jobs_data = self._post_graphql(graphql_url, bearer, upcoming_jobs_query)
+            all_jobs = jobs_data.get("jobs", {}).get("nodes", [])
+            upcoming = [
+                j for j in all_jobs
+                if not j.get("startAt") or (j.get("jobStatus") or "").lower() in ("upcoming", "today", "active")
+            ]
+            stats["upcoming_unscheduled_count"] = len(upcoming)
+            action_required = [j for j in all_jobs if (j.get("jobStatus") or "").lower() in ("action_required", "requires_invoicing")]
+            stats["action_required_count"] = len(action_required)
+        except Exception as exc:
+            log.warning("Jobber stats jobs query failed: %s", exc)
+
+        try:
+            req_data = self._post_graphql(graphql_url, bearer, requests_query)
+            all_requests = req_data.get("requests", {}).get("nodes", [])
+            new_requests = [r for r in all_requests if (r.get("requestStatus") or "").lower() in ("new", "pending")]
+            stats["new_requests_count"] = len(new_requests)
+        except Exception as exc:
+            log.warning("Jobber stats requests query failed: %s", exc)
+
+        try:
+            inv_data = self._post_graphql(graphql_url, bearer, invoices_query)
+            all_invoices = inv_data.get("invoices", {}).get("nodes", [])
+            pending_invoices = [i for i in all_invoices if (i.get("invoiceStatus") or "").lower() in ("late", "overdue", "awaiting_payment", "sent")]
+            stats["pending_invoice_count"] = len(pending_invoices)
+        except Exception as exc:
+            log.warning("Jobber stats invoices query failed: %s", exc)
+
+        return stats
 
 
 # ── Immich ────────────────────────────────────────────────────────────────────
@@ -1029,7 +1125,20 @@ class PaperlessGptConnector(BaseConnector):
     def fetch(self) -> dict:
         self._require_config()
         validate_paperless_gpt_base_url(self.base_url)
-        return self._documents_payload(self._get_json("/documents", params={"limit": 25}))
+        result = self._documents_payload(self._get_json("/documents", params={"limit": 25}))
+        try:
+            stats = self._get_json("/stats")
+            result["stats"] = stats
+        except Exception as exc:
+            log.warning("Paperless-GPT stats fetch failed: %s", exc)
+            result["stats"] = {}
+        try:
+            health = self._get_json("/health")
+            result["health"] = health
+        except Exception as exc:
+            log.warning("Paperless-GPT health fetch failed: %s", exc)
+            result["health"] = {}
+        return result
 
 
 # ── Meta (Facebook + Instagram) ───────────────────────────────────────────────
