@@ -136,12 +136,18 @@ Once logged in, go to **Settings** to configure each integration.
 
 1. Generate a BricoproHQ API key in Paperless-GPT.
 2. In Settings → Paperless-GPT:
-   - **Paperless-GPT URL:** the Paperless-GPT service root that the Bricopro HQ server can reach, for example `http://192.168.1.25:8080`
+   - **Paperless-GPT URL:** the Paperless-GPT service root that the Bricopro HQ backend runtime can reach, for example `http://paperless-gpt:8080` in Docker or `http://192.168.1.25:8080` on a LAN
    - **API Key:** the generated key, for example `pgpt_bhq_...`
-   - **Do not** use the Bricopro HQ public URL, and **do not** append `/api`
+   - **Do not** use the Bricopro HQ public URL, and **do not** append `/api` or `/api/bricoprohq/v1/...`
+
+The connection test runs from the Bricopro HQ backend, not from your browser or
+host shell. If a manual `curl` works on the host but the app test fails,
+Docker/container installs may need the Paperless-GPT service hostname or another
+URL that is reachable from inside the Bricopro HQ backend container.
 
 Bricopro HQ only uses the Paperless-GPT BricoproHQ API:
-`/api/bricoprohq/v1/health`, `/api/bricoprohq/v1/documents`, and
+`/api/bricoprohq/v1/health`, `/api/bricoprohq/v1/stats`,
+`/api/bricoprohq/v1/documents`, and
 `/api/bricoprohq/v1/documents/:id` with the `X-API-Key` header.
 
 ### AI Provider
