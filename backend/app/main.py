@@ -1589,6 +1589,16 @@ def move_draft(
     return {"updated": True}
 
 
+@app.delete("/publishing/drafts/{draft_id}")
+def delete_draft(draft_id: int, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    d = db.query(ContentDraft).filter(ContentDraft.id == draft_id).first()
+    if not d:
+        raise HTTPException(404, "Draft not found")
+    db.delete(d)
+    db.commit()
+    return {"deleted": True, "id": draft_id}
+
+
 @app.get("/publishing/calendar")
 def pub_calendar(_: User = Depends(auth_user), db: Session = Depends(get_db)):
     return [

@@ -997,7 +997,7 @@ function CampaignsTab({ apiFetch }) {
 
 // ── Publishing Queue Tab ──────────────────────────────────────────────────────
 
-function DraftModal({ draft, onClose, onStatusChange, onUpdate, apiFetch }) {
+function DraftModal({ draft, onClose, onStatusChange, onDelete, onUpdate, apiFetch }) {
   const [status, setStatus] = useState(draft.status);
   const [title, setTitle] = useState(draft.title || '');
   const [body, setBody] = useState(draft.body || '');
@@ -1007,13 +1007,7 @@ function DraftModal({ draft, onClose, onStatusChange, onUpdate, apiFetch }) {
   const [plannedDate, setPlannedDate] = useState(draft.planned_date || '');
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
-
-  const saveStatus = async () => {
-    setSaving(true);
-    await onStatusChange(draft.id, status);
-    setSaving(false);
-    setFeedback('Status updated.');
-  };
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const saveAll = async () => {
     setSaving(true);
@@ -1036,6 +1030,14 @@ function DraftModal({ draft, onClose, onStatusChange, onUpdate, apiFetch }) {
     await onStatusChange(draft.id, 'posted');
     setSaving(false);
     setFeedback('Marked as posted.');
+    if (onUpdate) onUpdate();
+  };
+
+  const handleDelete = async () => {
+    setSaving(true);
+    await onDelete(draft.id);
+    setSaving(false);
+    onClose();
   };
 
   return (
@@ -1054,7 +1056,9 @@ function DraftModal({ draft, onClose, onStatusChange, onUpdate, apiFetch }) {
             </div>
             <div>
               <label className="label">Platform</label>
-              <input className="input" value={draft.platform} readOnly />
+              <select className="select" value={draft.platform} disabled>
+                {PLATFORMS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+              </select>
             </div>
           </div>
 
@@ -1104,6 +1108,19 @@ function DraftModal({ draft, onClose, onStatusChange, onUpdate, apiFetch }) {
             <button className="px-3 py-2 rounded-lg border border-cyan-200 bg-cyan-50 text-cyan-700 text-sm font-medium hover:bg-cyan-100 transition-colors" onClick={() => { setStatus('scheduled'); }} disabled={saving}>
               Schedule
             </button>
+            {confirmDelete ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-red-600">Delete this draft?</span>
+                <button className="px-3 py-2 rounded-lg border border-red-300 bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors" onClick={handleDelete} disabled={saving}>
+                  Confirm
+                </button>
+                <button className="px-2 py-2 text-xs text-gray-500 hover:text-gray-700" onClick={() => setConfirmDelete(false)}>Cancel</button>
+              </div>
+            ) : (
+              <button className="px-3 py-2 rounded-lg border border-red-200 bg-red-50 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors" onClick={() => setConfirmDelete(true)} disabled={saving}>
+                Delete
+              </button>
+            )}
           </div>
           <div className="flex gap-2">
             <button className="btn-secondary" onClick={onClose}>Close</button>
@@ -1117,7 +1134,7 @@ function DraftModal({ draft, onClose, onStatusChange, onUpdate, apiFetch }) {
   );
 }
 
-function KanbanBoard({ drafts, onStatusChange, onUpdate, apiFetch }) {
+function KanbanBoard({ drafts, onStatusChange, onDelete, onUpdate, apiFetch }) {
   const [selected, setSelected] = useState(null);
   const grouped = {};
   KANBAN_COLS.forEach(({ key }) => { grouped[key] = []; });
@@ -1128,7 +1145,7 @@ function KanbanBoard({ drafts, onStatusChange, onUpdate, apiFetch }) {
 
   return (
     <>
-      {selected && <DraftModal draft={selected} onClose={() => { setSelected(null); if (onUpdate) onUpdate(); }} onStatusChange={onStatusChange} onUpdate={onUpdate} apiFetch={apiFetch} />}
+      {selected && <DraftModal draft={selected} onClose={() => { setSelected(null); if (onUpdate) onUpdate(); }} onStatusChange={onStatusChange} onDelete={onDelete} onUpdate={onUpdate} apiFetch={apiFetch} />}
       <div className="flex gap-3 overflow-x-auto pb-4">
         {KANBAN_COLS.map(({ key, label, color }) => (
           <div key={key} className={`flex-shrink-0 w-56 rounded-xl border p-3 ${color}`}>
@@ -1185,13 +1202,15 @@ function CalendarView({ drafts }) {
   );
 }
 
-function ListView({ drafts, onStatusChange }) {
+function ListView({ drafts, onStatusChange, onDelete }) {
+  const [confirmId, setConfirmId] = useState(null);
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
-            {['Title', 'Platform', 'Status', 'Planned Date', 'Campaign', 'Actions'].map((h) => (
+            {['Title', 'Platform', 'Status', 'Planned Date', 'Campaign', 'Actions', ''].map((h) => (
               <th key={h} className="pb-2 font-medium pr-4">{h}</th>
             ))}
           </tr>
@@ -1204,7 +1223,7 @@ function ListView({ drafts, onStatusChange }) {
               <td className="py-2.5 pr-4"><StatusBadge status={d.status} /></td>
               <td className="py-2.5 pr-4 text-gray-500">{d.planned_date || '—'}</td>
               <td className="py-2.5 pr-4 text-gray-400">{d.campaign_id ? `#${d.campaign_id}` : '—'}</td>
-              <td className="py-2.5">
+              <td className="py-2.5 pr-4">
                 <select
                   className="text-xs border border-gray-200 rounded px-2 py-1 bg-white"
                   value={d.status}
@@ -1212,6 +1231,18 @@ function ListView({ drafts, onStatusChange }) {
                 >
                   {DRAFT_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
                 </select>
+              </td>
+              <td className="py-2.5">
+                {confirmId === d.id ? (
+                  <div className="flex items-center gap-1">
+                    <button className="text-xs text-red-600 font-medium hover:text-red-800" onClick={() => { onDelete(d.id); setConfirmId(null); }}>Confirm</button>
+                    <button className="text-xs text-gray-400 hover:text-gray-600" onClick={() => setConfirmId(null)}>Cancel</button>
+                  </div>
+                ) : (
+                  <button className="text-xs text-red-400 hover:text-red-600 transition-colors" onClick={() => setConfirmId(d.id)} title="Delete draft">
+                    Delete
+                  </button>
+                )}
               </td>
             </tr>
           ))}
@@ -1248,6 +1279,12 @@ function PublishingQueueTab({ apiFetch }) {
 
   const updateStatus = async (id, status) => {
     await apiFetch(`/publishing/drafts/${id}/status?status=${status}`, { method: 'PUT' });
+    await loadDrafts();
+    await loadCalendar();
+  };
+
+  const deleteDraft = async (id) => {
+    await apiFetch(`/publishing/drafts/${id}`, { method: 'DELETE' });
     await loadDrafts();
     await loadCalendar();
   };
@@ -1292,9 +1329,9 @@ function PublishingQueueTab({ apiFetch }) {
       </div>
 
       <div className="card">
-        {view === 'kanban'   && <KanbanBoard drafts={drafts} onStatusChange={updateStatus} onUpdate={() => { loadDrafts(); loadCalendar(); }} apiFetch={apiFetch} />}
+        {view === 'kanban'   && <KanbanBoard drafts={drafts} onStatusChange={updateStatus} onDelete={deleteDraft} onUpdate={() => { loadDrafts(); loadCalendar(); }} apiFetch={apiFetch} />}
         {view === 'calendar' && <CalendarView drafts={calendar} />}
-        {view === 'list'     && <ListView drafts={drafts} onStatusChange={updateStatus} />}
+        {view === 'list'     && <ListView drafts={drafts} onStatusChange={updateStatus} onDelete={deleteDraft} />}
       </div>
     </div>
   );
