@@ -260,18 +260,39 @@ function ResultCard({ result, onSave, onSaveSingle, saving, assets, selectedAsse
     setEditedDrafts((prev) => prev.map((draft, i) => (i === idx ? { ...draft, ...patch } : draft)));
   };
 
+  const handleSaveSingle = async (idx, status) => {
+    const ok = await onSaveSingle(editedDrafts[idx], status);
+    if (ok) {
+      setEditedDrafts((prev) => prev.filter((_, i) => i !== idx));
+    }
+  };
+
   const selectedPhotos = (assets || []).filter((a) => (selectedAssets || []).includes(a.id));
+
+  if (editedDrafts.length === 0) {
+    return (
+      <div className="card mt-6 border-l-4 border-green-500">
+        <div className="flex items-center gap-3 py-2">
+          <span className="text-green-600 text-lg">&#10003;</span>
+          <div>
+            <h3 className="font-semibold text-gray-800">All posts saved</h3>
+            <p className="text-xs text-gray-400">Every generated draft has been sent to the publishing queue. Generate new content or review the Publishing Queue tab.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="card mt-6 border-l-4 border-accent-500">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <h3 className="font-semibold text-gray-800">Review generated posts</h3>
-          <p className="text-xs text-gray-400">Edit each platform draft before saving to the publishing queue.</p>
+          <p className="text-xs text-gray-400">Edit each platform draft before saving to the publishing queue. Saved posts are removed automatically.</p>
         </div>
         <div className="flex gap-2">
           <button className="btn-primary" onClick={() => onSave(editedDrafts)} disabled={saving}>
-            {saving ? 'Saving...' : 'Save All to Queue'}
+            {saving ? 'Saving...' : `Save All to Queue (${editedDrafts.length})`}
           </button>
         </div>
       </div>
@@ -328,16 +349,16 @@ function ResultCard({ result, onSave, onSaveSingle, saving, assets, selectedAsse
             </div>
             {draft.notes && <p className="text-xs text-gray-400 mt-3">{draft.notes}</p>}
             <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-gray-100">
-              <button className="px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 text-purple-700 text-xs font-medium hover:bg-purple-100 transition-colors" onClick={() => onSaveSingle(editedDrafts[idx], 'idea')} disabled={saving}>
+              <button className="px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 text-purple-700 text-xs font-medium hover:bg-purple-100 transition-colors" onClick={() => handleSaveSingle(idx, 'idea')} disabled={saving}>
                 Save as Idea
               </button>
-              <button className="px-3 py-1.5 rounded-lg border border-yellow-200 bg-yellow-50 text-yellow-700 text-xs font-medium hover:bg-yellow-100 transition-colors" onClick={() => onSaveSingle(editedDrafts[idx], 'draft_generated')} disabled={saving}>
+              <button className="px-3 py-1.5 rounded-lg border border-yellow-200 bg-yellow-50 text-yellow-700 text-xs font-medium hover:bg-yellow-100 transition-colors" onClick={() => handleSaveSingle(idx, 'draft_generated')} disabled={saving}>
                 Save as Draft
               </button>
-              <button className="px-3 py-1.5 rounded-lg border border-orange-200 bg-orange-50 text-orange-700 text-xs font-medium hover:bg-orange-100 transition-colors" onClick={() => onSaveSingle(editedDrafts[idx], 'needs_review')} disabled={saving}>
+              <button className="px-3 py-1.5 rounded-lg border border-orange-200 bg-orange-50 text-orange-700 text-xs font-medium hover:bg-orange-100 transition-colors" onClick={() => handleSaveSingle(idx, 'needs_review')} disabled={saving}>
                 Send to Review
               </button>
-              <button className="px-3 py-1.5 rounded-lg border border-green-200 bg-green-50 text-green-700 text-xs font-medium hover:bg-green-100 transition-colors" onClick={() => onSaveSingle(editedDrafts[idx], 'approved')} disabled={saving}>
+              <button className="px-3 py-1.5 rounded-lg border border-green-200 bg-green-50 text-green-700 text-xs font-medium hover:bg-green-100 transition-colors" onClick={() => handleSaveSingle(idx, 'approved')} disabled={saving}>
                 Approve
               </button>
             </div>
@@ -465,7 +486,7 @@ function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAs
 // ── Image Generation Tab ──────────────────────────────────────────────────────
 
 function ImageGenerationTab({ albums, settings, apiFetch }) {
-  const [imgForm, setImgForm] = useState({ album_id: '', prompt: '', preset: '', size: '1024x1024', quality: 'standard', refine_prompt: true });
+  const [imgForm, setImgForm] = useState({ album_id: '', prompt: '', preset: '', size: '1024x1024', quality: 'auto', refine_prompt: true });
   const [assets, setAssets] = useState([]);
   const [selectedAssets, setSelectedAssets] = useState([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
@@ -698,14 +719,18 @@ function ImageGenerationTab({ albums, settings, apiFetch }) {
               <label className="label">Size</label>
               <select className="select" value={imgForm.size} onChange={(e) => setImgForm({ ...imgForm, size: e.target.value })}>
                 <option value="1024x1024">1024 x 1024 (Square)</option>
-                <option value="1792x1024">1792 x 1024 (Landscape)</option>
-                <option value="1024x1792">1024 x 1792 (Portrait)</option>
+                <option value="1536x1024">1536 x 1024 (Landscape)</option>
+                <option value="1024x1536">1024 x 1536 (Portrait)</option>
+                <option value="auto">Auto</option>
               </select>
             </div>
             <div>
               <label className="label">Quality</label>
               <select className="select" value={imgForm.quality} onChange={(e) => setImgForm({ ...imgForm, quality: e.target.value })}>
+                <option value="auto">Auto</option>
+                <option value="low">Low</option>
                 <option value="standard">Standard</option>
+                <option value="high">High</option>
                 <option value="hd">HD</option>
               </select>
             </div>
@@ -747,7 +772,7 @@ function ImageGenerationTab({ albums, settings, apiFetch }) {
                 src={result.image_url}
                 alt="Generated image"
                 className="w-full max-w-2xl mx-auto block"
-                style={{ aspectRatio: imgForm.size === '1792x1024' ? '1792/1024' : imgForm.size === '1024x1792' ? '1024/1792' : '1/1' }}
+                style={{ aspectRatio: (imgForm.size === '1792x1024' || imgForm.size === '1536x1024') ? '3/2' : (imgForm.size === '1024x1792' || imgForm.size === '1024x1536') ? '2/3' : '1/1' }}
               />
             </div>
 
@@ -972,7 +997,7 @@ function CampaignsTab({ apiFetch }) {
 
 // ── Publishing Queue Tab ──────────────────────────────────────────────────────
 
-function DraftModal({ draft, onClose, onStatusChange, onUpdate, apiFetch }) {
+function DraftModal({ draft, onClose, onStatusChange, onDelete, onUpdate, apiFetch }) {
   const [status, setStatus] = useState(draft.status);
   const [title, setTitle] = useState(draft.title || '');
   const [body, setBody] = useState(draft.body || '');
@@ -982,13 +1007,7 @@ function DraftModal({ draft, onClose, onStatusChange, onUpdate, apiFetch }) {
   const [plannedDate, setPlannedDate] = useState(draft.planned_date || '');
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
-
-  const saveStatus = async () => {
-    setSaving(true);
-    await onStatusChange(draft.id, status);
-    setSaving(false);
-    setFeedback('Status updated.');
-  };
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const saveAll = async () => {
     setSaving(true);
@@ -1011,6 +1030,14 @@ function DraftModal({ draft, onClose, onStatusChange, onUpdate, apiFetch }) {
     await onStatusChange(draft.id, 'posted');
     setSaving(false);
     setFeedback('Marked as posted.');
+    if (onUpdate) onUpdate();
+  };
+
+  const handleDelete = async () => {
+    setSaving(true);
+    await onDelete(draft.id);
+    setSaving(false);
+    onClose();
   };
 
   return (
@@ -1029,7 +1056,9 @@ function DraftModal({ draft, onClose, onStatusChange, onUpdate, apiFetch }) {
             </div>
             <div>
               <label className="label">Platform</label>
-              <input className="input" value={draft.platform} readOnly />
+              <select className="select" value={draft.platform} disabled>
+                {PLATFORMS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+              </select>
             </div>
           </div>
 
@@ -1079,6 +1108,19 @@ function DraftModal({ draft, onClose, onStatusChange, onUpdate, apiFetch }) {
             <button className="px-3 py-2 rounded-lg border border-cyan-200 bg-cyan-50 text-cyan-700 text-sm font-medium hover:bg-cyan-100 transition-colors" onClick={() => { setStatus('scheduled'); }} disabled={saving}>
               Schedule
             </button>
+            {confirmDelete ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-red-600">Delete this draft?</span>
+                <button className="px-3 py-2 rounded-lg border border-red-300 bg-red-600 text-white text-sm font-medium hover:bg-red-700 transition-colors" onClick={handleDelete} disabled={saving}>
+                  Confirm
+                </button>
+                <button className="px-2 py-2 text-xs text-gray-500 hover:text-gray-700" onClick={() => setConfirmDelete(false)}>Cancel</button>
+              </div>
+            ) : (
+              <button className="px-3 py-2 rounded-lg border border-red-200 bg-red-50 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors" onClick={() => setConfirmDelete(true)} disabled={saving}>
+                Delete
+              </button>
+            )}
           </div>
           <div className="flex gap-2">
             <button className="btn-secondary" onClick={onClose}>Close</button>
@@ -1092,7 +1134,7 @@ function DraftModal({ draft, onClose, onStatusChange, onUpdate, apiFetch }) {
   );
 }
 
-function KanbanBoard({ drafts, onStatusChange, onUpdate, apiFetch }) {
+function KanbanBoard({ drafts, onStatusChange, onDelete, onUpdate, apiFetch }) {
   const [selected, setSelected] = useState(null);
   const grouped = {};
   KANBAN_COLS.forEach(({ key }) => { grouped[key] = []; });
@@ -1103,7 +1145,7 @@ function KanbanBoard({ drafts, onStatusChange, onUpdate, apiFetch }) {
 
   return (
     <>
-      {selected && <DraftModal draft={selected} onClose={() => { setSelected(null); if (onUpdate) onUpdate(); }} onStatusChange={onStatusChange} onUpdate={onUpdate} apiFetch={apiFetch} />}
+      {selected && <DraftModal draft={selected} onClose={() => { setSelected(null); if (onUpdate) onUpdate(); }} onStatusChange={onStatusChange} onDelete={onDelete} onUpdate={onUpdate} apiFetch={apiFetch} />}
       <div className="flex gap-3 overflow-x-auto pb-4">
         {KANBAN_COLS.map(({ key, label, color }) => (
           <div key={key} className={`flex-shrink-0 w-56 rounded-xl border p-3 ${color}`}>
@@ -1160,13 +1202,15 @@ function CalendarView({ drafts }) {
   );
 }
 
-function ListView({ drafts, onStatusChange }) {
+function ListView({ drafts, onStatusChange, onDelete }) {
+  const [confirmId, setConfirmId] = useState(null);
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
-            {['Title', 'Platform', 'Status', 'Planned Date', 'Campaign', 'Actions'].map((h) => (
+            {['Title', 'Platform', 'Status', 'Planned Date', 'Campaign', 'Actions', ''].map((h) => (
               <th key={h} className="pb-2 font-medium pr-4">{h}</th>
             ))}
           </tr>
@@ -1179,7 +1223,7 @@ function ListView({ drafts, onStatusChange }) {
               <td className="py-2.5 pr-4"><StatusBadge status={d.status} /></td>
               <td className="py-2.5 pr-4 text-gray-500">{d.planned_date || '—'}</td>
               <td className="py-2.5 pr-4 text-gray-400">{d.campaign_id ? `#${d.campaign_id}` : '—'}</td>
-              <td className="py-2.5">
+              <td className="py-2.5 pr-4">
                 <select
                   className="text-xs border border-gray-200 rounded px-2 py-1 bg-white"
                   value={d.status}
@@ -1187,6 +1231,18 @@ function ListView({ drafts, onStatusChange }) {
                 >
                   {DRAFT_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
                 </select>
+              </td>
+              <td className="py-2.5">
+                {confirmId === d.id ? (
+                  <div className="flex items-center gap-1">
+                    <button className="text-xs text-red-600 font-medium hover:text-red-800" onClick={() => { onDelete(d.id); setConfirmId(null); }}>Confirm</button>
+                    <button className="text-xs text-gray-400 hover:text-gray-600" onClick={() => setConfirmId(null)}>Cancel</button>
+                  </div>
+                ) : (
+                  <button className="text-xs text-red-400 hover:text-red-600 transition-colors" onClick={() => setConfirmId(d.id)} title="Delete draft">
+                    Delete
+                  </button>
+                )}
               </td>
             </tr>
           ))}
@@ -1223,6 +1279,12 @@ function PublishingQueueTab({ apiFetch }) {
 
   const updateStatus = async (id, status) => {
     await apiFetch(`/publishing/drafts/${id}/status?status=${status}`, { method: 'PUT' });
+    await loadDrafts();
+    await loadCalendar();
+  };
+
+  const deleteDraft = async (id) => {
+    await apiFetch(`/publishing/drafts/${id}`, { method: 'DELETE' });
     await loadDrafts();
     await loadCalendar();
   };
@@ -1267,9 +1329,9 @@ function PublishingQueueTab({ apiFetch }) {
       </div>
 
       <div className="card">
-        {view === 'kanban'   && <KanbanBoard drafts={drafts} onStatusChange={updateStatus} onUpdate={() => { loadDrafts(); loadCalendar(); }} apiFetch={apiFetch} />}
+        {view === 'kanban'   && <KanbanBoard drafts={drafts} onStatusChange={updateStatus} onDelete={deleteDraft} onUpdate={() => { loadDrafts(); loadCalendar(); }} apiFetch={apiFetch} />}
         {view === 'calendar' && <CalendarView drafts={calendar} />}
-        {view === 'list'     && <ListView drafts={drafts} onStatusChange={updateStatus} />}
+        {view === 'list'     && <ListView drafts={drafts} onStatusChange={updateStatus} onDelete={deleteDraft} />}
       </div>
     </div>
   );
@@ -1408,7 +1470,10 @@ export default function SocialStudioPage() {
       }
     }
     setSaving(false);
-    if (savedAll) setError('Drafts saved to the publishing queue for review.');
+    if (savedAll) {
+      setResult(null);
+      setError('All drafts saved to the publishing queue for review.');
+    }
   };
 
   const saveSingleDraft = async (draft, status) => {
@@ -1432,9 +1497,10 @@ export default function SocialStudioPage() {
     setSaving(false);
     if (r.ok) {
       setError(`Draft saved as "${status.replace(/_/g, ' ')}".`);
-    } else {
-      setError('Saving draft failed.');
+      return true;
     }
+    setError('Saving draft failed.');
+    return false;
   };
 
   if (!isLoggedIn) return <LoginForm />;
