@@ -711,9 +711,12 @@ class JobberConnector(BaseConnector):
         try:
             jobs_data = self._post_graphql(graphql_url, bearer, upcoming_jobs_query)
             all_jobs = jobs_data.get("jobs", {}).get("nodes", [])
-            unscheduled = [j for j in all_jobs if not j.get("startAt")]
-            stats["upcoming_unscheduled_count"] = len(unscheduled)
-            action_required = [j for j in all_jobs if j.get("jobStatus") in ("ACTION_REQUIRED", "action_required", "requires_invoicing")]
+            upcoming = [
+                j for j in all_jobs
+                if not j.get("startAt") or (j.get("jobStatus") or "").lower() in ("upcoming", "today", "active")
+            ]
+            stats["upcoming_unscheduled_count"] = len(upcoming)
+            action_required = [j for j in all_jobs if (j.get("jobStatus") or "").lower() in ("action_required", "requires_invoicing")]
             stats["action_required_count"] = len(action_required)
         except Exception as exc:
             log.warning("Jobber stats jobs query failed: %s", exc)
