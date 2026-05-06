@@ -260,18 +260,39 @@ function ResultCard({ result, onSave, onSaveSingle, saving, assets, selectedAsse
     setEditedDrafts((prev) => prev.map((draft, i) => (i === idx ? { ...draft, ...patch } : draft)));
   };
 
+  const handleSaveSingle = async (idx, status) => {
+    const ok = await onSaveSingle(editedDrafts[idx], status);
+    if (ok) {
+      setEditedDrafts((prev) => prev.filter((_, i) => i !== idx));
+    }
+  };
+
   const selectedPhotos = (assets || []).filter((a) => (selectedAssets || []).includes(a.id));
+
+  if (editedDrafts.length === 0) {
+    return (
+      <div className="card mt-6 border-l-4 border-green-500">
+        <div className="flex items-center gap-3 py-2">
+          <span className="text-green-600 text-lg">&#10003;</span>
+          <div>
+            <h3 className="font-semibold text-gray-800">All posts saved</h3>
+            <p className="text-xs text-gray-400">Every generated draft has been sent to the publishing queue. Generate new content or review the Publishing Queue tab.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="card mt-6 border-l-4 border-accent-500">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <h3 className="font-semibold text-gray-800">Review generated posts</h3>
-          <p className="text-xs text-gray-400">Edit each platform draft before saving to the publishing queue.</p>
+          <p className="text-xs text-gray-400">Edit each platform draft before saving to the publishing queue. Saved posts are removed automatically.</p>
         </div>
         <div className="flex gap-2">
           <button className="btn-primary" onClick={() => onSave(editedDrafts)} disabled={saving}>
-            {saving ? 'Saving...' : 'Save All to Queue'}
+            {saving ? 'Saving...' : `Save All to Queue (${editedDrafts.length})`}
           </button>
         </div>
       </div>
@@ -328,16 +349,16 @@ function ResultCard({ result, onSave, onSaveSingle, saving, assets, selectedAsse
             </div>
             {draft.notes && <p className="text-xs text-gray-400 mt-3">{draft.notes}</p>}
             <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-gray-100">
-              <button className="px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 text-purple-700 text-xs font-medium hover:bg-purple-100 transition-colors" onClick={() => onSaveSingle(editedDrafts[idx], 'idea')} disabled={saving}>
+              <button className="px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 text-purple-700 text-xs font-medium hover:bg-purple-100 transition-colors" onClick={() => handleSaveSingle(idx, 'idea')} disabled={saving}>
                 Save as Idea
               </button>
-              <button className="px-3 py-1.5 rounded-lg border border-yellow-200 bg-yellow-50 text-yellow-700 text-xs font-medium hover:bg-yellow-100 transition-colors" onClick={() => onSaveSingle(editedDrafts[idx], 'draft_generated')} disabled={saving}>
+              <button className="px-3 py-1.5 rounded-lg border border-yellow-200 bg-yellow-50 text-yellow-700 text-xs font-medium hover:bg-yellow-100 transition-colors" onClick={() => handleSaveSingle(idx, 'draft_generated')} disabled={saving}>
                 Save as Draft
               </button>
-              <button className="px-3 py-1.5 rounded-lg border border-orange-200 bg-orange-50 text-orange-700 text-xs font-medium hover:bg-orange-100 transition-colors" onClick={() => onSaveSingle(editedDrafts[idx], 'needs_review')} disabled={saving}>
+              <button className="px-3 py-1.5 rounded-lg border border-orange-200 bg-orange-50 text-orange-700 text-xs font-medium hover:bg-orange-100 transition-colors" onClick={() => handleSaveSingle(idx, 'needs_review')} disabled={saving}>
                 Send to Review
               </button>
-              <button className="px-3 py-1.5 rounded-lg border border-green-200 bg-green-50 text-green-700 text-xs font-medium hover:bg-green-100 transition-colors" onClick={() => onSaveSingle(editedDrafts[idx], 'approved')} disabled={saving}>
+              <button className="px-3 py-1.5 rounded-lg border border-green-200 bg-green-50 text-green-700 text-xs font-medium hover:bg-green-100 transition-colors" onClick={() => handleSaveSingle(idx, 'approved')} disabled={saving}>
                 Approve
               </button>
             </div>
@@ -1412,7 +1433,10 @@ export default function SocialStudioPage() {
       }
     }
     setSaving(false);
-    if (savedAll) setError('Drafts saved to the publishing queue for review.');
+    if (savedAll) {
+      setResult(null);
+      setError('All drafts saved to the publishing queue for review.');
+    }
   };
 
   const saveSingleDraft = async (draft, status) => {
@@ -1436,9 +1460,10 @@ export default function SocialStudioPage() {
     setSaving(false);
     if (r.ok) {
       setError(`Draft saved as "${status.replace(/_/g, ' ')}".`);
-    } else {
-      setError('Saving draft failed.');
+      return true;
     }
+    setError('Saving draft failed.');
+    return false;
   };
 
   if (!isLoggedIn) return <LoginForm />;
