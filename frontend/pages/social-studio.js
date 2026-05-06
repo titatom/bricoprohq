@@ -318,7 +318,7 @@ function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAs
       const hasPlatform = prev.platforms.includes(platform);
       const platforms = hasPlatform
         ? prev.platforms.filter((item) => item !== platform)
-        : [...prev, platform];
+        : [...prev.platforms, platform];
       return { ...prev, platforms: platforms.length ? platforms : [platform] };
     });
   };
