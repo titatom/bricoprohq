@@ -534,6 +534,21 @@ def oauth_disconnect(provider: str, _: User = Depends(auth_user), db: Session = 
     return {"disconnected": True}
 
 
+@app.post("/integrations/{provider}/disconnect")
+def disconnect_integration(provider: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Clear all credentials and reset integration to not_connected."""
+    i = db.query(Integration).filter(Integration.provider == provider).first()
+    if not i:
+        raise HTTPException(404, f"Integration '{provider}' not found")
+    if i.oauth_access_token:
+        _clear_oauth_tokens(provider, db)
+    i.base_url = None
+    i.config_json = "{}"
+    i.status = "not_connected"
+    db.commit()
+    return {"disconnected": True}
+
+
 # ── Per-provider CRUD (wildcard — must come after specific oauth/* routes) ─────
 
 @app.get("/integrations/{provider}")
@@ -1168,6 +1183,65 @@ def social_analyze_album(payload: dict, _: User = Depends(auth_user)):
         "candidates": candidates,
         "campaign_suggestions": result["campaign_ideas"],
     }
+
+
+@app.post("/social/generate-image")
+def social_generate_image(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Generate an image using the configured image generation model."""
+    from .services.ai import generate_image_prompt, AINotConfigured, AIError
+
+    social_cfg = _social_settings_map(db)
+    prompt = payload.get("prompt", "").strip()
+    preset = payload.get("preset", "").strip()
+    asset_ids = payload.get("asset_ids", [])
+
+    if not prompt and not preset:
+        raise HTTPException(400, "A prompt or preset is required.")
+
+    effective_prompt = prompt
+    if preset == "before_after":
+        ba_prompt = social_cfg.get("before_after_prompt", "")
+        effective_prompt = f"{ba_prompt}\n\n{prompt}".strip() if prompt else ba_prompt
+    if social_cfg.get("brand_voice"):
+        effective_prompt = f"Brand voice: {social_cfg['brand_voice']}\n\n{effective_prompt}".strip()
+    if asset_ids:
+        effective_prompt = f"{effective_prompt}\n\nReference Immich asset IDs: {', '.join(map(str, asset_ids))}.".strip()
+
+    try:
+        result = generate_image_prompt(effective_prompt, social_cfg, db)
+    except AINotConfigured as exc:
+        raise HTTPException(400, str(exc))
+    except AIError as exc:
+        raise HTTPException(502, f"Image generation failed: {exc}")
+
+    return {
+        "prompt_used": effective_prompt,
+        "result": result,
+        "asset_ids": asset_ids,
+    }
+
+
+@app.post("/social/image-presets")
+def social_image_presets(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Return saved image generation presets."""
+    presets_raw = db.query(Setting).filter(Setting.key == "social_image_presets").first()
+    if presets_raw and presets_raw.value:
+        try:
+            return json.loads(presets_raw.value)
+        except Exception:
+            pass
+    return [{"id": "before_after", "name": "Before / After", "prompt": "Create a clean side-by-side before and after comparison of a home renovation project. Show the transformation clearly.", "editable": True}]
+
+
+@app.put("/social/image-presets")
+def save_image_presets(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Save image generation presets."""
+    presets = payload.get("presets", [])
+    row = db.query(Setting).filter(Setting.key == "social_image_presets").first() or Setting(key="social_image_presets", value="[]")
+    row.value = json.dumps(presets)
+    db.add(row)
+    db.commit()
+    return presets
 
 
 @app.post("/social/generate-pack")

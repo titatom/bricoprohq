@@ -2,29 +2,16 @@ import Link from 'next/link';
 import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import LoginForm from '../components/LoginForm';
-
-const SERVICE_CATEGORIES = [
-  'Peinture intérieure',
-  'Réparation de gypse',
-  'Escalier métallique extérieur',
-  'Terrasse sablage et teinture',
-  'Clôture',
-  'Cuisine Ikea',
-  'Peinture d\'armoires',
-  'Petites rénovations',
-  'Service homme à tout faire',
-  'Préparation avant hiver',
-  'Réparations extérieures',
-];
+import StatusBadge from '../components/StatusBadge';
 
 const PLATFORMS = [
-  { value: 'facebook', label: 'Facebook' },
-  { value: 'instagram', label: 'Instagram' },
-  { value: 'gbp', label: 'Google Business Profile' },
-  { value: 'linkedin', label: 'LinkedIn' },
-  { value: 'website', label: 'Website / Gallery' },
-  { value: 'ad', label: 'Ad concept' },
-  { value: 'email_sms', label: 'Email / SMS' },
+  { value: 'facebook', label: 'Facebook', color: 'bg-blue-600', activeText: 'text-white', icon: 'f' },
+  { value: 'instagram', label: 'Instagram', color: 'bg-gradient-to-r from-purple-500 to-pink-500', activeText: 'text-white', icon: 'IG' },
+  { value: 'gbp', label: 'Google Business', color: 'bg-green-600', activeText: 'text-white', icon: 'G' },
+  { value: 'linkedin', label: 'LinkedIn', color: 'bg-blue-700', activeText: 'text-white', icon: 'in' },
+  { value: 'website', label: 'Website / Gallery', color: 'bg-gray-700', activeText: 'text-white', icon: 'W' },
+  { value: 'ad', label: 'Ad concept', color: 'bg-amber-600', activeText: 'text-white', icon: 'Ad' },
+  { value: 'email_sms', label: 'Email / SMS', color: 'bg-teal-600', activeText: 'text-white', icon: '@' },
 ];
 
 const LANGUAGES = [
@@ -57,15 +44,21 @@ const CTAS = [
 
 const DEFAULT_FORM = {
   album_id: '',
-  service_category: SERVICE_CATEGORIES[0],
+  service_category: '',
   platforms: ['facebook', 'instagram', 'gbp'],
   language: 'fr',
   tone: 'local',
   job_description: '',
   city: 'Montréal',
   cta: 'request_quote',
-  before_after_requested: false,
 };
+
+const SS_TABS = [
+  { key: 'post', label: 'Post Generation' },
+  { key: 'image', label: 'Image Generation' },
+  { key: 'campaigns', label: 'Campaigns' },
+  { key: 'publishing', label: 'Publishing Queue' },
+];
 
 const SEASONAL_CAMPAIGN_IDEAS = [
   {
@@ -88,6 +81,35 @@ const SEASONAL_CAMPAIGN_IDEAS = [
   },
 ];
 
+// ── Publishing constants ──────────────────────────────────────────────────────
+
+const DRAFT_STATUSES = [
+  'idea', 'draft_generated', 'needs_images', 'needs_review', 'approved',
+  'scheduled', 'posted', 'reuse_later', 'turn_into_ad', 'turn_into_page', 'archived',
+];
+
+const PUB_PLATFORMS = ['facebook', 'instagram', 'gbp', 'linkedin', 'website', 'ad', 'email_sms'];
+
+const KANBAN_COLS = [
+  { key: 'idea',            label: 'Idea',           color: 'bg-purple-50 border-purple-200' },
+  { key: 'draft_generated', label: 'Draft',          color: 'bg-yellow-50 border-yellow-200' },
+  { key: 'needs_review',    label: 'Needs Review',   color: 'bg-orange-50 border-orange-200' },
+  { key: 'approved',        label: 'Approved',       color: 'bg-brand-50 border-brand-200' },
+  { key: 'scheduled',       label: 'Scheduled',      color: 'bg-cyan-50 border-cyan-200' },
+  { key: 'posted',          label: 'Posted',         color: 'bg-green-50 border-green-200' },
+];
+
+// ── Campaign constants ────────────────────────────────────────────────────────
+
+const CAMPAIGN_STATUSES = ['draft', 'active', 'paused', 'completed', 'archived'];
+
+const SEASONAL_PRESETS = [
+  { name: 'Campagne printemps', service_category: 'Réparations extérieures', message: 'Profitez du printemps pour réparer, rénover et rafraîchir votre extérieur avec Bricopro.', status: 'draft' },
+  { name: 'Campagne été — terrasses', service_category: 'Terrasse sablage et teinture', message: 'Redonnez vie à votre terrasse avec nos services de sablage et teinture professionnels.', status: 'draft' },
+  { name: 'Préparation hiver', service_category: 'Préparation avant hiver', message: "Préparez votre maison avant l'hiver. Réparations extérieures, calfeutrage, toiture.", status: 'draft' },
+  { name: 'Campagne hiver — intérieur', service_category: 'Peinture intérieure', message: "L'hiver est le bon moment pour les travaux intérieurs : peinture, gypse, rénovation cuisine.", status: 'draft' },
+];
+
 function platformDefaults(value = '') {
   const parsed = String(value || '')
     .split(',')
@@ -95,6 +117,8 @@ function platformDefaults(value = '') {
     .filter(Boolean);
   return parsed.length ? parsed : DEFAULT_FORM.platforms;
 }
+
+// ── Shared image components ───────────────────────────────────────────────────
 
 function ImmichPickerThumbnail({ asset }) {
   const { apiFetch } = useAuth();
@@ -165,6 +189,56 @@ function ImmichImageCard({ asset, selected, onToggle }) {
   );
 }
 
+function ImmichImagePicker({ albums, assets, selectedAssets, setSelectedAssets, loadAlbumAssets, loadingAssets, form, setForm, settings, error, setError }) {
+  return (
+    <div className="card">
+      <h3 className="font-semibold text-gray-800 mb-1">Pick images from Immich</h3>
+      <p className="text-xs text-gray-400 mb-4">Select photos to provide context for AI copy generation and to use in the post.</p>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="md:col-span-2">
+          <label className="label">Immich album</label>
+          <select className="select" value={form.album_id} onChange={(e) => setForm({ ...form, album_id: e.target.value })}>
+            <option value="">Choose album...</option>
+            {albums.map((album) => <option key={album.id} value={album.id}>{album.name} {album.asset_count ? `(${album.asset_count})` : ''}</option>)}
+          </select>
+        </div>
+        <div className="flex items-end">
+          <button className="btn-primary w-full" type="button" onClick={loadAlbumAssets} disabled={loadingAssets || !form.album_id}>
+            {loadingAssets ? 'Loading photos...' : 'Load Photos'}
+          </button>
+        </div>
+      </div>
+      {settings.image_picker_prompt && (
+        <div className="mt-4 rounded-xl bg-brand-50 border border-brand-100 p-3 text-sm text-brand-700">
+          {settings.image_picker_prompt}
+        </div>
+      )}
+      {assets.length > 0 && (
+        <div className="mt-5">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-sm text-gray-500">{selectedAssets.length} of {assets.length} photos selected</p>
+            <button className="btn-secondary text-xs py-1 px-3" type="button" onClick={() => setSelectedAssets([])}>Clear selection</button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
+            {assets.map((asset) => (
+              <ImmichImageCard
+                key={asset.id}
+                asset={asset}
+                selected={selectedAssets.includes(asset.id)}
+                onToggle={() => setSelectedAssets((prev) => (
+                  prev.includes(asset.id) ? prev.filter((id) => id !== asset.id) : [...prev, asset.id]
+                ))}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Result card ───────────────────────────────────────────────────────────────
+
 function ResultCard({ result, onSave, saving }) {
   const [editedDrafts, setEditedDrafts] = useState(result.drafts || []);
 
@@ -176,15 +250,12 @@ function ResultCard({ result, onSave, saving }) {
     <div className="card mt-6 border-l-4 border-accent-500">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
-          <h3 className="font-semibold text-gray-800">4. Review generated posts</h3>
+          <h3 className="font-semibold text-gray-800">Review generated posts</h3>
           <p className="text-xs text-gray-400">Edit each platform draft before saving to the publishing queue.</p>
         </div>
         <div className="flex gap-2">
           <button className="btn-primary" onClick={() => onSave(editedDrafts)} disabled={saving}>
             {saving ? 'Saving...' : 'Save to Publishing Queue'}
-          </button>
-          <button className="btn-secondary" type="button" disabled title="Direct publishing will be enabled once platform publishing endpoints are connected.">
-            Post directly
           </button>
         </div>
       </div>
@@ -239,25 +310,760 @@ function ResultCard({ result, onSave, saving }) {
   );
 }
 
+// ── Post Generation Tab ───────────────────────────────────────────────────────
+
+function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAssets, setSelectedAssets, loadAlbumAssets, loadingAssets, generate, generating, result, saveDraft, saving, error, setError }) {
+  const togglePlatform = (platform) => {
+    setForm((prev) => {
+      const hasPlatform = prev.platforms.includes(platform);
+      const platforms = hasPlatform
+        ? prev.platforms.filter((item) => item !== platform)
+        : [...prev, platform];
+      return { ...prev, platforms: platforms.length ? platforms : [platform] };
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      <ImmichImagePicker
+        albums={albums}
+        assets={assets}
+        selectedAssets={selectedAssets}
+        setSelectedAssets={setSelectedAssets}
+        loadAlbumAssets={loadAlbumAssets}
+        loadingAssets={loadingAssets}
+        form={form}
+        setForm={setForm}
+        settings={settings}
+        error={error}
+        setError={setError}
+      />
+
+      <div className="card">
+        <h3 className="font-semibold text-gray-800 mb-4">Post options</h3>
+        <form onSubmit={generate} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="label">Service category</label>
+            <input
+              className="input"
+              value={form.service_category}
+              onChange={(e) => setForm({ ...form, service_category: e.target.value })}
+              placeholder="e.g. Peinture intérieure, Réparation de gypse..."
+            />
+            <p className="text-xs text-gray-400 mt-1">Describe the service — fed to the AI for copy generation.</p>
+          </div>
+          <div>
+            <label className="label">Language</label>
+            <select className="select" value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })}>
+              {LANGUAGES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Tone</label>
+            <select className="select" value={form.tone} onChange={(e) => setForm({ ...form, tone: e.target.value })}>
+              {TONES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">City / neighbourhood</label>
+            <input className="input" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Call to action</label>
+            <select className="select" value={form.cta} onChange={(e) => setForm({ ...form, cta: e.target.value })}>
+              {CTAS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="label">Platforms</label>
+            <div className="flex flex-wrap gap-2">
+              {PLATFORMS.map(({ value, label, color, icon }) => {
+                const active = form.platforms.includes(value);
+                return (
+                  <button
+                    type="button"
+                    key={value}
+                    onClick={() => togglePlatform(value)}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 text-sm font-medium transition-all ${
+                      active
+                        ? `${color} ${active ? 'text-white' : ''} border-transparent shadow-sm`
+                        : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                    }`}
+                  >
+                    <span className={`w-6 h-6 rounded-md flex items-center justify-center text-xs font-bold ${
+                      active ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-400'
+                    }`}>{icon}</span>
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="md:col-span-2">
+            <label className="label">Short job description</label>
+            <textarea
+              className="input h-28 resize-y"
+              value={form.job_description}
+              onChange={(e) => setForm({ ...form, job_description: e.target.value })}
+              placeholder="Example: Repainted salon walls, fixed two drywall cracks, cleaned trim, finished in a warm neutral colour..."
+            />
+          </div>
+          {error && <p className="md:col-span-2 text-sm text-red-600">{error}</p>}
+          <div className="md:col-span-2 flex gap-3">
+            <button type="submit" className="btn-primary" disabled={generating || selectedAssets.length === 0}>
+              {generating ? 'Generating...' : 'Generate Posts'}
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => setForm({ ...DEFAULT_FORM, album_id: form.album_id })}>Reset options</button>
+          </div>
+        </form>
+      </div>
+
+      {result && <ResultCard result={result} onSave={saveDraft} saving={saving} />}
+    </div>
+  );
+}
+
+// ── Image Generation Tab ──────────────────────────────────────────────────────
+
+function ImageGenerationTab({ albums, settings, apiFetch }) {
+  const [imgForm, setImgForm] = useState({ album_id: '', prompt: '', preset: '' });
+  const [assets, setAssets] = useState([]);
+  const [selectedAssets, setSelectedAssets] = useState([]);
+  const [loadingAssets, setLoadingAssets] = useState(false);
+  const [presets, setPresets] = useState([]);
+  const [generating, setGenerating] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const [editingPreset, setEditingPreset] = useState(null);
+
+  useEffect(() => {
+    loadPresets();
+  }, []); // eslint-disable-line
+
+  const loadPresets = async () => {
+    const r = await apiFetch('/social/image-presets');
+    if (r.ok) setPresets(await r.json());
+  };
+
+  const savePresets = async (updated) => {
+    setPresets(updated);
+    await apiFetch('/social/image-presets', {
+      method: 'PUT',
+      body: JSON.stringify({ presets: updated }),
+    });
+  };
+
+  const addPreset = () => {
+    const newPreset = { id: `custom_${Date.now()}`, name: 'New Preset', prompt: '', editable: true };
+    setEditingPreset(newPreset);
+  };
+
+  const saveEditingPreset = () => {
+    if (!editingPreset) return;
+    const existing = presets.findIndex((p) => p.id === editingPreset.id);
+    const updated = existing >= 0
+      ? presets.map((p) => p.id === editingPreset.id ? editingPreset : p)
+      : [...presets, editingPreset];
+    savePresets(updated);
+    setEditingPreset(null);
+  };
+
+  const deletePreset = (id) => {
+    savePresets(presets.filter((p) => p.id !== id));
+  };
+
+  const loadAlbumAssets = async () => {
+    if (!imgForm.album_id) return;
+    setLoadingAssets(true);
+    setError('');
+    const r = await apiFetch(`/social/immich/albums/${encodeURIComponent(imgForm.album_id)}/assets?limit=80`);
+    setLoadingAssets(false);
+    if (!r.ok) {
+      setError('Could not load album photos.');
+      setAssets([]);
+      return;
+    }
+    const data = await r.json();
+    setAssets(data.assets || []);
+    setSelectedAssets([]);
+  };
+
+  const generateImage = async () => {
+    setGenerating(true);
+    setError('');
+    setResult(null);
+    const r = await apiFetch('/social/generate-image', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt: imgForm.prompt,
+        preset: imgForm.preset,
+        asset_ids: selectedAssets,
+      }),
+    });
+    setGenerating(false);
+    if (r.ok) {
+      setResult(await r.json());
+      return;
+    }
+    let msg = 'Image generation failed.';
+    try { const data = await r.json(); msg = data.detail || msg; } catch {}
+    setError(msg);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="card">
+        <h3 className="font-semibold text-gray-800 mb-1">Pick reference images</h3>
+        <p className="text-xs text-gray-400 mb-4">Select photos to provide visual context for image generation.</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="md:col-span-2">
+            <label className="label">Immich album</label>
+            <select className="select" value={imgForm.album_id} onChange={(e) => setImgForm({ ...imgForm, album_id: e.target.value })}>
+              <option value="">Choose album...</option>
+              {albums.map((album) => <option key={album.id} value={album.id}>{album.name} {album.asset_count ? `(${album.asset_count})` : ''}</option>)}
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button className="btn-primary w-full" type="button" onClick={loadAlbumAssets} disabled={loadingAssets || !imgForm.album_id}>
+              {loadingAssets ? 'Loading...' : 'Load Photos'}
+            </button>
+          </div>
+        </div>
+        {assets.length > 0 && (
+          <div className="mt-5">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm text-gray-500">{selectedAssets.length} of {assets.length} photos selected</p>
+              <button className="btn-secondary text-xs py-1 px-3" type="button" onClick={() => setSelectedAssets([])}>Clear</button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
+              {assets.map((asset) => (
+                <ImmichImageCard
+                  key={asset.id}
+                  asset={asset}
+                  selected={selectedAssets.includes(asset.id)}
+                  onToggle={() => setSelectedAssets((prev) => (
+                    prev.includes(asset.id) ? prev.filter((id) => id !== asset.id) : [...prev, asset.id]
+                  ))}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <h3 className="font-semibold text-gray-800 mb-4">Image prompt</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="label">Presets</label>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {presets.map((preset) => (
+                <div key={preset.id} className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImgForm({ ...imgForm, preset: preset.id, prompt: preset.prompt });
+                    }}
+                    className={`px-3 py-2 rounded-lg border text-sm transition-all ${
+                      imgForm.preset === preset.id
+                        ? 'bg-accent-500 border-accent-500 text-white'
+                        : 'bg-white border-gray-200 text-gray-600 hover:border-accent-200'
+                    }`}
+                  >
+                    {preset.name}
+                  </button>
+                  {preset.editable && (
+                    <button
+                      type="button"
+                      className="text-xs text-gray-400 hover:text-gray-600 px-1"
+                      onClick={() => setEditingPreset({ ...preset })}
+                      title="Edit preset"
+                    >
+                      ✎
+                    </button>
+                  )}
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={addPreset}
+                className="px-3 py-2 rounded-lg border border-dashed border-gray-300 text-sm text-gray-400 hover:border-gray-400 hover:text-gray-600"
+              >
+                + Add Preset
+              </button>
+            </div>
+
+            {editingPreset && (
+              <div className="rounded-xl border border-accent-200 bg-accent-50 p-4 space-y-3">
+                <div>
+                  <label className="label">Preset name</label>
+                  <input className="input" value={editingPreset.name} onChange={(e) => setEditingPreset({ ...editingPreset, name: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">Prompt template</label>
+                  <textarea className="input h-24 resize-y" value={editingPreset.prompt} onChange={(e) => setEditingPreset({ ...editingPreset, prompt: e.target.value })} />
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" className="btn-primary text-sm" onClick={saveEditingPreset}>Save Preset</button>
+                  <button type="button" className="btn-secondary text-sm" onClick={() => setEditingPreset(null)}>Cancel</button>
+                  {presets.some((p) => p.id === editingPreset.id) && (
+                    <button type="button" className="btn-secondary text-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => { deletePreset(editingPreset.id); setEditingPreset(null); }}>Delete</button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className="label">Prompt</label>
+            <textarea
+              className="input h-32 resize-y"
+              value={imgForm.prompt}
+              onChange={(e) => setImgForm({ ...imgForm, prompt: e.target.value })}
+              placeholder="Describe the image you want to generate..."
+            />
+          </div>
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
+
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={generateImage}
+            disabled={generating || (!imgForm.prompt && !imgForm.preset)}
+          >
+            {generating ? 'Generating...' : 'Generate Image'}
+          </button>
+        </div>
+      </div>
+
+      {result && (
+        <div className="card border-l-4 border-accent-500">
+          <h3 className="font-semibold text-gray-800 mb-3">Generated Result</h3>
+          <div className="space-y-3">
+            <div>
+              <label className="label">Image prompt</label>
+              <textarea className="input h-28 resize-y" value={result.result?.image_prompt || ''} readOnly />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="label">Style</label>
+                <input className="input" value={result.result?.style || ''} readOnly />
+              </div>
+              <div>
+                <label className="label">Aspect ratio</label>
+                <input className="input" value={result.result?.aspect_ratio || ''} readOnly />
+              </div>
+              <div>
+                <label className="label">Notes</label>
+                <input className="input" value={result.result?.notes || ''} readOnly />
+              </div>
+            </div>
+            <p className="text-xs text-gray-400">
+              Copy the image prompt above and use it with your preferred image generation tool. Results can be uploaded to Immich.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Campaigns Tab ─────────────────────────────────────────────────────────────
+
+function CampaignsTab({ apiFetch }) {
+  const [campaigns, setCampaigns] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ name: '', service_category: '', status: 'draft', message: '' });
+  const [saving, setSaving] = useState(false);
+  const [generatedDrafts, setGeneratedDrafts] = useState({});
+
+  const loadCampaigns = useCallback(async () => {
+    const r = await apiFetch('/campaigns');
+    if (r.ok) setCampaigns(await r.json());
+  }, [apiFetch]);
+
+  useEffect(() => { loadCampaigns(); }, []); // eslint-disable-line
+
+  const createCampaign = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    await apiFetch('/campaigns', { method: 'POST', body: JSON.stringify(form) });
+    setSaving(false);
+    setShowForm(false);
+    setForm({ name: '', service_category: '', status: 'draft', message: '' });
+    await loadCampaigns();
+  };
+
+  const seedPreset = async (preset) => {
+    await apiFetch('/campaigns', { method: 'POST', body: JSON.stringify(preset) });
+    await loadCampaigns();
+  };
+
+  const generate = async (id) => {
+    const r = await apiFetch(`/campaigns/${id}/generate`, { method: 'POST' });
+    if (r.ok) {
+      const data = await r.json();
+      setGeneratedDrafts((p) => ({ ...p, [id]: data.draft_id }));
+    }
+  };
+
+  const updateStatus = async (id, status) => {
+    setCampaigns((prev) => prev.map((c) => c.id === id ? { ...c, status } : c));
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="font-semibold text-gray-800">Campaigns</h3>
+          <p className="text-sm text-gray-500 mt-0.5">Plan seasonal and service-based marketing campaigns.</p>
+        </div>
+        <button className="btn-primary text-sm" onClick={() => setShowForm((v) => !v)}>
+          {showForm ? 'Cancel' : '+ New Campaign'}
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="card">
+          <h3 className="font-semibold text-gray-800 mb-4">New Campaign</h3>
+          <form onSubmit={createCampaign} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="label">Campaign Name</label>
+              <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+            </div>
+            <div>
+              <label className="label">Service Category</label>
+              <input className="input" value={form.service_category} onChange={(e) => setForm({ ...form, service_category: e.target.value })} placeholder="e.g. Peinture intérieure" />
+            </div>
+            <div>
+              <label className="label">Status</label>
+              <select className="select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                {CAMPAIGN_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="col-span-full">
+              <label className="label">Message / Focus</label>
+              <textarea className="input h-20 resize-y" value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} placeholder="What is the key message for this campaign?" />
+            </div>
+            <div className="col-span-full flex gap-2">
+              <button type="submit" className="btn-primary text-sm" disabled={saving}>{saving ? 'Saving…' : 'Create Campaign'}</button>
+              <button type="button" className="btn-secondary text-sm" onClick={() => setShowForm(false)}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {campaigns.length === 0 && (
+        <div className="card">
+          <h3 className="font-semibold text-gray-800 mb-3">Start with a seasonal preset</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {SEASONAL_PRESETS.map((p) => (
+              <button
+                key={p.name}
+                className="text-left p-3 rounded-lg border border-gray-200 hover:border-accent-400 hover:bg-accent-50 transition-colors"
+                onClick={() => seedPreset(p)}
+              >
+                <p className="font-medium text-gray-800 text-sm">{p.name}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{p.service_category}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {campaigns.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {campaigns.map((c) => (
+            <div key={c.id} className="card flex flex-col gap-3">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="font-semibold text-gray-800">{c.name}</h3>
+                  <p className="text-sm text-gray-500 mt-0.5">{c.service_category}</p>
+                </div>
+                <StatusBadge status={c.status} />
+              </div>
+              {c.message && <p className="text-sm text-gray-600 bg-gray-50 rounded-lg px-3 py-2">{c.message}</p>}
+              <div className="flex flex-wrap gap-2 items-center mt-auto pt-2 border-t border-gray-50">
+                <select
+                  className="text-xs border border-gray-200 rounded px-2 py-1.5 bg-white"
+                  value={c.status}
+                  onChange={(e) => updateStatus(c.id, e.target.value)}
+                >
+                  {CAMPAIGN_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <button className="btn-primary text-xs py-1.5 px-3" onClick={() => generate(c.id)}>Generate Post</button>
+                {generatedDrafts[c.id] && <span className="text-xs text-green-600 font-medium">Draft #{generatedDrafts[c.id]} saved</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="card">
+        <h3 className="font-semibold text-gray-800 mb-4">Campaign suggestions</h3>
+        <div className="space-y-3">
+          {SEASONAL_CAMPAIGN_IDEAS.map((idea) => (
+            <div key={idea.title} className="rounded-xl border border-gray-100 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-gray-900">{idea.title}</p>
+                  <p className="text-xs text-accent-700 font-medium mt-1">{idea.season}</p>
+                  <p className="text-sm text-gray-600 mt-2">{idea.focus}</p>
+                </div>
+                <button className="btn-secondary text-xs" onClick={() => seedPreset({ name: idea.title, service_category: idea.service_category, message: idea.focus, status: 'draft' })}>Add</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Publishing Queue Tab ──────────────────────────────────────────────────────
+
+function DraftModal({ draft, onClose, onStatusChange }) {
+  const [status, setStatus] = useState(draft.status);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    await onStatusChange(draft.id, status);
+    setSaving(false);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between mb-4">
+          <h3 className="font-semibold text-gray-900 text-lg">{draft.title}</h3>
+          <button className="text-gray-400 hover:text-gray-600 text-xl leading-none" onClick={onClose}>×</button>
+        </div>
+        <div className="space-y-2 text-sm text-gray-600 mb-4">
+          <div className="flex gap-4">
+            <span><strong>Platform:</strong> {draft.platform}</span>
+            <span><strong>Date:</strong> {draft.planned_date || '—'}</span>
+          </div>
+          {draft.campaign_id && <p><strong>Campaign:</strong> #{draft.campaign_id}</p>}
+        </div>
+        <div className="mb-4">
+          <label className="label">Move to status</label>
+          <select className="select" value={status} onChange={(e) => setStatus(e.target.value)}>
+            {DRAFT_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+          </select>
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={save} disabled={saving}>
+            {saving ? 'Saving…' : 'Update Status'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KanbanBoard({ drafts, onStatusChange }) {
+  const [selected, setSelected] = useState(null);
+  const grouped = {};
+  KANBAN_COLS.forEach(({ key }) => { grouped[key] = []; });
+  drafts.forEach((d) => {
+    if (grouped[d.status]) grouped[d.status].push(d);
+    else { grouped['draft_generated'] = grouped['draft_generated'] || []; grouped['draft_generated'].push(d); }
+  });
+
+  return (
+    <>
+      {selected && <DraftModal draft={selected} onClose={() => setSelected(null)} onStatusChange={onStatusChange} />}
+      <div className="flex gap-3 overflow-x-auto pb-4">
+        {KANBAN_COLS.map(({ key, label, color }) => (
+          <div key={key} className={`flex-shrink-0 w-56 rounded-xl border p-3 ${color}`}>
+            <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-3">
+              {label} <span className="text-gray-400 font-normal">({grouped[key]?.length || 0})</span>
+            </p>
+            <div className="space-y-2">
+              {(grouped[key] || []).map((d) => (
+                <div key={d.id} className="bg-white rounded-lg p-3 shadow-sm cursor-pointer hover:shadow-md transition-shadow border border-gray-100" onClick={() => setSelected(d)}>
+                  <p className="text-sm font-medium text-gray-800 truncate">{d.title}</p>
+                  <p className="text-xs text-gray-400 mt-1">{d.platform} {d.planned_date ? `· ${d.planned_date}` : ''}</p>
+                </div>
+              ))}
+              {(!grouped[key] || grouped[key].length === 0) && (
+                <p className="text-xs text-gray-300 text-center py-4">Empty</p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function CalendarView({ drafts }) {
+  const byDate = {};
+  drafts.forEach((d) => {
+    if (d.date) { byDate[d.date] = byDate[d.date] || []; byDate[d.date].push(d); }
+  });
+  const sorted = Object.keys(byDate).sort();
+
+  if (sorted.length === 0)
+    return <p className="text-sm text-gray-400 py-8 text-center">No posts scheduled yet. Assign a planned date to drafts.</p>;
+
+  return (
+    <div className="space-y-4">
+      {sorted.map((date) => (
+        <div key={date}>
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">{date}</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+            {byDate[date].map((d) => (
+              <div key={d.id} className="bg-white border border-gray-100 rounded-lg p-3 shadow-sm">
+                <p className="text-sm font-medium text-gray-800 truncate">{d.title}</p>
+                <div className="flex gap-2 mt-1">
+                  <span className="badge bg-gray-100 text-gray-600">{d.platform}</span>
+                  <StatusBadge status={d.status} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ListView({ drafts, onStatusChange }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
+            {['Title', 'Platform', 'Status', 'Planned Date', 'Campaign', 'Actions'].map((h) => (
+              <th key={h} className="pb-2 font-medium pr-4">{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {drafts.map((d) => (
+            <tr key={d.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+              <td className="py-2.5 pr-4 font-medium text-gray-800 max-w-xs truncate">{d.title}</td>
+              <td className="py-2.5 pr-4"><span className="badge bg-gray-100 text-gray-600">{d.platform}</span></td>
+              <td className="py-2.5 pr-4"><StatusBadge status={d.status} /></td>
+              <td className="py-2.5 pr-4 text-gray-500">{d.planned_date || '—'}</td>
+              <td className="py-2.5 pr-4 text-gray-400">{d.campaign_id ? `#${d.campaign_id}` : '—'}</td>
+              <td className="py-2.5">
+                <select
+                  className="text-xs border border-gray-200 rounded px-2 py-1 bg-white"
+                  value={d.status}
+                  onChange={(e) => onStatusChange(d.id, e.target.value)}
+                >
+                  {DRAFT_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+                </select>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {drafts.length === 0 && (
+        <p className="text-sm text-gray-400 py-8 text-center">No drafts yet. Generate content in the Post Generation tab.</p>
+      )}
+    </div>
+  );
+}
+
+function PublishingQueueTab({ apiFetch }) {
+  const [view, setView] = useState('kanban');
+  const [drafts, setDrafts] = useState([]);
+  const [calendar, setCalendar] = useState([]);
+  const [filterPlatform, setFilterPlatform] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+
+  const loadDrafts = useCallback(async () => {
+    const params = new URLSearchParams();
+    if (filterPlatform) params.set('platform', filterPlatform);
+    if (filterStatus) params.set('status', filterStatus);
+    const r = await apiFetch(`/publishing/drafts?${params}`);
+    if (r.ok) setDrafts(await r.json());
+  }, [apiFetch, filterPlatform, filterStatus]);
+
+  const loadCalendar = useCallback(async () => {
+    const r = await apiFetch('/publishing/calendar');
+    if (r.ok) setCalendar(await r.json());
+  }, [apiFetch]);
+
+  useEffect(() => { loadDrafts(); loadCalendar(); }, [filterPlatform, filterStatus]); // eslint-disable-line
+
+  const updateStatus = async (id, status) => {
+    await apiFetch(`/publishing/drafts/${id}/status?status=${status}`, { method: 'PUT' });
+    await loadDrafts();
+    await loadCalendar();
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="font-semibold text-gray-800">Publishing Queue</h3>
+          <p className="text-sm text-gray-500 mt-0.5">Manage, schedule, and track your content across platforms.</p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 items-center">
+        <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+          {[
+            { key: 'kanban',   label: 'Kanban',   icon: '⬛' },
+            { key: 'calendar', label: 'Calendar', icon: '📅' },
+            { key: 'list',     label: 'List',     icon: '☰' },
+          ].map(({ key, label, icon }) => (
+            <button
+              key={key}
+              onClick={() => setView(key)}
+              className={`px-4 py-2 text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                view === key ? 'bg-brand-600 text-white' : 'bg-white text-brand-600 hover:bg-brand-50'
+              }`}
+            >
+              {icon} {label}
+            </button>
+          ))}
+        </div>
+        <select className="select w-36" value={filterPlatform} onChange={(e) => setFilterPlatform(e.target.value)}>
+          <option value="">All platforms</option>
+          {PUB_PLATFORMS.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <select className="select w-40" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+          <option value="">All statuses</option>
+          {DRAFT_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+        </select>
+        <button className="btn-secondary text-xs py-1.5 px-3" onClick={loadDrafts}>Reload</button>
+        <span className="ml-auto text-sm text-gray-400">{drafts.length} draft{drafts.length !== 1 ? 's' : ''}</span>
+      </div>
+
+      <div className="card">
+        {view === 'kanban'   && <KanbanBoard drafts={drafts} onStatusChange={updateStatus} />}
+        {view === 'calendar' && <CalendarView drafts={calendar} />}
+        {view === 'list'     && <ListView drafts={drafts} onStatusChange={updateStatus} />}
+      </div>
+    </div>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
 export default function SocialStudioPage() {
   const { isLoggedIn, apiFetch } = useAuth();
+  const [activeTab, setActiveTab] = useState('post');
   const [form, setForm] = useState(DEFAULT_FORM);
   const [settings, setSettings] = useState({});
   const [albums, setAlbums] = useState([]);
   const [assets, setAssets] = useState([]);
   const [selectedAssets, setSelectedAssets] = useState([]);
   const [result, setResult] = useState(null);
-  const [campaigns, setCampaigns] = useState([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [kpiSaving, setKpiSaving] = useState(false);
   const [error, setError] = useState('');
-  const [kpiForm, setKpiForm] = useState({
-    title: '', platform: 'facebook', post_url: '', campaign_name: '', spend: 0,
-    impressions: 0, reach: 0, clicks: 0, leads: 0, messages: 0, calls: 0,
-    engagement_rate: 0, notes: '',
-  });
 
   const applySettings = (data) => {
     setSettings(data);
@@ -269,7 +1075,6 @@ export default function SocialStudioPage() {
       tone: data.default_tone || prev.tone,
       city: data.default_city || prev.city,
       cta: data.default_cta || prev.cta,
-      before_after_requested: data.before_after_enabled === 'true' ? prev.before_after_requested : false,
     }));
   };
 
@@ -287,16 +1092,10 @@ export default function SocialStudioPage() {
     }
   }, [apiFetch]);
 
-  const loadCampaigns = useCallback(async () => {
-    const r = await apiFetch('/campaigns');
-    if (r.ok) setCampaigns(await r.json());
-  }, [apiFetch]);
-
   useEffect(() => {
     if (!isLoggedIn) return;
     loadSettings();
     loadAlbums();
-    loadCampaigns();
   }, [isLoggedIn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadAlbumAssets = async () => {
@@ -321,16 +1120,6 @@ export default function SocialStudioPage() {
     setSelectedAssets([]);
   };
 
-  const togglePlatform = (platform) => {
-    setForm((prev) => {
-      const hasPlatform = prev.platforms.includes(platform);
-      const platforms = hasPlatform
-        ? prev.platforms.filter((item) => item !== platform)
-        : [...prev.platforms, platform];
-      return { ...prev, platforms: platforms.length ? platforms : [platform] };
-    });
-  };
-
   const generate = async (e) => {
     e.preventDefault();
     setGenerating(true);
@@ -348,7 +1137,6 @@ export default function SocialStudioPage() {
         tone: form.tone,
         city: form.city,
         cta: form.cta,
-        before_after_requested: form.before_after_requested,
         job_description: form.job_description || selected.map((asset) => asset.filename || asset.title).join('\n'),
       }),
     });
@@ -392,240 +1180,73 @@ export default function SocialStudioPage() {
     if (savedAll) setError('Drafts saved to the publishing queue for review.');
   };
 
-  const createCampaign = async (idea) => {
-    const r = await apiFetch('/campaigns', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: idea.title,
-        service_category: idea.service_category,
-        status: 'draft',
-        message: idea.focus,
-      }),
-    });
-    if (!r.ok) {
-      setError('Creating campaign failed.');
-      return;
-    }
-    await loadCampaigns();
-  };
-
-  const saveKpi = async (e) => {
-    e.preventDefault();
-    setKpiSaving(true);
-    setError('');
-    const r = await apiFetch('/kpi/records', { method: 'POST', body: JSON.stringify(kpiForm) });
-    setKpiSaving(false);
-    if (!r.ok) {
-      setError('Saving KPI record failed.');
-      return;
-    }
-    setKpiForm({
-      title: '', platform: 'facebook', post_url: '', campaign_name: '', spend: 0,
-      impressions: 0, reach: 0, clicks: 0, leads: 0, messages: 0, calls: 0,
-      engagement_rate: 0, notes: '',
-    });
-  };
-
   if (!isLoggedIn) return <LoginForm />;
 
   return (
     <div className="p-6 max-w-7xl">
       <div className="flex items-start justify-between gap-4 mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-1">AI Social Studio</h2>
+          <h2 className="text-2xl font-bold text-gray-900 mb-1">Social Studio</h2>
           <p className="text-gray-500 text-sm">
-            Pick project photos from Immich, choose post options, generate editable platform posts, then save or publish.
+            Create social content, generate images, manage campaigns, and schedule publishing.
           </p>
         </div>
-        <Link href="/settings/social-studio" className="btn-secondary text-sm">Social Studio Settings</Link>
+        <Link href="/settings" className="btn-secondary text-sm" onClick={() => {}}>Settings</Link>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div className="xl:col-span-2 space-y-6">
-          <div className="card">
-            <h3 className="font-semibold text-gray-800 mb-4">1. Pick images from Immich</h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="md:col-span-2">
-                <label className="label">Configured Immich album</label>
-                <select className="select" value={form.album_id} onChange={(e) => setForm({ ...form, album_id: e.target.value })}>
-                  <option value="">Choose album...</option>
-                  {albums.map((album) => <option key={album.id} value={album.id}>{album.name} {album.asset_count ? `(${album.asset_count})` : ''}</option>)}
-                </select>
-                <p className="text-xs text-gray-400 mt-1">
-                  Album source is configured in Social Studio settings. Photos shown here are unfiltered; you choose the best ones.
-                </p>
-              </div>
-              <div className="flex items-end">
-                <button className="btn-primary w-full" type="button" onClick={loadAlbumAssets} disabled={loadingAssets || !form.album_id}>
-                  {loadingAssets ? 'Loading photos...' : 'Load Photos'}
-                </button>
-              </div>
-            </div>
-            {settings.image_picker_prompt && (
-              <div className="mt-4 rounded-xl bg-brand-50 border border-brand-100 p-3 text-sm text-brand-700">
-                {settings.image_picker_prompt}
-              </div>
-            )}
-            {assets.length > 0 && (
-              <div className="mt-5">
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-sm text-gray-500">{selectedAssets.length} of {assets.length} photos selected</p>
-                  <button className="btn-secondary text-xs py-1 px-3" type="button" onClick={() => setSelectedAssets([])}>Clear selection</button>
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
-                  {assets.map((asset) => (
-                    <ImmichImageCard
-                      key={asset.id}
-                      asset={asset}
-                      selected={selectedAssets.includes(asset.id)}
-                      onToggle={() => setSelectedAssets((prev) => (
-                        prev.includes(asset.id) ? prev.filter((id) => id !== asset.id) : [...prev, asset.id]
-                      ))}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="card">
-            <h3 className="font-semibold text-gray-800 mb-4">2. Choose post options</h3>
-            <form onSubmit={generate} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="label">Service category</label>
-                <select className="select" value={form.service_category} onChange={(e) => setForm({ ...form, service_category: e.target.value })}>
-                  {SERVICE_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">Language</label>
-                <select className="select" value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })}>
-                  {LANGUAGES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">Tone</label>
-                <select className="select" value={form.tone} onChange={(e) => setForm({ ...form, tone: e.target.value })}>
-                  {TONES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">City / neighbourhood</label>
-                <input className="input" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
-              </div>
-              <div>
-                <label className="label">Call to action</label>
-                <select className="select" value={form.cta} onChange={(e) => setForm({ ...form, cta: e.target.value })}>
-                  {CTAS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">Before / after montage</label>
-                <label className="flex items-center gap-2 h-11 rounded-lg border border-gray-200 px-3 text-sm text-gray-700">
-                  <input
-                    type="checkbox"
-                    checked={form.before_after_requested}
-                    disabled={settings.before_after_enabled === 'false'}
-                    onChange={(e) => setForm({ ...form, before_after_requested: e.target.checked })}
-                  />
-                  Selected photos are before/after candidates
-                </label>
-              </div>
-              <div className="md:col-span-2">
-                <label className="label">Platforms</label>
-                <div className="flex flex-wrap gap-2">
-                  {PLATFORMS.filter((p) => ['facebook', 'instagram', 'gbp'].includes(p.value)).map(({ value, label }) => (
-                    <button
-                      type="button"
-                      key={value}
-                      onClick={() => togglePlatform(value)}
-                      className={`px-3 py-2 rounded-lg border text-sm ${form.platforms.includes(value) ? 'bg-brand-600 border-brand-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-brand-200'}`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="md:col-span-2">
-                <label className="label">Short job description</label>
-                <textarea
-                  className="input h-28 resize-y"
-                  value={form.job_description}
-                  onChange={(e) => setForm({ ...form, job_description: e.target.value })}
-                  placeholder="Example: Repainted salon walls, fixed two drywall cracks, cleaned trim, finished in a warm neutral colour..."
-                />
-              </div>
-              {error && <p className="md:col-span-2 text-sm text-red-600">{error}</p>}
-              <div className="md:col-span-2 flex gap-3">
-                <button type="submit" className="btn-primary" disabled={generating || selectedAssets.length === 0}>
-                  {generating ? 'Generating...' : '3. Generate posts'}
-                </button>
-                <button type="button" className="btn-secondary" onClick={() => setForm({ ...DEFAULT_FORM, album_id: form.album_id })}>Reset options</button>
-              </div>
-            </form>
-          </div>
-
-          {result && <ResultCard result={result} onSave={saveDraft} saving={saving} />}
-        </div>
-
-        <div className="space-y-6">
-          <div className="card">
-            <h3 className="font-semibold text-gray-800 mb-3">Workflow status</h3>
-            <div className="space-y-3 text-sm">
-              <div className="flex items-center justify-between"><span className="text-gray-500">Album</span><span className="font-medium text-gray-800">{form.album_id || 'Not selected'}</span></div>
-              <div className="flex items-center justify-between"><span className="text-gray-500">Photos loaded</span><span className="font-medium text-gray-800">{assets.length}</span></div>
-              <div className="flex items-center justify-between"><span className="text-gray-500">Photos selected</span><span className="font-medium text-gray-800">{selectedAssets.length}</span></div>
-              <div className="flex items-center justify-between"><span className="text-gray-500">Platforms</span><span className="font-medium text-gray-800">{form.platforms.join(', ')}</span></div>
-            </div>
-          </div>
-
-          <div className="card">
-            <h3 className="font-semibold text-gray-800 mb-4">Campaign suggestions</h3>
-            <div className="space-y-3">
-              {SEASONAL_CAMPAIGN_IDEAS.map((idea) => (
-                <div key={idea.title} className="rounded-xl border border-gray-100 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-gray-900">{idea.title}</p>
-                      <p className="text-xs text-accent-700 font-medium mt-1">{idea.season}</p>
-                      <p className="text-sm text-gray-600 mt-2">{idea.focus}</p>
-                    </div>
-                    <button className="btn-secondary text-xs" onClick={() => createCampaign(idea)}>Add</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <p className="text-xs text-gray-400 mt-4">{campaigns.length} campaign{campaigns.length !== 1 ? 's' : ''} currently saved.</p>
-          </div>
-
-          <div className="card">
-            <h3 className="font-semibold text-gray-800 mb-4">Track post / ad KPI</h3>
-            <form onSubmit={saveKpi} className="grid grid-cols-1 gap-3">
-              <input className="input" placeholder="Post or ad title" value={kpiForm.title} onChange={(e) => setKpiForm({ ...kpiForm, title: e.target.value })} required />
-              <select className="select" value={kpiForm.platform} onChange={(e) => setKpiForm({ ...kpiForm, platform: e.target.value })}>
-                {PLATFORMS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
-              </select>
-              <input className="input" placeholder="Campaign name" value={kpiForm.campaign_name} onChange={(e) => setKpiForm({ ...kpiForm, campaign_name: e.target.value })} />
-              <input className="input" placeholder="Post/ad URL" value={kpiForm.post_url} onChange={(e) => setKpiForm({ ...kpiForm, post_url: e.target.value })} />
-              {['spend', 'impressions', 'reach', 'clicks', 'leads', 'messages', 'calls', 'engagement_rate'].map((field) => (
-                <input
-                  key={field}
-                  className="input"
-                  type="number"
-                  step={field === 'spend' || field === 'engagement_rate' ? '0.01' : '1'}
-                  placeholder={field.replace('_', ' ')}
-                  value={kpiForm[field]}
-                  onChange={(e) => setKpiForm({ ...kpiForm, [field]: Number(e.target.value) })}
-                />
-              ))}
-              <textarea className="input h-20 resize-y" placeholder="Notes" value={kpiForm.notes} onChange={(e) => setKpiForm({ ...kpiForm, notes: e.target.value })} />
-              <button type="submit" className="btn-primary" disabled={kpiSaving}>
-                {kpiSaving ? 'Saving...' : 'Save KPI record'}
-              </button>
-            </form>
-          </div>
-        </div>
+      <div className="flex flex-wrap gap-1 mb-6 border-b border-gray-200">
+        {SS_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              activeTab === tab.key
+                ? 'border-brand-600 text-brand-700'
+                : 'border-transparent text-gray-500 hover:text-gray-800'
+            }`}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
+
+      {activeTab === 'post' && (
+        <PostGenerationTab
+          form={form}
+          setForm={setForm}
+          settings={settings}
+          albums={albums}
+          assets={assets}
+          selectedAssets={selectedAssets}
+          setSelectedAssets={setSelectedAssets}
+          loadAlbumAssets={loadAlbumAssets}
+          loadingAssets={loadingAssets}
+          generate={generate}
+          generating={generating}
+          result={result}
+          saveDraft={saveDraft}
+          saving={saving}
+          error={error}
+          setError={setError}
+        />
+      )}
+
+      {activeTab === 'image' && (
+        <ImageGenerationTab
+          albums={albums}
+          settings={settings}
+          apiFetch={apiFetch}
+        />
+      )}
+
+      {activeTab === 'campaigns' && (
+        <CampaignsTab apiFetch={apiFetch} />
+      )}
+
+      {activeTab === 'publishing' && (
+        <PublishingQueueTab apiFetch={apiFetch} />
+      )}
     </div>
   );
 }

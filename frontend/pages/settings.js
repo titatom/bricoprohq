@@ -1,5 +1,5 @@
-import Link from 'next/link';
 import { useEffect, useState, useCallback } from 'react';
+import Link from 'next/link';
 import { useAuth } from '../context/AuthContext';
 import LoginForm from '../components/LoginForm';
 
@@ -77,10 +77,35 @@ const INTEGRATION_FIELDS = {
     authType: 'oauth',
     connectLabel: 'Connect with Google',
     connectStyle: 'bg-blue-600 hover:bg-blue-700 border-blue-600',
+    group: 'google',
     fields: [
       { key: 'client_id',     label: 'Client ID',     placeholder: 'From Google Cloud Console → OAuth 2.0 Client IDs', help: 'console.cloud.google.com → APIs & Services → Credentials → OAuth 2.0 Client IDs' },
       { key: 'client_secret', label: 'Client Secret', placeholder: 'Client Secret from Google Cloud Console', type: 'password', help: 'Same credential as the Client ID above' },
       { key: 'calendar_id',   label: 'Calendar ID (optional)', placeholder: 'primary or your@gmail.com', help: 'Leave blank to use your primary calendar. Found in Google Calendar settings → Integrate calendar.' },
+    ],
+  },
+  google_business: {
+    label: 'Google Business Profile',
+    icon: '🗺️',
+    logoDomain: 'business.google.com',
+    description: 'Uses the shared Google OAuth connection above.',
+    authType: 'shared_oauth',
+    sharedProvider: 'google_calendar',
+    sharedLabel: 'Google',
+    group: 'google',
+    fields: [],
+  },
+  meta: {
+    label: 'Meta (Facebook & Instagram)',
+    icon: '📘',
+    logoDomain: 'facebook.com',
+    description: 'Connect your Facebook Page and Instagram Business account for publishing.',
+    authType: 'oauth',
+    connectLabel: 'Connect with Meta',
+    connectStyle: 'bg-[#1877F2] hover:bg-[#166FE5] border-[#1877F2]',
+    fields: [
+      { key: 'client_id',     label: 'App ID',     placeholder: 'Meta App ID from developers.facebook.com', help: 'developers.facebook.com → Your App → Settings → Basic → App ID' },
+      { key: 'client_secret', label: 'App Secret', placeholder: 'App Secret from developers.facebook.com', type: 'password', help: 'developers.facebook.com → Your App → Settings → Basic → App Secret' },
     ],
   },
   jobber: {
@@ -138,31 +163,12 @@ const INTEGRATION_FIELDS = {
       { key: 'api_key',  label: 'Auth Token',          placeholder: 'Token from Paperless admin', type: 'password', help: 'Paperless → Admin → Auth Token' },
     ],
   },
-  meta: {
-    label: 'Meta (Facebook & Instagram)',
-    icon: '📘',
-    logoDomain: 'facebook.com',
-    description: 'Connect your Facebook Page and Instagram Business account for publishing.',
-    authType: 'oauth',
-    connectLabel: 'Connect with Meta',
-    connectStyle: 'bg-[#1877F2] hover:bg-[#166FE5] border-[#1877F2]',
-    fields: [
-      { key: 'client_id',     label: 'App ID',     placeholder: 'Meta App ID from developers.facebook.com', help: 'developers.facebook.com → Your App → Settings → Basic → App ID' },
-      { key: 'client_secret', label: 'App Secret', placeholder: 'App Secret from developers.facebook.com', type: 'password', help: 'developers.facebook.com → Your App → Settings → Basic → App Secret' },
-    ],
-  },
-  google_business: {
-    label: 'Google Business Profile',
-    icon: '🗺️',
-    logoDomain: 'business.google.com',
-    description: 'Uses the shared Google OAuth connection above.',
-    authType: 'shared_oauth',
-    sharedProvider: 'google_calendar',
-    sharedLabel: 'Google',
-    fields: [
-    ],
-  },
 };
+
+const INTEGRATION_ORDER = [
+  'google_calendar', 'google_business', 'meta', 'jobber',
+  'immich', 'immich-gpt', 'paperless-gpt', 'paperless',
+];
 
 const SETTINGS_TABS = [
   { key: 'general', label: 'General' },
@@ -170,6 +176,36 @@ const SETTINGS_TABS = [
   { key: 'integrations', label: 'Integrations' },
   { key: 'social', label: 'Social Studio' },
 ];
+
+// ── Social Studio settings defaults ───────────────────────────────────────────
+
+const SS_DEFAULTS = {
+  default_album_id: '',
+  image_model: 'openai/gpt-4o-mini',
+  image_generation_model: '',
+  copy_model: 'openai/gpt-4o-mini',
+  default_language: 'fr',
+  default_platforms: 'facebook,instagram,gbp',
+  default_tone: 'local',
+  default_city: 'Montréal',
+  default_cta: 'request_quote',
+  brand_voice: 'Friendly, local, practical, trustworthy Bricopro expert.',
+  image_picker_prompt: 'Pick clear project photos to provide context for AI copy and to use in the post.',
+  copy_prompt: 'Write practical, local, trustworthy Bricopro social posts based only on the provided job details and selected images.',
+  facebook_prompt: 'Facebook: conversational, helpful, local, and clear about the service.',
+  instagram_prompt: 'Instagram: concise caption, strong opening line, tasteful emojis, and relevant hashtags.',
+  gbp_prompt: 'Google Business Profile: professional, service-focused, local, and direct.',
+  before_after_prompt: 'If the user marks photos as before/after candidates, propose or generate a clean side-by-side montage without inventing results.',
+  safety_prompt: 'Never invent reviews, client names, addresses, prices, certifications, or regulated trade work.',
+  facebook_account: '',
+  instagram_account: '',
+  google_business_account: '',
+  meta_account_id: '',
+  google_ads_account_id: '',
+  meta_ads_account: '',
+  google_ads_account: '',
+  before_after_enabled: 'true',
+};
 
 async function parseApiResponse(response, fallbackMessage) {
   const text = await response.text();
@@ -282,8 +318,6 @@ function IntegrationIcon({ meta }) {
 
 function AiProviderSection({ settings, onSave, onTest }) {
   const currentProvider = settings.ai_provider || 'openrouter';
-  const providerMeta = AI_PROVIDERS.find((p) => p.value === currentProvider) || AI_PROVIDERS[0];
-
   const [provider, setProvider] = useState(currentProvider);
   const [apiKey, setApiKey] = useState(settings.ai_api_key || '');
   const [baseUrl, setBaseUrl] = useState(settings.ai_base_url || '');
@@ -293,7 +327,6 @@ function AiProviderSection({ settings, onSave, onTest }) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
 
-  // When provider changes, reset base URL to default and clear model
   const handleProviderChange = (val) => {
     setProvider(val);
     const meta = AI_PROVIDERS.find((p) => p.value === val);
@@ -339,7 +372,6 @@ function AiProviderSection({ settings, onSave, onTest }) {
       </div>
 
       <form onSubmit={save} className="space-y-5">
-        {/* Provider tabs */}
         <div>
           <label className="label">Provider</label>
           <div className="flex gap-1 p-1 bg-brand-700 rounded-lg w-fit">
@@ -362,7 +394,6 @@ function AiProviderSection({ settings, onSave, onTest }) {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* API Key */}
           <div>
             <label className="label">{meta.keyLabel}</label>
             <input
@@ -375,26 +406,15 @@ function AiProviderSection({ settings, onSave, onTest }) {
             />
             <p className="text-xs text-gray-400 mt-1">{meta.keyHelp}</p>
           </div>
-
-          {/* Model */}
           <div>
             <label className="label">Model</label>
-            <select
-              className="select"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-            >
+            <select className="select" value={model} onChange={(e) => setModel(e.target.value)}>
               <option value="">Default ({meta.models[0]?.label})</option>
               {meta.models.map((m) => (
                 <option key={m.value} value={m.value}>{m.label}</option>
               ))}
             </select>
-            <p className="text-xs text-gray-400 mt-1">
-              {provider === 'openrouter' ? 'Model is passed as the OpenAI model field.' : 'Select the model to use for generation.'}
-            </p>
           </div>
-
-          {/* Base URL */}
           <div className="col-span-full">
             <label className="label">{meta.baseLabel}</label>
             <input
@@ -407,7 +427,6 @@ function AiProviderSection({ settings, onSave, onTest }) {
           </div>
         </div>
 
-        {/* Test result */}
         {testResult && (
           <div className={`text-sm rounded-lg px-4 py-2.5 ${testResult.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
             {testResult.ok ? '✓ ' : '✗ '}{testResult.message}
@@ -444,13 +463,13 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
   const [testResult, setTestResult] = useState(null);
   const [disconnecting, setDisconnecting] = useState(false);
 
-  // Sync form when integration data loads/changes from parent
   useEffect(() => {
     setForm(buildForm(integration));
   }, [integration]); // eslint-disable-line
 
   const isOAuth = meta.authType === 'oauth';
   const isSharedOAuth = meta.authType === 'shared_oauth';
+  const isApiKey = meta.authType === 'api_key';
   const sharedIntegration = isSharedOAuth ? integrationsByProvider?.[meta.sharedProvider] : null;
   const oauthConnected = isSharedOAuth ? sharedIntegration?.oauth_connected : integration?.oauth_connected;
   const oauthProviderKey = isSharedOAuth ? meta.sharedProvider : providerKey;
@@ -510,7 +529,11 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
 
   const disconnect = async () => {
     setDisconnecting(true);
-    await onDisconnect(providerKey);
+    if (isApiKey) {
+      await onDisconnect(providerKey, true);
+    } else {
+      await onDisconnect(providerKey, false);
+    }
     setTestResult(null);
     setDisconnecting(false);
   };
@@ -607,18 +630,260 @@ function IntegrationSection({ providerKey, meta, integration, integrationsByProv
               </button>
             )
           ) : (
-            <button
-              type="button"
-              className="btn-secondary text-sm"
-              onClick={connect}
-              disabled={testing || saving}
-            >
-              {testing ? 'Connecting…' : 'Test Connection'}
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn-secondary text-sm"
+                onClick={connect}
+                disabled={testing || saving}
+              >
+                {testing ? 'Testing…' : isConnected ? 'Test Connection' : 'Connect'}
+              </button>
+              {isConnected && (
+                <button
+                  type="button"
+                  className="btn-secondary text-sm text-red-600 border-red-200 hover:bg-red-50"
+                  onClick={disconnect}
+                  disabled={disconnecting}
+                >
+                  {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+                </button>
+              )}
+            </>
           )}
         </div>
       </form>
     </div>
+  );
+}
+
+function GoogleIntegrationGroup({ integrationsByProvider, onSave, onTest, onOAuthConnect, onDisconnect }) {
+  const calMeta = INTEGRATION_FIELDS.google_calendar;
+  const gbpMeta = INTEGRATION_FIELDS.google_business;
+  const calIntegration = integrationsByProvider.google_calendar || null;
+  const gbpIntegration = integrationsByProvider.google_business || null;
+  const oauthConnected = calIntegration?.oauth_connected;
+  const isConnected = calIntegration?.status === 'ok' || (oauthConnected && calIntegration?.status !== 'error');
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <IntegrationIcon meta={calMeta} />
+          <div>
+            <h3 className="font-semibold text-gray-800">Google Services</h3>
+            <p className="text-xs text-gray-400">Single OAuth connection for Calendar and Business Profile.</p>
+          </div>
+        </div>
+        <span className={`badge ${isConnected ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+          {isConnected ? 'Connected' : 'Not connected'}
+          {calIntegration?.last_sync_at ? ` · ${new Date(calIntegration.last_sync_at).toLocaleDateString()}` : ''}
+        </span>
+      </div>
+
+      {oauthConnected && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+          <div className="rounded-lg border border-gray-100 p-3 flex items-center gap-2">
+            <span className="text-lg">📅</span>
+            <div>
+              <p className="text-sm font-medium text-gray-800">Calendar</p>
+              <p className="text-xs text-gray-400">{calIntegration?.status === 'ok' ? 'Active' : 'Connected'}</p>
+            </div>
+          </div>
+          <div className="rounded-lg border border-gray-100 p-3 flex items-center gap-2">
+            <span className="text-lg">🗺️</span>
+            <div>
+              <p className="text-sm font-medium text-gray-800">Business Profile</p>
+              <p className="text-xs text-gray-400">{gbpIntegration?.status === 'ok' ? 'Active' : 'Connected'}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <IntegrationSection
+        providerKey="google_calendar"
+        meta={{ ...calMeta, label: 'Google OAuth' }}
+        integration={calIntegration}
+        integrationsByProvider={integrationsByProvider}
+        onSave={onSave}
+        onTest={onTest}
+        onOAuthConnect={onOAuthConnect}
+        onDisconnect={onDisconnect}
+      />
+    </div>
+  );
+}
+
+function SocialStudioSettingsInline({ apiFetch }) {
+  const [form, setForm] = useState(SS_DEFAULTS);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const load = useCallback(async () => {
+    const r = await apiFetch('/social/settings');
+    if (r.ok) setForm({ ...SS_DEFAULTS, ...(await r.json()) });
+  }, [apiFetch]);
+
+  useEffect(() => { load(); }, []); // eslint-disable-line
+
+  const save = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    await apiFetch('/social/settings', {
+      method: 'PUT',
+      body: JSON.stringify(form),
+    });
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  };
+
+  return (
+    <form onSubmit={save} className="space-y-6">
+      <section className="card">
+        <h3 className="font-semibold text-gray-800 mb-4">Immich source</h3>
+        <div>
+          <label className="label">Default Immich album ID</label>
+          <input
+            className="input"
+            value={form.default_album_id}
+            onChange={(e) => setForm({ ...form, default_album_id: e.target.value })}
+            placeholder="Album UUID or friendly source name"
+          />
+          <p className="text-xs text-gray-400 mt-1">Used as the starting album for image candidate analysis.</p>
+        </div>
+      </section>
+
+      <section className="card">
+        <h3 className="font-semibold text-gray-800 mb-4">AI models</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="label">Image analysis model</label>
+            <input className="input" value={form.image_model} onChange={(e) => setForm({ ...form, image_model: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Copywriting model</label>
+            <input className="input" value={form.copy_model} onChange={(e) => setForm({ ...form, copy_model: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Image generation model</label>
+            <input className="input" value={form.image_generation_model} onChange={(e) => setForm({ ...form, image_generation_model: e.target.value })} placeholder="Optional image model" />
+          </div>
+          <div>
+            <label className="label">Default language</label>
+            <select className="select" value={form.default_language} onChange={(e) => setForm({ ...form, default_language: e.target.value })}>
+              <option value="fr">Français</option>
+              <option value="en">English</option>
+              <option value="bilingual">Bilingual</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Default platforms</label>
+            <input className="input" value={form.default_platforms} onChange={(e) => setForm({ ...form, default_platforms: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Default tone</label>
+            <input className="input" value={form.default_tone} onChange={(e) => setForm({ ...form, default_tone: e.target.value })} placeholder="local, friendly, professional..." />
+          </div>
+          <div>
+            <label className="label">Default city / neighbourhood</label>
+            <input className="input" value={form.default_city} onChange={(e) => setForm({ ...form, default_city: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Default CTA</label>
+            <input className="input" value={form.default_cta} onChange={(e) => setForm({ ...form, default_cta: e.target.value })} />
+          </div>
+        </div>
+      </section>
+
+      <section className="card">
+        <h3 className="font-semibold text-gray-800 mb-4">Brand and publishing defaults</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="label">Brand voice</label>
+            <textarea className="input h-24 resize-y" value={form.brand_voice} onChange={(e) => setForm({ ...form, brand_voice: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Before / after generation</label>
+            <select className="select" value={form.before_after_enabled} onChange={(e) => setForm({ ...form, before_after_enabled: e.target.value })}>
+              <option value="true">Enabled when image pairs are available</option>
+              <option value="false">Disabled</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section className="card">
+        <h3 className="font-semibold text-gray-800 mb-4">Workflow prompts</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="label">Image picker prompt</label>
+            <textarea className="input h-20 resize-y" value={form.image_picker_prompt} onChange={(e) => setForm({ ...form, image_picker_prompt: e.target.value })} />
+            <p className="text-xs text-gray-400 mt-1">Guidance shown in the image picker. The user selects images manually to provide context for AI copy and to include in posts.</p>
+          </div>
+          <div>
+            <label className="label">Base copy prompt</label>
+            <textarea className="input h-24 resize-y" value={form.copy_prompt} onChange={(e) => setForm({ ...form, copy_prompt: e.target.value })} />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="label">Facebook prompt</label>
+              <textarea className="input h-28 resize-y" value={form.facebook_prompt} onChange={(e) => setForm({ ...form, facebook_prompt: e.target.value })} />
+            </div>
+            <div>
+              <label className="label">Instagram prompt</label>
+              <textarea className="input h-28 resize-y" value={form.instagram_prompt} onChange={(e) => setForm({ ...form, instagram_prompt: e.target.value })} />
+            </div>
+            <div>
+              <label className="label">GBP prompt</label>
+              <textarea className="input h-28 resize-y" value={form.gbp_prompt} onChange={(e) => setForm({ ...form, gbp_prompt: e.target.value })} />
+            </div>
+          </div>
+          <div>
+            <label className="label">Before / after prompt</label>
+            <textarea className="input h-20 resize-y" value={form.before_after_prompt} onChange={(e) => setForm({ ...form, before_after_prompt: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Safety / compliance prompt</label>
+            <textarea className="input h-20 resize-y" value={form.safety_prompt} onChange={(e) => setForm({ ...form, safety_prompt: e.target.value })} />
+          </div>
+        </div>
+      </section>
+
+      <section className="card">
+        <h3 className="font-semibold text-gray-800 mb-3">Social account connections</h3>
+        <div className="flex items-start gap-3 p-3 bg-blue-50 border border-blue-100 rounded-lg mb-4">
+          <span className="text-blue-500 mt-0.5">ℹ</span>
+          <p className="text-sm text-blue-700">
+            Facebook, Instagram, and Google Business Profile connections are managed via OAuth in the Integrations tab.
+          </p>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="label">Default Facebook Page name / ID <span className="text-gray-400 font-normal">(optional override)</span></label>
+            <input className="input" value={form.facebook_account} onChange={(e) => setForm({ ...form, facebook_account: e.target.value })} placeholder="Leave blank to use first connected page" />
+          </div>
+          <div>
+            <label className="label">Default Instagram handle <span className="text-gray-400 font-normal">(optional override)</span></label>
+            <input className="input" value={form.instagram_account} onChange={(e) => setForm({ ...form, instagram_account: e.target.value })} placeholder="@bricopro" />
+          </div>
+          <div>
+            <label className="label">Meta Ads account ID</label>
+            <input className="input" value={form.meta_ads_account || form.meta_account_id} onChange={(e) => setForm({ ...form, meta_ads_account: e.target.value, meta_account_id: e.target.value })} placeholder="act_XXXXXXXXXX" />
+          </div>
+          <div>
+            <label className="label">Google Ads customer ID</label>
+            <input className="input" value={form.google_ads_account || form.google_ads_account_id} onChange={(e) => setForm({ ...form, google_ads_account: e.target.value, google_ads_account_id: e.target.value })} placeholder="XXX-XXX-XXXX" />
+          </div>
+        </div>
+      </section>
+
+      <div className="flex gap-2">
+        <button className="btn-primary" type="submit" disabled={saving}>
+          {saving ? 'Saving...' : saved ? 'Saved ✓' : 'Save Social Studio Settings'}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -657,19 +922,24 @@ export default function SettingsPage() {
     if (!isLoggedIn) return;
     loadIntegrations();
     loadSettings();
-    // Check for OAuth callback result in query params
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
+      const tab = params.get('tab');
+      if (tab && SETTINGS_TABS.some((t) => t.key === tab)) {
+        setActiveTab(tab);
+      }
       const connectedProvider = params.get('oauth_connected');
       const oauthError = params.get('oauth_error');
       const oauthProvider = params.get('oauth_provider');
       if (connectedProvider) {
         const label = INTEGRATION_FIELDS[connectedProvider]?.label || connectedProvider;
         setOauthBanner({ ok: true, message: `${label} connected successfully via OAuth!` });
+        setActiveTab('integrations');
         window.history.replaceState({}, '', '/settings');
       } else if (oauthError) {
         const label = INTEGRATION_FIELDS[oauthProvider]?.label || oauthProvider || 'Integration';
         setOauthBanner({ ok: false, message: `${label} OAuth error: ${oauthError}` });
+        setActiveTab('integrations');
         window.history.replaceState({}, '', '/settings');
       }
     }
@@ -739,8 +1009,12 @@ export default function SettingsPage() {
     }
   }, [apiFetch]);
 
-  const disconnectIntegration = useCallback(async (providerKey) => {
-    await apiFetch(`/integrations/${providerKey}/oauth/disconnect`, { method: 'POST' });
+  const disconnectIntegration = useCallback(async (providerKey, isApiKeyDisconnect = false) => {
+    if (isApiKeyDisconnect) {
+      await apiFetch(`/integrations/${providerKey}/disconnect`, { method: 'POST' });
+    } else {
+      await apiFetch(`/integrations/${providerKey}/oauth/disconnect`, { method: 'POST' });
+    }
     await loadIntegrations();
   }, [apiFetch, loadIntegrations]);
 
@@ -748,6 +1022,10 @@ export default function SettingsPage() {
 
   const intMap = {};
   integrations.forEach((i) => { intMap[i.provider] = i; });
+
+  const nonGoogleIntegrations = INTEGRATION_ORDER.filter(
+    (key) => !INTEGRATION_FIELDS[key]?.group
+  );
 
   return (
     <div className="p-6 max-w-3xl">
@@ -786,7 +1064,6 @@ export default function SettingsPage() {
         </section>
       )}
 
-      {/* OAuth result banner */}
       {activeTab === 'integrations' && oauthBanner && (
         <div className={`mb-6 rounded-lg px-4 py-3 flex items-center justify-between ${oauthBanner.ok ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
           <span className="text-sm">{oauthBanner.ok ? '✓ ' : '✗ '}{oauthBanner.message}</span>
@@ -794,44 +1071,49 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* Integrations */}
       {activeTab === 'integrations' && (
         <section>
           <h3 className="text-base font-semibold text-gray-800 mb-3">Integrations</h3>
           <p className="text-sm text-gray-500 mb-4">
-            All credentials are stored in the database. The app reads them on each refresh - no restart needed.
+            All credentials are stored in the database. The app reads them on each refresh — no restart needed.
           </p>
           <div className="grid grid-cols-1 gap-4">
-            {Object.entries(INTEGRATION_FIELDS).map(([key, meta]) => (
-              <IntegrationSection
-                key={key}
-                providerKey={key}
-                meta={meta}
-                integration={intMap[key] || null}
-                integrationsByProvider={intMap}
-                onSave={saveIntegration}
-                onTest={testIntegration}
-                onOAuthConnect={startOAuthConnect}
-                onDisconnect={disconnectIntegration}
-              />
-            ))}
+            <GoogleIntegrationGroup
+              integrationsByProvider={intMap}
+              onSave={saveIntegration}
+              onTest={testIntegration}
+              onOAuthConnect={startOAuthConnect}
+              onDisconnect={disconnectIntegration}
+            />
+
+            {nonGoogleIntegrations.map((key) => {
+              const meta = INTEGRATION_FIELDS[key];
+              if (!meta) return null;
+              return (
+                <IntegrationSection
+                  key={key}
+                  providerKey={key}
+                  meta={meta}
+                  integration={intMap[key] || null}
+                  integrationsByProvider={intMap}
+                  onSave={saveIntegration}
+                  onTest={testIntegration}
+                  onOAuthConnect={startOAuthConnect}
+                  onDisconnect={disconnectIntegration}
+                />
+              );
+            })}
           </div>
         </section>
       )}
 
       {activeTab === 'social' && (
-        <section className="card border-l-4 border-accent-500">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h3 className="font-semibold text-gray-800">Social Studio Settings</h3>
-              <p className="text-sm text-gray-500 mt-1">
-                Configure Immich albums, model choices, account defaults, and KPI preferences separately from core integrations.
-              </p>
-            </div>
-            <Link href="/settings/social-studio" className="btn-primary text-sm whitespace-nowrap">
-              Open Social Studio Settings
-            </Link>
-          </div>
+        <section>
+          <h3 className="text-base font-semibold text-gray-800 mb-3">Social Studio Settings</h3>
+          <p className="text-sm text-gray-500 mb-4">
+            Configure Immich albums, model choices, account defaults, and workflow prompts.
+          </p>
+          <SocialStudioSettingsInline apiFetch={apiFetch} />
         </section>
       )}
     </div>

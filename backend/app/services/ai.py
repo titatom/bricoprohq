@@ -249,6 +249,67 @@ def generate_social_content(payload: dict, db: Session) -> dict:
     }
 
 
+def generate_image_prompt(prompt: str, social_cfg: dict, db: Session) -> dict:
+    """
+    Send an image generation prompt to the configured image generation model.
+    Uses the copy model as fallback if no image generation model is set.
+    Returns structured guidance for image generation.
+    """
+    cfg = _get_settings(db)
+    provider = cfg.get("ai_provider", "").strip()
+    api_key = cfg.get("ai_api_key", "").strip()
+    base_url = cfg.get("ai_base_url", "").strip()
+
+    if not provider:
+        raise AINotConfigured("No AI provider configured. Go to Settings → AI Provider.")
+
+    image_model = social_cfg.get("image_generation_model", "").strip()
+    copy_model = social_cfg.get("copy_model", "").strip()
+    model = image_model or copy_model or cfg.get("ai_model", "").strip()
+
+    if not model:
+        model = DEFAULT_MODELS.get(provider, "gpt-4o-mini")
+
+    system = (
+        "You are an AI image generation assistant for Bricopro, a Montreal home renovation contractor. "
+        "You help create image prompts and visual descriptions for social media content. "
+        "Given the user's description, generate a detailed image generation prompt suitable for "
+        "DALL-E, Stable Diffusion, or similar tools.\n\n"
+        "Return a JSON object with these keys:\n"
+        '{\n'
+        '  "image_prompt": "detailed prompt for image generation",\n'
+        '  "style": "suggested style (photo-realistic, illustration, etc.)",\n'
+        '  "aspect_ratio": "suggested aspect ratio (1:1, 4:5, 16:9)",\n'
+        '  "notes": "any notes for the user about the generated image"\n'
+        '}\n'
+        "Return only valid JSON. No markdown fences."
+    )
+
+    log.info("AI image generate: provider=%s model=%s", provider, model)
+
+    if provider == "ollama":
+        effective_base = base_url or OLLAMA_DEFAULT_BASE
+        result = _call_ollama(effective_base, model, system, prompt)
+    elif provider in ("openai", "openrouter"):
+        if not api_key:
+            raise AINotConfigured(f"API key not configured for {provider}.")
+        if provider == "openai":
+            effective_base = base_url or OPENAI_DEFAULT_BASE
+        else:
+            effective_base = base_url or OPENROUTER_DEFAULT_BASE
+        extra = ({"HTTP-Referer": "https://bricopro.ca", "X-Title": "Bricopro HQ"} if provider == "openrouter" else None)
+        result = _call_openai_compatible(effective_base, api_key, model, system, prompt, extra_headers=extra)
+    else:
+        raise AINotConfigured(f"Unknown provider '{provider}'.")
+
+    return {
+        "image_prompt": result.get("image_prompt", prompt),
+        "style": result.get("style", "photo-realistic"),
+        "aspect_ratio": result.get("aspect_ratio", "1:1"),
+        "notes": result.get("notes", "Review the prompt before generating."),
+    }
+
+
 def test_connection(db: Session) -> dict:
     """Send a minimal prompt to verify the provider is reachable and the key works."""
     cfg = _get_settings(db)
