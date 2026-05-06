@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import secrets
+from types import SimpleNamespace
 from datetime import datetime, timezone, timedelta, date
 from urllib.parse import urlencode, urlparse
 
@@ -895,13 +896,59 @@ def social_generate(payload: SocialGenerateIn, _: User = Depends(auth_user), db:
 
 @app.get("/social/albums")
 def social_albums(_: User = Depends(auth_user), db: Session = Depends(get_db)):
-    default_album = db.query(Setting).filter(Setting.key == "social_default_album_id").first()
-    album_id = default_album.value if default_album and default_album.value else "recent-work"
-    return [
-        {"id": album_id, "name": "Configured Immich album", "source": "immich", "asset_count": 24},
-        {"id": "seasonal-exterior", "name": "Seasonal exterior ideas", "source": "immich", "asset_count": 18},
-        {"id": "before-after", "name": "Before / after candidates", "source": "immich", "asset_count": 12},
-    ]
+    configured_album_id = _configured_social_album_id(db)
+    integration, base_url, api_key = _immich_config(db)
+    if not integration or not base_url or not api_key:
+        if configured_album_id:
+            return [{
+                "id": configured_album_id,
+                "name": "Configured Immich album",
+                "source": "immich",
+                "asset_count": 0,
+                "configured": False,
+            }]
+        return []
+
+    try:
+        r = httpx.get(
+            f"{base_url}/api/albums",
+            headers={"x-api-key": api_key},
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(exc.response.status_code, "Immich albums request failed") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(502, f"Immich albums request failed: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(502, "Immich albums response was not valid JSON") from exc
+
+    albums = data if isinstance(data, list) else data.get("albums", data.get("results", []))
+    result = []
+    for album in albums:
+        if not isinstance(album, dict):
+            continue
+        album_id = album.get("id")
+        if not album_id:
+            continue
+        result.append({
+            "id": album_id,
+            "name": album.get("albumName") or album.get("name") or "Immich album",
+            "source": "immich",
+            "asset_count": album.get("assetCount") or album.get("asset_count") or len(album.get("assets", []) or []),
+            "configured": album_id == configured_album_id,
+        })
+
+    if configured_album_id and not any(album["id"] == configured_album_id for album in result):
+        result.insert(0, {
+            "id": configured_album_id,
+            "name": "Configured Immich album",
+            "source": "immich",
+            "asset_count": 0,
+            "configured": True,
+        })
+    return result
 
 
 @app.post("/social/candidates")
@@ -959,10 +1006,21 @@ def social_candidates(payload: dict, _: User = Depends(auth_user)):
 SOCIAL_SETTING_DEFAULTS = {
     "default_album_id": "",
     "image_model": "",
+    "image_generation_model": "",
     "copy_model": "",
     "default_language": "bilingual",
     "default_platforms": "facebook,instagram,gbp",
+    "default_tone": "local",
+    "default_city": "Montréal",
+    "default_cta": "request_quote",
     "brand_voice": "Local, practical, trustworthy Bricopro voice",
+    "image_picker_prompt": "Help identify clear project photos, but let the user make the final selection.",
+    "copy_prompt": "Write practical, local, trustworthy Bricopro social posts based only on the provided job details and selected images.",
+    "facebook_prompt": "Facebook: conversational, helpful, local, and clear about the service.",
+    "instagram_prompt": "Instagram: concise caption, strong opening line, tasteful emojis, and relevant hashtags.",
+    "gbp_prompt": "Google Business Profile: professional, service-focused, local, and direct.",
+    "before_after_prompt": "If the user marks photos as before/after candidates, propose or generate a clean side-by-side montage without inventing results.",
+    "safety_prompt": "Never invent reviews, client names, addresses, prices, certifications, or regulated trade work.",
     "facebook_account": "",
     "instagram_account": "",
     "google_business_account": "",
@@ -974,10 +1032,59 @@ SOCIAL_SETTING_DEFAULTS = {
 }
 
 
-@app.get("/social/settings")
-def social_settings(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+def _social_settings_map(db: Session) -> dict:
     values = {s.key.removeprefix("social_"): s.value for s in db.query(Setting).filter(Setting.key.like("social_%")).all()}
     return {**SOCIAL_SETTING_DEFAULTS, **values}
+
+
+def _configured_social_album_id(db: Session) -> str:
+    return _social_settings_map(db).get("default_album_id", "").strip()
+
+
+def _immich_config(db: Session) -> tuple[Integration | None, str, str]:
+    integration = db.query(Integration).filter(Integration.provider == "immich").first()
+    if not integration:
+        return None, "", ""
+    try:
+        config = json.loads(integration.config_json or "{}")
+    except Exception:
+        config = {}
+    api_key = config.get("api_key", "")
+    if api_key and all(c == '•' for c in api_key):
+        api_key = ""
+    return integration, (integration.base_url or "").strip().rstrip("/"), api_key
+
+
+def _immich_ready(db: Session) -> tuple[Integration, str, str]:
+    integration, base_url, api_key = _immich_config(db)
+    if not integration or not base_url or not api_key:
+        raise HTTPException(400, "Immich integration is not configured.")
+    return integration, base_url, api_key
+
+
+def _immich_asset_payload(asset: dict, base_url: str) -> dict:
+    asset_id = asset.get("id") or asset.get("assetId")
+    filename = (
+        asset.get("originalFileName")
+        or asset.get("originalPath")
+        or asset.get("fileName")
+        or "Untitled photo"
+    )
+    return {
+        "id": asset_id,
+        "asset_id": asset_id,
+        "title": filename,
+        "filename": filename,
+        "type": asset.get("type"),
+        "created_at": asset.get("fileCreatedAt") or asset.get("createdAt") or asset.get("localDateTime"),
+        "thumbnail_url": f"/integrations/immich/assets/{asset_id}/thumbnail" if asset_id else "",
+        "asset_url": f"{base_url}/photos/{asset_id}" if asset_id else base_url,
+    }
+
+
+@app.get("/social/settings")
+def social_settings(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    return _social_settings_map(db)
 
 
 @app.put("/social/settings")
@@ -1001,6 +1108,41 @@ def save_social_settings(payload: dict, _: User = Depends(auth_user), db: Sessio
 @app.get("/social/immich/albums")
 def social_immich_albums(_: User = Depends(auth_user), db: Session = Depends(get_db)):
     return social_albums(_, db)
+
+
+@app.get("/social/immich/albums/{album_id}/assets")
+def social_immich_album_assets(
+    album_id: str,
+    limit: int = Query(default=60, ge=1, le=200),
+    _: User = Depends(auth_user),
+    db: Session = Depends(get_db),
+):
+    _, base_url, api_key = _immich_ready(db)
+    try:
+        r = httpx.get(
+            f"{base_url}/api/albums/{album_id}",
+            headers={"x-api-key": api_key},
+            timeout=20,
+        )
+        r.raise_for_status()
+        album = r.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(exc.response.status_code, "Immich album assets request failed") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(502, f"Immich album assets request failed: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(502, "Immich album response was not valid JSON") from exc
+
+    assets = [
+        asset
+        for asset in (album.get("assets", []) if isinstance(album, dict) else [])
+        if isinstance(asset, dict) and (asset.get("id") or asset.get("assetId"))
+    ]
+    return {
+        "album_id": album_id,
+        "name": (album.get("albumName") or album.get("name") or "Immich album") if isinstance(album, dict) else "Immich album",
+        "assets": [_immich_asset_payload(asset, base_url) for asset in assets[:limit]],
+    }
 
 
 @app.post("/social/analyze-album")
@@ -1030,38 +1172,77 @@ def social_analyze_album(payload: dict, _: User = Depends(auth_user)):
 
 @app.post("/social/generate-pack")
 def social_generate_pack(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
-    platforms = payload.get("platforms") or ["facebook"]
+    from .services.ai import generate_social_content, AINotConfigured, AIError
+
+    social_cfg = _social_settings_map(db)
+    raw_platforms = payload.get("platforms")
+    if isinstance(raw_platforms, str):
+        platforms = [p.strip() for p in raw_platforms.split(",") if p.strip()]
+    elif isinstance(raw_platforms, list):
+        platforms = [str(p).strip() for p in raw_platforms if str(p).strip()]
+    else:
+        platforms = [p.strip() for p in social_cfg.get("default_platforms", "facebook").split(",") if p.strip()]
+    platforms = platforms or ["facebook"]
+    selected_assets = payload.get("asset_ids") or []
+    before_after_requested = bool(payload.get("before_after_requested") or payload.get("before_after"))
+    job_description = payload.get("job_description", "")
+    if selected_assets:
+        job_description = (
+            f"{job_description}\n\nSelected Immich asset IDs: {', '.join(map(str, selected_assets))}."
+        ).strip()
+    if social_cfg.get("brand_voice"):
+        job_description = f"{job_description}\n\nBrand voice: {social_cfg['brand_voice']}".strip()
+    if social_cfg.get("copy_prompt"):
+        job_description = f"{job_description}\n\nCopy instructions: {social_cfg['copy_prompt']}".strip()
+    if social_cfg.get("safety_prompt"):
+        job_description = f"{job_description}\n\nSafety rules: {social_cfg['safety_prompt']}".strip()
+
     drafts = []
     for platform in platforms:
-        draft = ContentDraft(
-            title=f"{payload.get('service_category', 'Bricopro project')} - {platform}",
-            platform=platform,
-            language=payload.get("language", "bilingual"),
-            tone=payload.get("tone", "local"),
-            service_category=payload.get("service_category", ""),
-            campaign_id=payload.get("campaign_id"),
-            body=(
-                f"Generated from Immich album {payload.get('album_id', '')}. "
-                f"Showcase selected project images and invite customers to request a quote."
-            ),
-            short_body=f"{payload.get('service_category', 'Recent work')} - ready for review.",
-            hashtags="#bricopro #montreal #renovation",
-            cta=payload.get("cta", "request_quote"),
-            status="draft_generated",
-        )
-        db.add(draft)
-        db.flush()
+        platform_key = f"{platform}_prompt"
+        platform_job_description = job_description
+        if social_cfg.get(platform_key):
+            platform_job_description = f"{platform_job_description}\n\n{social_cfg[platform_key]}".strip()
+        if before_after_requested and social_cfg.get("before_after_prompt"):
+            platform_job_description = f"{platform_job_description}\n\nBefore/after: {social_cfg['before_after_prompt']}".strip()
+
+        draft_payload = {
+            "service_category": payload.get("service_category", "Bricopro project"),
+            "platform": platform,
+            "language": payload.get("language") or social_cfg.get("default_language", "bilingual"),
+            "tone": payload.get("tone") or social_cfg.get("default_tone", "local"),
+            "job_description": platform_job_description,
+            "city": payload.get("city") or social_cfg.get("default_city", "Montréal"),
+            "cta": payload.get("cta") or social_cfg.get("default_cta", "request_quote"),
+        }
+        ai_used = True
+        try:
+            generated = generate_social_content(draft_payload, db)
+        except AINotConfigured:
+            generated = _template_fallback(SimpleNamespace(**draft_payload))
+            ai_used = False
+        except AIError as exc:
+            raise HTTPException(502, f"AI generation failed: {exc}") from exc
+
+        title = f"{draft_payload['service_category']} - {platform}"
         drafts.append({
-            "draft_id": draft.id,
-            "title": draft.title,
-            "platform": draft.platform,
-            "main_copy": draft.body,
-            "short_variation": draft.short_body,
-            "hashtags": draft.hashtags,
-            "cta": draft.cta,
-            "selected_assets": payload.get("asset_ids", []),
+            "draft_id": None,
+            "title": title,
+            "platform": platform,
+            "main_copy": generated.get("main_copy", ""),
+            "short_variation": generated.get("short_variation", ""),
+            "hashtags": generated.get("hashtags", ""),
+            "cta": generated.get("cta_text") or draft_payload["cta"],
+            "selected_assets": selected_assets,
+            "before_after_requested": before_after_requested,
+            "visual_direction": (
+                social_cfg.get("before_after_prompt")
+                if before_after_requested
+                else "Use the selected project photos as-is; the user made the final image picks."
+            ),
+            "notes": generated.get("notes", "Review before publishing."),
+            "ai_used": ai_used,
         })
-    db.commit()
     return {"drafts": drafts}
 
 
