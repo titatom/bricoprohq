@@ -195,3 +195,191 @@ def test_ai_test_endpoint_success():
         data = r.json()
         assert data["ok"] is True
         assert "successful" in data["message"].lower()
+
+
+# ── OpenRouter image generation ───────────────────────────────────────────────
+
+def test_openrouter_image_gen_images_field():
+    """OpenRouter image gen succeeds when response uses the message.images[] format."""
+    from app.services.ai import _generate_image_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "Here is your image.",
+                "images": [{
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+                    }
+                }]
+            }
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp) as mock_post:
+        result = _generate_image_openrouter(
+            "sk-or-test", "", "google/gemini-2.5-flash-image",
+            "A sunset over mountains", "1024x1024", "standard"
+        )
+
+    assert result["image_b64"] == "iVBORw0KGgoAAAANSUhEUg=="
+    assert result["image_url"] == ""
+    assert result["model"] == "google/gemini-2.5-flash-image"
+    assert result["size"] == "1024x1024"
+
+    call_body = mock_post.call_args[1]["json"]
+    assert call_body["modalities"] == ["image", "text"]
+    assert call_body["image_config"] == {"aspect_ratio": "1:1"}
+
+
+def test_openrouter_image_gen_content_fallback():
+    """OpenRouter image gen succeeds with legacy content[] format (fallback)."""
+    from app.services.ai import _generate_image_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
+                    }
+                }]
+            }
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp):
+        result = _generate_image_openrouter(
+            "sk-or-test", "", "black-forest-labs/flux.2-pro",
+            "A cat in space", "1792x1024", "standard"
+        )
+
+    assert result["image_b64"] == "/9j/4AAQSkZJRg=="
+    assert result["image_url"] == ""
+
+
+def test_openrouter_image_gen_remote_url():
+    """OpenRouter image gen returns image_url when response has an HTTP URL."""
+    from app.services.ai import _generate_image_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "Image generated.",
+                "images": [{
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://cdn.openrouter.ai/images/abc123.png"
+                    }
+                }]
+            }
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp):
+        result = _generate_image_openrouter(
+            "sk-or-test", "", "some-model",
+            "A landscape", "1024x1024", "standard"
+        )
+
+    assert result["image_b64"] == ""
+    assert result["image_url"] == "https://cdn.openrouter.ai/images/abc123.png"
+
+
+def test_openrouter_image_gen_no_image_data_raises():
+    """OpenRouter image gen raises AIError when no image data is in response."""
+    from app.services.ai import _generate_image_openrouter, AIError
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "I cannot generate images."
+            }
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp):
+        try:
+            _generate_image_openrouter(
+                "sk-or-test", "", "text-only-model",
+                "A sunset", "1024x1024", "standard"
+            )
+            assert False, "Should have raised AIError"
+        except AIError as e:
+            assert "did not return image data" in str(e)
+
+
+def test_openrouter_image_gen_aspect_ratio_mapping():
+    """Verify size-to-aspect_ratio mapping is sent in image_config."""
+    from app.services.ai import _generate_image_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "images": [{
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,AAAA"}
+                }]
+            }
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp) as mock_post:
+        _generate_image_openrouter(
+            "sk-or-test", "", "model",
+            "test", "1024x1792", "hd"
+        )
+
+    call_body = mock_post.call_args[1]["json"]
+    assert call_body["image_config"] == {"aspect_ratio": "9:16"}
+
+
+def test_openrouter_image_gen_no_aspect_for_unknown_size():
+    """No image_config sent when size doesn't map to a known aspect ratio."""
+    from app.services.ai import _generate_image_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "images": [{
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,AAAA"}
+                }]
+            }
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp) as mock_post:
+        _generate_image_openrouter(
+            "sk-or-test", "", "model",
+            "test", "512x512", "standard"
+        )
+
+    call_body = mock_post.call_args[1]["json"]
+    assert "image_config" not in call_body

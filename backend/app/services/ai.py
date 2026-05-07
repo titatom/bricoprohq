@@ -353,6 +353,41 @@ def _build_image_gen_body(model: str, prompt: str, size: str, quality: str) -> d
     }
 
 
+_SIZE_TO_ASPECT_RATIO = {
+    "1024x1024": "1:1",
+    "1792x1024": "16:9",
+    "1024x1792": "9:16",
+    "1536x1024": "3:2",
+    "1024x1536": "2:3",
+    "1184x864":  "4:3",
+    "864x1184":  "3:4",
+    "1152x896":  "5:4",
+    "896x1152":  "4:5",
+}
+
+
+def _extract_image_from_url(url: str, prompt: str, model: str, size: str) -> dict:
+    """Extract image data from a data URL or return a remote URL reference."""
+    if url.startswith("data:image/"):
+        b64_data = url.split(",", 1)[1] if "," in url else ""
+        return {
+            "image_b64": b64_data,
+            "image_url": "",
+            "revised_prompt": prompt,
+            "model": model,
+            "size": size,
+        }
+    if url.startswith("http"):
+        return {
+            "image_b64": "",
+            "image_url": url,
+            "revised_prompt": prompt,
+            "model": model,
+            "size": size,
+        }
+    return {}
+
+
 def _generate_image_openrouter(
     api_key: str,
     base_url: str,
@@ -370,14 +405,18 @@ def _generate_image_openrouter(
         "X-Title": "Bricopro HQ",
     }
 
-    body = {
+    body: dict = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "modalities": ["image"],
+        "modalities": ["image", "text"],
         "max_tokens": 4096,
     }
 
-    log.info("AI image generation (OpenRouter chat): model=%s size=%s", model, size)
+    aspect_ratio = _SIZE_TO_ASPECT_RATIO.get(size)
+    if aspect_ratio:
+        body["image_config"] = {"aspect_ratio": aspect_ratio}
+
+    log.info("AI image generation (OpenRouter chat): model=%s size=%s aspect_ratio=%s", model, size, aspect_ratio)
 
     try:
         r = httpx.post(
@@ -398,34 +437,44 @@ def _generate_image_openrouter(
         data = r.json()
         choices = data.get("choices", [])
         if not choices:
+            log.error("OpenRouter image gen: no choices in response. Full response: %s", json.dumps(data)[:1000])
             raise AIError("OpenRouter returned no choices for image generation.")
 
         message = choices[0].get("message", {})
-        content = message.get("content")
 
+        # Primary format: OpenRouter returns images in message.images[]
+        images = message.get("images")
+        if isinstance(images, list) and images:
+            for img in images:
+                if isinstance(img, dict):
+                    img_url_obj = img.get("image_url", {})
+                    url = img_url_obj.get("url", "") if isinstance(img_url_obj, dict) else str(img_url_obj)
+                    if url:
+                        result = _extract_image_from_url(url, prompt, model, size)
+                        if result:
+                            return result
+
+        # Fallback: some models may return image parts in message.content[]
+        content = message.get("content")
         if isinstance(content, list):
             for part in content:
-                if isinstance(part, dict) and part.get("type") == "image_url":
-                    image_url = part.get("image_url", {})
-                    url = image_url.get("url", "") if isinstance(image_url, dict) else str(image_url)
-                    if url.startswith("data:image/"):
-                        import base64 as _b64
-                        b64_data = url.split(",", 1)[1] if "," in url else ""
-                        return {
-                            "image_b64": b64_data,
-                            "image_url": "",
-                            "revised_prompt": prompt,
-                            "model": model,
-                            "size": size,
-                        }
-                    return {
-                        "image_b64": "",
-                        "image_url": url,
-                        "revised_prompt": prompt,
-                        "model": model,
-                        "size": size,
-                    }
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "image_url":
+                    image_url_obj = part.get("image_url", {})
+                    url = image_url_obj.get("url", "") if isinstance(image_url_obj, dict) else str(image_url_obj)
+                    if url:
+                        result = _extract_image_from_url(url, prompt, model, size)
+                        if result:
+                            return result
 
+        # Log actual response structure for debugging
+        log.error(
+            "OpenRouter image gen: no image data found. message keys=%s, content type=%s, content preview=%s",
+            list(message.keys()),
+            type(content).__name__,
+            str(content)[:300] if content else "None",
+        )
         raise AIError(
             "OpenRouter image generation did not return image data. "
             "Make sure the model supports image output (check OpenRouter docs for image-capable models)."
@@ -433,6 +482,7 @@ def _generate_image_openrouter(
     except AIError:
         raise
     except Exception as exc:
+        log.error("OpenRouter image gen unexpected error: %s", exc, exc_info=True)
         raise AIError(f"Unexpected OpenRouter image response: {exc}") from exc
 
 
