@@ -383,3 +383,220 @@ def test_openrouter_image_gen_no_aspect_for_unknown_size():
 
     call_body = mock_post.call_args[1]["json"]
     assert "image_config" not in call_body
+
+
+def test_openrouter_image_gen_image_only_model_modalities():
+    """Image-only models (e.g. Flux) should use modalities: ['image'] only."""
+    from app.services.ai import _generate_image_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "images": [{
+                    "image_url": {"url": "data:image/png;base64,AAAA"}
+                }]
+            }
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp) as mock_post:
+        _generate_image_openrouter(
+            "sk-or-test", "", "black-forest-labs/flux.2-pro",
+            "test", "1024x1024", "standard"
+        )
+
+    call_body = mock_post.call_args[1]["json"]
+    assert call_body["modalities"] == ["image"]
+
+
+def test_openrouter_image_gen_text_and_image_model_modalities():
+    """Multimodal models (e.g. Gemini) should use modalities: ['image', 'text']."""
+    from app.services.ai import _generate_image_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "Here is your image.",
+                "images": [{
+                    "image_url": {"url": "data:image/png;base64,AAAA"}
+                }]
+            }
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp) as mock_post:
+        _generate_image_openrouter(
+            "sk-or-test", "", "google/gemini-2.5-flash-image",
+            "test", "1024x1024", "standard"
+        )
+
+    call_body = mock_post.call_args[1]["json"]
+    assert call_body["modalities"] == ["image", "text"]
+
+
+def test_openrouter_image_gen_no_max_tokens():
+    """Image generation requests should NOT include max_tokens."""
+    from app.services.ai import _generate_image_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "images": [{
+                    "image_url": {"url": "data:image/png;base64,AAAA"}
+                }]
+            }
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp) as mock_post:
+        _generate_image_openrouter(
+            "sk-or-test", "", "google/gemini-2.5-flash-image",
+            "test", "1024x1024", "standard"
+        )
+
+    call_body = mock_post.call_args[1]["json"]
+    assert "max_tokens" not in call_body
+
+
+def test_openrouter_image_gen_content_string_data_uri():
+    """Handle response where content is a string containing a data URI directly."""
+    from app.services.ai import _generate_image_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "data:image/png;base64,dGVzdGRhdGE="
+            }
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp):
+        result = _generate_image_openrouter(
+            "sk-or-test", "", "some-model",
+            "A test", "1024x1024", "standard"
+        )
+
+    assert result["image_b64"] == "dGVzdGRhdGE="
+    assert result["image_url"] == ""
+
+
+def test_openrouter_image_gen_content_string_http_url():
+    """Handle response where content is a plain HTTP URL string."""
+    from app.services.ai import _generate_image_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "https://cdn.openrouter.ai/generated/img123.png"
+            }
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp):
+        result = _generate_image_openrouter(
+            "sk-or-test", "", "some-model",
+            "A test", "1024x1024", "standard"
+        )
+
+    assert result["image_b64"] == ""
+    assert result["image_url"] == "https://cdn.openrouter.ai/generated/img123.png"
+
+
+def test_openrouter_image_gen_images_direct_url_string():
+    """Handle response where images[] contains direct URL strings."""
+    from app.services.ai import _generate_image_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "Generated!",
+                "images": [
+                    "data:image/png;base64,aW1hZ2VkYXRh"
+                ]
+            }
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp):
+        result = _generate_image_openrouter(
+            "sk-or-test", "", "some-model",
+            "A test", "1024x1024", "standard"
+        )
+
+    assert result["image_b64"] == "aW1hZ2VkYXRh"
+
+
+def test_openrouter_image_gen_images_url_key_shorthand():
+    """Handle response where images[] items use 'url' key directly (no nested image_url)."""
+    from app.services.ai import _generate_image_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "images": [{
+                    "url": "data:image/jpeg;base64,anBlZ2RhdGE="
+                }]
+            }
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp):
+        result = _generate_image_openrouter(
+            "sk-or-test", "", "some-model",
+            "A test", "1024x1024", "standard"
+        )
+
+    assert result["image_b64"] == "anBlZ2RhdGE="
+
+
+def test_openrouter_image_gen_data_array_format():
+    """Handle response with top-level data[] array (images/generations style)."""
+    from app.services.ai import _generate_image_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": ""}}],
+        "data": [{
+            "b64_json": "dG9wbGV2ZWxkYXRh",
+            "revised_prompt": "enhanced prompt"
+        }]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.post", return_value=mock_resp):
+        result = _generate_image_openrouter(
+            "sk-or-test", "", "some-model",
+            "A test", "1024x1024", "standard"
+        )
+
+    assert result["image_b64"] == "dG9wbGV2ZWxkYXRh"
+    assert result["revised_prompt"] == "enhanced prompt"
