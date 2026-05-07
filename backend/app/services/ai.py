@@ -388,6 +388,16 @@ def _extract_image_from_url(url: str, prompt: str, model: str, size: str) -> dic
     return {}
 
 
+_IMAGE_ONLY_MODEL_PREFIXES = (
+    "black-forest-labs/",
+    "sourceful/",
+    "stabilityai/",
+    "ideogram/",
+    "recraft/",
+    "bytedance/",
+)
+
+
 def _generate_image_openrouter(
     api_key: str,
     base_url: str,
@@ -405,18 +415,23 @@ def _generate_image_openrouter(
         "X-Title": "Bricopro HQ",
     }
 
+    image_only = model.lower().startswith(_IMAGE_ONLY_MODEL_PREFIXES)
+    modalities = ["image"] if image_only else ["image", "text"]
+
     body: dict = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "modalities": ["image", "text"],
-        "max_tokens": 4096,
+        "modalities": modalities,
     }
 
     aspect_ratio = _SIZE_TO_ASPECT_RATIO.get(size)
     if aspect_ratio:
         body["image_config"] = {"aspect_ratio": aspect_ratio}
 
-    log.info("AI image generation (OpenRouter chat): model=%s size=%s aspect_ratio=%s", model, size, aspect_ratio)
+    log.info(
+        "AI image generation (OpenRouter chat): model=%s size=%s aspect_ratio=%s modalities=%s",
+        model, size, aspect_ratio, modalities,
+    )
 
     try:
         r = httpx.post(
@@ -435,6 +450,11 @@ def _generate_image_openrouter(
 
     try:
         data = r.json()
+    except Exception as exc:
+        log.error("OpenRouter image gen: could not parse JSON response: %s", r.text[:500])
+        raise AIError(f"OpenRouter returned non-JSON response: {r.text[:200]}") from exc
+
+    try:
         choices = data.get("choices", [])
         if not choices:
             log.error("OpenRouter image gen: no choices in response. Full response: %s", json.dumps(data)[:1000])
@@ -442,38 +462,73 @@ def _generate_image_openrouter(
 
         message = choices[0].get("message", {})
 
-        # Primary format: OpenRouter returns images in message.images[]
+        # Format 1 (primary): OpenRouter returns images in message.images[]
         images = message.get("images")
         if isinstance(images, list) and images:
             for img in images:
-                if isinstance(img, dict):
-                    img_url_obj = img.get("image_url", {})
-                    url = img_url_obj.get("url", "") if isinstance(img_url_obj, dict) else str(img_url_obj)
+                if isinstance(img, str):
+                    result = _extract_image_from_url(img, prompt, model, size)
+                    if result:
+                        return result
+                elif isinstance(img, dict):
+                    img_url_obj = img.get("image_url", img.get("url", ""))
+                    if isinstance(img_url_obj, dict):
+                        url = img_url_obj.get("url", "")
+                    else:
+                        url = str(img_url_obj) if img_url_obj else ""
                     if url:
                         result = _extract_image_from_url(url, prompt, model, size)
                         if result:
                             return result
 
-        # Fallback: some models may return image parts in message.content[]
+        # Format 2: image data in message.content as a list of parts
         content = message.get("content")
         if isinstance(content, list):
             for part in content:
+                if isinstance(part, str):
+                    result = _extract_image_from_url(part, prompt, model, size)
+                    if result:
+                        return result
+                    continue
                 if not isinstance(part, dict):
                     continue
                 if part.get("type") == "image_url":
                     image_url_obj = part.get("image_url", {})
-                    url = image_url_obj.get("url", "") if isinstance(image_url_obj, dict) else str(image_url_obj)
+                    if isinstance(image_url_obj, dict):
+                        url = image_url_obj.get("url", "")
+                    else:
+                        url = str(image_url_obj) if image_url_obj else ""
                     if url:
                         result = _extract_image_from_url(url, prompt, model, size)
                         if result:
                             return result
 
-        # Log actual response structure for debugging
+        # Format 3: content is a string containing a data URI or URL
+        if isinstance(content, str) and content:
+            result = _extract_image_from_url(content.strip(), prompt, model, size)
+            if result:
+                return result
+
+        # Format 4: top-level data[] array (images/generations style response)
+        top_data = data.get("data")
+        if isinstance(top_data, list) and top_data:
+            first = top_data[0] if top_data else {}
+            if isinstance(first, dict):
+                b64 = first.get("b64_json", "")
+                url = first.get("url", "")
+                if b64:
+                    return {"image_b64": b64, "image_url": "", "revised_prompt": first.get("revised_prompt", prompt), "model": model, "size": size}
+                if url:
+                    return _extract_image_from_url(url, prompt, model, size) or {}
+
         log.error(
-            "OpenRouter image gen: no image data found. message keys=%s, content type=%s, content preview=%s",
+            "OpenRouter image gen: no image data found. "
+            "Response keys=%s, message keys=%s, content type=%s, content preview=%s, full response=%s",
+            list(data.keys()),
             list(message.keys()),
             type(content).__name__,
             str(content)[:300] if content else "None",
+            json.dumps(data)[:1500],
         )
         raise AIError(
             "OpenRouter image generation did not return image data. "
@@ -482,7 +537,7 @@ def _generate_image_openrouter(
     except AIError:
         raise
     except Exception as exc:
-        log.error("OpenRouter image gen unexpected error: %s", exc, exc_info=True)
+        log.error("OpenRouter image gen unexpected error: %s — response: %s", exc, json.dumps(data)[:1000], exc_info=True)
         raise AIError(f"Unexpected OpenRouter image response: {exc}") from exc
 
 
