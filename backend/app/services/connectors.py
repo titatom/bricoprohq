@@ -12,12 +12,11 @@ import html as html_lib
 import json
 import logging
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy.orm import object_session
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from ..models import Integration, Setting
 
@@ -314,7 +313,7 @@ def _sync_google_tokens(integration: Integration, token_data: dict) -> None:
         ).all()
 
     expires_in = token_data.get("expires_in", 3600)
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+    expires_at = datetime.now(UTC) + timedelta(seconds=int(expires_in))
     for intg in integrations:
         intg.oauth_access_token = token_data["access_token"]
         intg.oauth_token_expires_at = expires_at
@@ -342,9 +341,9 @@ class GoogleCalendarConnector(BaseConnector):
             )
 
         # Refresh if expired (or within 60 s of expiry)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = intg.oauth_token_expires_at
-        if expires_at and expires_at.replace(tzinfo=timezone.utc) <= now + timedelta(seconds=60):
+        if expires_at and expires_at.replace(tzinfo=UTC) <= now + timedelta(seconds=60):
             self._refresh_token()
 
         return intg.oauth_access_token
@@ -367,7 +366,7 @@ class GoogleCalendarConnector(BaseConnector):
         access_token = self._get_access_token()
         calendar_id = self.config.get("calendar_id", "primary")
         url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         try:
             r = httpx.get(
                 url,
@@ -420,9 +419,9 @@ class JobberConnector(BaseConnector):
         """Return OAuth access token, refreshing automatically if expired."""
         intg = self.integration
         if intg.oauth_access_token:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             expires_at = intg.oauth_token_expires_at
-            if expires_at and expires_at.replace(tzinfo=timezone.utc) <= now + timedelta(seconds=60):
+            if expires_at and expires_at.replace(tzinfo=UTC) <= now + timedelta(seconds=60):
                 self._refresh_token()
             return intg.oauth_access_token
         if self.api_key:
@@ -1242,9 +1241,9 @@ class GoogleBusinessConnector(BaseConnector):
             raise ConnectorNotConfigured(
                 "google_business: not connected via OAuth. Click 'Connect with Google' in Settings."
             )
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = intg.oauth_token_expires_at
-        if expires_at and expires_at.replace(tzinfo=timezone.utc) <= now + timedelta(seconds=60):
+        if expires_at and expires_at.replace(tzinfo=UTC) <= now + timedelta(seconds=60):
             self._refresh_token()
         return intg.oauth_access_token
 

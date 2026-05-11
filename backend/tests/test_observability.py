@@ -12,10 +12,7 @@ import logging
 import os
 import re
 from io import StringIO
-from unittest.mock import patch
 
-import httpx
-import pytest
 from fastapi.testclient import TestClient
 
 

@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Callable
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from sqlalchemy.orm import object_session
@@ -98,20 +98,20 @@ class OAuthRefresher:
                 f"{self.provider}: client_id/client_secret missing for token refresh."
             )
 
+        # Capture the token we observed *before* acquiring the lock. If, by
+        # the time we hold the lock, another caller has already replaced the
+        # token, skip the network round-trip. Comparing the literal token
+        # value avoids the "force-refresh on 401 with an unexpired
+        # access_token" footgun — a caller that observed the bad token
+        # before invoking refresh() still gets a real refresh.
+        token_at_call_site = intg.oauth_access_token
+
         lock = _lock_for(self.provider, intg.id)
         with lock:
-            # While we waited for the lock another caller may have refreshed
-            # the token already. Skip the network round-trip in that case.
             session = object_session(intg)
             if session:
                 session.refresh(intg, attribute_names=["oauth_access_token", "oauth_token_expires_at"])
-            now = datetime.now(timezone.utc)
-            expires_at = intg.oauth_token_expires_at
-            if (
-                intg.oauth_access_token
-                and expires_at
-                and expires_at.replace(tzinfo=timezone.utc) > now + timedelta(seconds=60)
-            ):
+            if intg.oauth_access_token and intg.oauth_access_token != token_at_call_site:
                 log.debug("%s: token already refreshed by another caller", self.provider)
                 return
 
@@ -154,6 +154,6 @@ class OAuthRefresher:
             intg.oauth_access_token = token_data["access_token"]
             if token_data.get("refresh_token"):
                 intg.oauth_refresh_token = token_data["refresh_token"]
-            intg.oauth_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+            intg.oauth_token_expires_at = datetime.now(UTC) + timedelta(seconds=expires_in)
             if session:
                 session.commit()

@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -44,7 +44,7 @@ log = logging.getLogger("bricopro.scheduler")
 
 # Module-level reference so callers (FastAPI shutdown handler, tests) can
 # stop the scheduler. None when not running.
-_scheduler: Optional[BackgroundScheduler] = None
+_scheduler: BackgroundScheduler | None = None
 _scheduler_lock = threading.Lock()
 
 # Integration providers we treat as candidates for the periodic refresh.

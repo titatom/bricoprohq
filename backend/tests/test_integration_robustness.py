@@ -102,10 +102,11 @@ def test_oauth_refresher_lock_coalesces_concurrent_callers():
     with TestClient(main.app):
         pass  # trigger startup_seed
 
+    from datetime import datetime, timedelta
+
     from app.db import SessionLocal
     from app.models import Integration
     from app.services.oauth import OAuthRefresher
-    from datetime import datetime, timezone, timedelta
 
     # Configure the jobber integration with expired tokens + client creds.
     with SessionLocal() as db:
@@ -187,8 +188,8 @@ def test_paperless_tag_id_cache_short_circuits_repeated_lookups():
         )
 
     from app.db import SessionLocal
-    from app.services.connectors import PaperlessConnector
     from app.models import Integration
+    from app.services.connectors import PaperlessConnector
 
     # Clear the class-level cache between tests.
     PaperlessConnector._TAG_CACHE.clear()

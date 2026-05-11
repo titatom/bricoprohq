@@ -7,14 +7,10 @@
 """
 
 import importlib
-import json
 import os
-import time
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -124,9 +120,10 @@ def test_oauth_state_persists_in_db_and_blocks_replay():
     db_name = "test_security_oauth_state.db"
     main = _reload_main(_base_env(db_name) | {"SECRET_KEY": "test-secret-cccccccccccccccc"})
 
+    from datetime import datetime
+
     from app.db import SessionLocal
     from app.models import OAuthState
-    from datetime import datetime, timedelta
 
     with SessionLocal() as db:
         state = main._persist_oauth_state("jobber", db)
@@ -162,9 +159,10 @@ def test_oauth_state_rejects_expired_state():
     db_name = "test_security_oauth_state_expiry.db"
     main = _reload_main(_base_env(db_name) | {"SECRET_KEY": "test-secret-eeeeeeeeeeeeeeee"})
 
+    from datetime import datetime, timedelta
+
     from app.db import SessionLocal
     from app.models import OAuthState
-    from datetime import datetime, timedelta
 
     with SessionLocal() as db:
         state = main._persist_oauth_state("jobber", db)

@@ -8,7 +8,6 @@ no restart required when credentials change.
 
 import json
 import logging
-from typing import Optional
 
 import httpx
 from sqlalchemy.orm import Session
@@ -146,7 +145,7 @@ def _call_openai_compatible(
     model: str,
     system: str,
     user: str,
-    extra_headers: Optional[dict] = None,
+    extra_headers: dict | None = None,
     timeout: int = 30,
 ) -> dict:
     headers = {

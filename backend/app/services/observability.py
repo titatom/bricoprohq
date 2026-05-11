@@ -23,8 +23,8 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,

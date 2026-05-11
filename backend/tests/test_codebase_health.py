@@ -7,11 +7,8 @@
 """
 
 import importlib
-import json
 import os
-from unittest.mock import patch
 
-import httpx
 from fastapi.testclient import TestClient
 
 
