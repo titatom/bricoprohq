@@ -1417,21 +1417,50 @@ def social_generate_image_actual(payload: dict, _: User = Depends(auth_user), db
     image_b64 = result.get("image_b64", "")
     image_url = result.get("image_url", "")
 
+    image_bytes: bytes = b""
     if image_b64:
-        data_dir = Path(os.getenv("DATA_DIR", "/data"))
-        images_dir = data_dir / "generated_images"
-        images_dir.mkdir(parents=True, exist_ok=True)
-        image_path = images_dir / f"{image_id}.png"
-        image_path.write_bytes(base64.b64decode(image_b64))
-        serve_url = f"/social/generated-images/{image_id}"
+        try:
+            image_bytes = base64.b64decode(image_b64)
+        except Exception as exc:
+            log.error("Generated image base64 could not be decoded: %s", exc)
+            raise HTTPException(502, "Generation model returned invalid image data.")
     elif image_url:
-        serve_url = image_url
+        # Some models return a (possibly short-lived / authenticated) URL instead of
+        # inline base64. Download it server-side so we (a) can store it, (b) can serve
+        # it back through our own endpoint with proper auth, and (c) can upload it to
+        # Immich later — the previous behavior of forwarding the raw URL to the
+        # browser broke for any host that required headers or wasn't reachable from
+        # the user's network.
+        try:
+            dl = httpx.get(image_url, timeout=60, follow_redirects=True)
+            dl.raise_for_status()
+            image_bytes = dl.content
+        except httpx.HTTPError as exc:
+            log.error("Failed to download generated image from %s: %s", image_url, exc)
+            raise HTTPException(502, f"Could not retrieve generated image: {exc}")
     else:
         raise HTTPException(502, "No image data returned from the generation model.")
+
+    if not image_bytes:
+        raise HTTPException(502, "Generation model returned empty image data.")
+
+    data_dir = Path(os.getenv("DATA_DIR", "/data"))
+    images_dir = data_dir / "generated_images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    image_path = images_dir / f"{image_id}.png"
+    image_path.write_bytes(image_bytes)
+
+    # `image_url` is a backend path; in production it is reached via the Next.js
+    # `/api/...` proxy and is JWT-protected, so a bare <img src> can't load it.
+    # `image_data_url` is what the front-end actually renders — it embeds the bytes
+    # directly so no second request (and no auth header) is needed.
+    serve_url = f"/social/generated-images/{image_id}"
+    image_data_url = "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii")
 
     return {
         "image_id": image_id,
         "image_url": serve_url,
+        "image_data_url": image_data_url,
         "revised_prompt": result.get("revised_prompt", final_prompt),
         "refined_prompt": refined_result if refined_result else None,
         "model": result.get("model", ""),
