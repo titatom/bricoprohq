@@ -53,6 +53,7 @@ class IntegrationOut(BaseModel):
     last_sync_at: str | None = None
     last_error: str = ""
     last_error_at: str | None = None
+    upstream_version: str = ""
     config_fields: dict = {}
     oauth_connected: bool = False
     class Config: from_attributes = True

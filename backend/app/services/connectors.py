@@ -186,6 +186,15 @@ class BaseConnector:
     def fetch(self) -> dict:
         raise NotImplementedError
 
+    def ping(self) -> dict:
+        """
+        Lightweight connectivity check used by /integrations/{provider}/test.
+        Default implementation reuses ``fetch()``; subclasses override when a
+        cheaper authoritative endpoint is available (e.g. /api/server-info
+        on Immich, /api/users/me on Paperless-ngx).
+        """
+        return self.fetch()
+
 
 def _json_or_connector_error(response: httpx.Response, service_name: str, configured_base_url: str = ""):
     try:
@@ -341,39 +350,18 @@ class GoogleCalendarConnector(BaseConnector):
         return intg.oauth_access_token
 
     def _refresh_token(self) -> None:
-        intg = self.integration
-        if not intg.oauth_refresh_token:
-            raise ConnectorNotConfigured(
-                "google_calendar: access token expired and no refresh token stored. "
-                "Reconnect via Settings."
-            )
-        config = _google_oauth_config(intg)
-        client_id = config.get("client_id", "")
-        client_secret = config.get("client_secret", "")
-        if not client_id or not client_secret:
-            raise ConnectorNotConfigured(
-                "google_calendar: client_id/client_secret missing for token refresh."
-            )
-        try:
-            resp = httpx.post(
-                GOOGLE_TOKEN_URL,
-                data={
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "refresh_token": intg.oauth_refresh_token,
-                    "grant_type": "refresh_token",
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            token_data = resp.json()
-        except httpx.HTTPStatusError as exc:
-            raise ConnectorError(f"Google token refresh failed: {exc.response.status_code}") from exc
-        except httpx.RequestError as exc:
-            raise ConnectorError(f"Google token refresh request failed: {exc}") from exc
-
-        _sync_google_tokens(intg, token_data)
+        from .oauth import OAuthRefresher
+        config = _google_oauth_config(self.integration)
+        OAuthRefresher(
+            provider="google_calendar",
+            token_url=GOOGLE_TOKEN_URL,
+            integration=self.integration,
+            client_id=config.get("client_id", ""),
+            client_secret=config.get("client_secret", ""),
+            not_configured_factory=ConnectorNotConfigured,
+            error_factory=ConnectorError,
+            sync=_sync_google_tokens,
+        ).refresh()
 
     def fetch(self) -> dict:
         access_token = self._get_access_token()
@@ -444,49 +432,17 @@ class JobberConnector(BaseConnector):
         )
 
     def _refresh_token(self) -> None:
-        intg = self.integration
-        if not intg.oauth_refresh_token:
-            raise ConnectorNotConfigured(
-                "jobber: access token expired and no refresh token stored. "
-                "Reconnect via Settings → Integrations."
-            )
+        from .oauth import OAuthRefresher
         config = self.config
-        client_id = config.get("client_id", "")
-        client_secret = config.get("client_secret", "")
-        if not client_id or not client_secret:
-            raise ConnectorNotConfigured(
-                "jobber: client_id/client_secret missing for token refresh."
-            )
-        try:
-            resp = httpx.post(
-                "https://api.getjobber.com/api/oauth/token",
-                data={
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "refresh_token": intg.oauth_refresh_token,
-                    "grant_type": "refresh_token",
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            token_data = resp.json()
-        except httpx.HTTPStatusError as exc:
-            log.error("Jobber token refresh failed: %s %s", exc.response.status_code, exc.response.text)
-            raise ConnectorError(f"Jobber token refresh failed: {exc.response.status_code}") from exc
-        except httpx.RequestError as exc:
-            raise ConnectorError(f"Jobber token refresh request failed: {exc}") from exc
-
-        expires_in = token_data.get("expires_in", 3600)
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
-        intg.oauth_access_token = token_data["access_token"]
-        if token_data.get("refresh_token"):
-            intg.oauth_refresh_token = token_data["refresh_token"]
-        intg.oauth_token_expires_at = expires_at
-        session = object_session(intg)
-        if session:
-            session.commit()
-        log.info("Jobber OAuth token refreshed successfully")
+        OAuthRefresher(
+            provider="jobber",
+            token_url="https://api.getjobber.com/api/oauth/token",
+            integration=self.integration,
+            client_id=config.get("client_id", ""),
+            client_secret=config.get("client_secret", ""),
+            not_configured_factory=ConnectorNotConfigured,
+            error_factory=ConnectorError,
+        ).refresh()
 
     def _post_graphql(self, graphql_url: str, bearer: str, query: str) -> dict:
         try:
@@ -745,6 +701,35 @@ class JobberConnector(BaseConnector):
 class ImmichConnector(BaseConnector):
     provider = "immich"
 
+    def ping(self) -> dict:
+        """
+        Cheap authoritative ping that avoids touching the asset index.
+        Returns Immich's server-info payload so the dashboard can show the
+        upstream version. Falls back to ``fetch()`` on older versions that
+        don't expose /api/server-info.
+        """
+        self._require_config()
+        try:
+            r = httpx.get(
+                f"{self.base_url}/api/server-info",
+                headers={"x-api-key": self.api_key},
+                timeout=10,
+            )
+            r.raise_for_status()
+            data = _json_or_connector_error(r, "Immich")
+            return {
+                "ok": True,
+                "upstream_version": data.get("version") if isinstance(data, dict) else None,
+                "server_info": data,
+            }
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                # Older Immich versions: fall through to the regular fetch path.
+                return self.fetch()
+            _raise_http_status(exc, "Immich")
+        except httpx.RequestError as exc:
+            raise ConnectorError(f"Immich request failed: {exc}") from exc
+
     def _fetch_album_assets(self, album_id: str, headers: dict) -> list:
         r = httpx.get(
             f"{self.base_url}/api/albums/{album_id}",
@@ -843,9 +828,21 @@ class ImmichGptConnector(BaseConnector):
 class PaperlessConnector(BaseConnector):
     provider = "paperless"
 
+    # Process-local cache: (base_url, tag_name) -> (tag_id, fetched_at)
+    _TAG_CACHE: dict[tuple[str, str], tuple[int | None, float]] = {}
+    _TAG_CACHE_TTL_SECONDS = 300.0
+
     def _tag_id_for_name(self, tag_name: str, headers: dict) -> int | None:
         if not tag_name:
             return None
+
+        import time
+        cache_key = (self.base_url, tag_name.casefold())
+        now = time.monotonic()
+        cached = self._TAG_CACHE.get(cache_key)
+        if cached is not None and (now - cached[1]) < self._TAG_CACHE_TTL_SECONDS:
+            return cached[0]
+
         r = httpx.get(
             f"{self.base_url}/api/tags/",
             params={"page_size": 100, "query": tag_name},
@@ -856,12 +853,34 @@ class PaperlessConnector(BaseConnector):
         data = _json_or_connector_error(r, "Paperless-ngx")
         tags = data if isinstance(data, list) else data.get("results", [])
         if not tags:
+            self._TAG_CACHE[cache_key] = (None, now)
             return None
         normalized = tag_name.casefold()
         for tag in tags:
             if str(tag.get("name", "")).casefold() == normalized:
-                return tag.get("id")
-        return tags[0].get("id")
+                tag_id = tag.get("id")
+                self._TAG_CACHE[cache_key] = (tag_id, now)
+                return tag_id
+        tag_id = tags[0].get("id")
+        self._TAG_CACHE[cache_key] = (tag_id, now)
+        return tag_id
+
+    def ping(self) -> dict:
+        """Cheap authoritative ping that does not paginate documents."""
+        self._require_config()
+        try:
+            r = httpx.get(
+                f"{self.base_url}/api/users/me/",
+                headers={"Authorization": f"Token {self.api_key}"},
+                timeout=10,
+            )
+            r.raise_for_status()
+            data = _json_or_connector_error(r, "Paperless-ngx")
+            return {"ok": True, "user": data}
+        except httpx.HTTPStatusError as exc:
+            _raise_http_status(exc, "Paperless-ngx")
+        except httpx.RequestError as exc:
+            raise ConnectorError(f"Paperless request failed: {exc}") from exc
 
     def fetch(self) -> dict:
         self._require_config()
@@ -1230,38 +1249,18 @@ class GoogleBusinessConnector(BaseConnector):
         return intg.oauth_access_token
 
     def _refresh_token(self) -> None:
-        intg = self.integration
-        if not intg.oauth_refresh_token:
-            raise ConnectorNotConfigured(
-                "google_business: access token expired and no refresh token. Reconnect via Settings."
-            )
-        config = _google_oauth_config(intg)
-        client_id = config.get("client_id", "")
-        client_secret = config.get("client_secret", "")
-        if not client_id or not client_secret:
-            raise ConnectorNotConfigured(
-                "google_business: client_id/client_secret missing for token refresh."
-            )
-        try:
-            resp = httpx.post(
-                GOOGLE_TOKEN_URL,
-                data={
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "refresh_token": intg.oauth_refresh_token,
-                    "grant_type": "refresh_token",
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            td = resp.json()
-        except httpx.HTTPStatusError as exc:
-            raise ConnectorError(f"Google Business token refresh failed: {exc.response.status_code}") from exc
-        except httpx.RequestError as exc:
-            raise ConnectorError(f"Google Business token refresh request failed: {exc}") from exc
-
-        _sync_google_tokens(intg, td)
+        from .oauth import OAuthRefresher
+        config = _google_oauth_config(self.integration)
+        OAuthRefresher(
+            provider="google_business",
+            token_url=GOOGLE_TOKEN_URL,
+            integration=self.integration,
+            client_id=config.get("client_id", ""),
+            client_secret=config.get("client_secret", ""),
+            not_configured_factory=ConnectorNotConfigured,
+            error_factory=ConnectorError,
+            sync=_sync_google_tokens,
+        ).refresh()
 
     def fetch(self) -> dict:
         token = self._get_access_token()

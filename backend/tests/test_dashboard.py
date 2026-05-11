@@ -198,6 +198,7 @@ def test_integration_test_endpoint_not_configured():
 
 
 def test_immich_test_endpoint_handles_non_json_response():
+    """The /test endpoint now uses the lightweight /api/server-info ping."""
     app = make_client("test_dash_immich_non_json.db")
     with TestClient(app) as client:
         h = auth(client)
@@ -208,16 +209,17 @@ def test_immich_test_endpoint_handles_non_json_response():
         )
         assert r.status_code == 200
 
-        request = httpx.Request("POST", "http://immich.local:2283/api/search/metadata")
+        request = httpx.Request("GET", "http://immich.local:2283/api/server-info")
         response = httpx.Response(200, text="Internal Server Error", request=request)
-        with patch("httpx.post", return_value=response):
+        with patch("httpx.get", return_value=response):
             r = client.post("/integrations/immich/test", headers=h)
 
         assert r.status_code == 502
         assert r.json()["detail"] == "Immich returned a non-JSON response: Internal Server Error"
 
 
-def test_immich_test_endpoint_uses_search_metadata():
+def test_immich_test_endpoint_uses_server_info_ping():
+    """Verify /integrations/immich/test calls the cheap /api/server-info ping."""
     app = make_client("test_dash_immich_search.db")
     with TestClient(app) as client:
         h = auth(client)
@@ -227,20 +229,26 @@ def test_immich_test_endpoint_uses_search_metadata():
             json={"base_url": "http://immich.local:2283", "config_json": '{"api_key":"test-key"}'},
         )
 
-        request = httpx.Request("POST", "http://immich.local:2283/api/search/metadata")
+        request = httpx.Request("GET", "http://immich.local:2283/api/server-info")
         response = httpx.Response(
             200,
-            json={"assets": {"items": [{"id": "asset-1", "originalFileName": "photo.jpg", "type": "IMAGE"}]}},
+            json={"version": "1.118.2", "diskUsageRaw": 0},
             request=request,
         )
-        with patch("httpx.post", return_value=response) as mock_post:
+        with patch("httpx.get", return_value=response) as mock_get:
             r = client.post("/integrations/immich/test", headers=h)
 
         assert r.status_code == 200
-        assert mock_post.call_args.kwargs["json"] == {"page": 1, "size": 6}
-        assert mock_post.call_args.kwargs["headers"]["x-api-key"] == "test-key"
-        assert r.json()["data"]["recent_assets"][0]["filename"] == "photo.jpg"
-        assert r.json()["data"]["recent_assets"][0]["preview_url"] == "/integrations/immich/assets/asset-1/thumbnail"
+        # Called the lightweight server-info endpoint with the API key header.
+        called_url = str(mock_get.call_args.args[0])
+        assert called_url == "http://immich.local:2283/api/server-info"
+        assert mock_get.call_args.kwargs["headers"]["x-api-key"] == "test-key"
+        body = r.json()
+        assert body["data"]["upstream_version"] == "1.118.2"
+
+        # The upstream version is captured on the integration row.
+        integ = client.get("/integrations/immich", headers=h).json()
+        assert integ["upstream_version"] == "1.118.2"
 
 
 def test_immich_thumbnail_proxy_uses_api_key():
@@ -274,8 +282,44 @@ def test_immich_thumbnail_proxy_uses_api_key():
         assert mock_get.call_args.kwargs["headers"]["x-api-key"] == "test-key"
 
 
-def test_immich_404_has_actionable_error():
+def test_immich_404_on_server_info_falls_back_to_fetch():
+    """
+    Older Immich versions do not expose /api/server-info. The ping() method
+    is expected to fall back to fetch() so the connectivity test still
+    succeeds on those installs.
+    """
     app = make_client("test_dash_immich_404.db")
+    with TestClient(app) as client:
+        h = auth(client)
+        client.put(
+            "/integrations/immich",
+            headers=h,
+            json={"base_url": "http://immich.local:2283", "config_json": '{"api_key":"test-key"}'},
+        )
+
+        server_info_request = httpx.Request("GET", "http://immich.local:2283/api/server-info")
+        server_info_response = httpx.Response(404, json={"message": "Not Found"}, request=server_info_request)
+        fallback_request = httpx.Request("POST", "http://immich.local:2283/api/search/metadata")
+        fallback_response = httpx.Response(
+            200,
+            json={"assets": []},
+            request=fallback_request,
+        )
+
+        with patch("httpx.get", return_value=server_info_response):
+            with patch("httpx.post", return_value=fallback_response):
+                r = client.post("/integrations/immich/test", headers=h)
+
+        assert r.status_code == 200, r.text
+
+
+def test_immich_fetch_404_returns_actionable_error():
+    """
+    /dashboard/refresh keeps the fetch() path so the old 404 error mapping
+    still applies there. This guards the helpful error text users see when
+    the configured Immich URL is wrong.
+    """
+    app = make_client("test_dash_immich_404_fetch.db")
     with TestClient(app) as client:
         h = auth(client)
         client.put(
@@ -287,11 +331,12 @@ def test_immich_404_has_actionable_error():
         request = httpx.Request("POST", "http://immich.local:2283/api/search/metadata")
         response = httpx.Response(404, json={"message": "Not Found"}, request=request)
         with patch("httpx.post", return_value=response):
-            r = client.post("/integrations/immich/test", headers=h)
+            refresh = client.post("/dashboard/refresh/immich", headers=h)
 
-        assert r.status_code == 502
-        assert "Immich HTTP error 404 at /api/search/metadata" in r.json()["detail"]
-        assert "check the base URL and service API version" in r.json()["detail"]
+        assert refresh.status_code == 200
+        body = refresh.json()
+        assert body["status"] == "error"
+        assert "Immich HTTP error 404 at /api/search/metadata" in body["error"]
 
 
 def test_paperless_test_endpoint_handles_non_json_response():
