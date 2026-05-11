@@ -500,6 +500,7 @@ def _integration_out(i: Integration) -> dict:
         "last_sync_at": i.last_sync_at.isoformat() if i.last_sync_at else None,
         "last_error": i.last_error or "",
         "last_error_at": i.last_error_at.isoformat() if i.last_error_at else None,
+        "upstream_version": i.upstream_version or "",
         "config_fields": config_fields,
         "oauth_connected": bool(i.oauth_access_token),
     }
@@ -746,13 +747,20 @@ def test_integration(provider: str, request: Request, _: User = Depends(auth_use
             validate_paperless_gpt_base_url(connector.base_url, _request_app_base_urls(request))
             result = connector.test_connection()
         else:
-            result = connector.fetch()
+            # ping() is a cheap authoritative health check on connectors that
+            # support it; falls back to fetch() on connectors that do not.
+            result = connector.ping()
         i = db.query(Integration).filter(Integration.provider == provider).first()
         if i:
             i.status = "ok"
             i.last_sync_at = utc_now()
             i.last_error = ""
             i.last_error_at = None
+            # Opportunistically capture the upstream version when ping() returns it.
+            if isinstance(result, dict):
+                version = result.get("upstream_version") or ""
+                if isinstance(version, str) and version:
+                    i.upstream_version = version[:100]
             db.commit()
         return {"ok": True, "message": f"Connected successfully. Fetched data from {provider}.", "data": result}
     except Exception as exc:

@@ -77,6 +77,9 @@ class Integration(Base):
     # was without having to dig into the cache row or server logs.
     last_error: Mapped[str] = mapped_column(Text, default="")
     last_error_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Best-effort capture of the upstream service version (e.g. "1.118.2" for
+    # Immich) so the dashboard can show "Immich 1.118.2 — last error 4 min ago".
+    upstream_version: Mapped[str] = mapped_column(String(100), default="")
     # config_json contains API keys and OAuth client secrets — encrypted at rest.
     config_json: Mapped[str] = mapped_column(EncryptedText, default="{}")
     oauth_access_token: Mapped[str | None] = mapped_column(EncryptedText, nullable=True)
