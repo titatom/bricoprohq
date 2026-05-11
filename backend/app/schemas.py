@@ -39,6 +39,9 @@ class SettingOut(BaseModel):
 
 # ── Integrations ──────────────────────────────────────────────────────────────
 
+INTEGRATION_STATUSES = {"unknown", "not_connected", "ok", "error"}
+
+
 class IntegrationUpdateIn(BaseModel):
     base_url: str = ""
     config_json: str = "{}"
@@ -48,6 +51,8 @@ class IntegrationOut(BaseModel):
     base_url: str
     status: str
     last_sync_at: str | None = None
+    last_error: str = ""
+    last_error_at: str | None = None
     config_fields: dict = {}
     oauth_connected: bool = False
     class Config: from_attributes = True

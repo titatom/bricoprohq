@@ -19,6 +19,7 @@ _db_reinit()  # re-read DATABASE_URL in case env changed (e.g. test reloads)
 from .models import (
     User, Setting, QuickLink, Integration, DashboardCache,
     ContentAsset, ContentDraft, Campaign, PostMetric, OAuthState,
+    utc_now,
 )
 from .schemas import (
     LoginRequest, LoginResponse, UserMeResponse,
@@ -34,6 +35,7 @@ from .schemas import (
 from .auth import verify_password, create_access_token, hash_password, decode_access_token
 from .secret_key import DEFAULT_PLACEHOLDER, resolve_secret_key
 from .services.connectors import validate_paperless_gpt_base_url, ConnectorNotConfigured, ConnectorError
+from .services.db_utils import commit_or_400, is_masked_secret
 from .services.rate_limit import (
     DEFAULT_LOGIN_LIMIT,
     DEFAULT_LOGIN_WINDOW_SECONDS,
@@ -339,15 +341,10 @@ def ql_del(id: int, _: User = Depends(auth_user), db: Session = Depends(get_db))
 OAUTH_STATE_TTL_SECONDS = 600
 
 
-def _now_utc_naive() -> datetime:
-    """Return current UTC time as a naive datetime for legacy `DateTime` columns."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
 def _persist_oauth_state(provider: str, db: Session) -> str:
     """Generate, persist, and return a fresh OAuth CSRF state token."""
     state = secrets.token_hex(16)
-    now = _now_utc_naive()
+    now = utc_now()
     expires_at = now + timedelta(seconds=OAUTH_STATE_TTL_SECONDS)
     db.add(OAuthState(state=state, provider=provider, created_at=now, expires_at=expires_at))
     db.commit()
@@ -361,11 +358,11 @@ def _consume_oauth_state(state: str, expected_provider: str, db: Session) -> boo
     row = db.query(OAuthState).filter(OAuthState.state == state).first()
     if not row:
         return False
-    valid = row.provider == expected_provider and row.expires_at > _now_utc_naive()
+    valid = row.provider == expected_provider and row.expires_at > utc_now()
     db.delete(row)
     db.flush()
     # Best-effort cleanup of any other expired rows so the table doesn't grow.
-    db.query(OAuthState).filter(OAuthState.expires_at <= _now_utc_naive()).delete(synchronize_session=False)
+    db.query(OAuthState).filter(OAuthState.expires_at <= utc_now()).delete(synchronize_session=False)
     db.commit()
     return valid
 
@@ -501,6 +498,8 @@ def _integration_out(i: Integration) -> dict:
         "base_url": i.base_url or "",
         "status": i.status,
         "last_sync_at": i.last_sync_at.isoformat() if i.last_sync_at else None,
+        "last_error": i.last_error or "",
+        "last_error_at": i.last_error_at.isoformat() if i.last_error_at else None,
         "config_fields": config_fields,
         "oauth_connected": bool(i.oauth_access_token),
     }
@@ -722,20 +721,18 @@ def update_integration(
     except Exception:
         new_config = {}
 
-    SECRET_KEYS = {"api_key", "client_secret"}
     for k, v in new_config.items():
-        if k in SECRET_KEYS and v and all(c == '•' for c in v):
-            # User left the masked placeholder — keep existing value
-            pass
-        else:
-            existing_config[k] = v
+        if k in _SECRET_KEYS and is_masked_secret(v):
+            # User left the masked placeholder — keep existing value.
+            continue
+        existing_config[k] = v
 
     if provider == "paperless-gpt":
         existing_config = {"api_key": existing_config.get("api_key", "")}
 
     i.config_json = json.dumps(existing_config)
-    db.add(i)
-    db.commit()
+    with commit_or_400(db, conflict_message="Integration provider already exists."):
+        db.add(i)
     return _integration_out(i)
 
 
@@ -753,13 +750,17 @@ def test_integration(provider: str, request: Request, _: User = Depends(auth_use
         i = db.query(Integration).filter(Integration.provider == provider).first()
         if i:
             i.status = "ok"
-            i.last_sync_at = datetime.now(timezone.utc)
+            i.last_sync_at = utc_now()
+            i.last_error = ""
+            i.last_error_at = None
             db.commit()
         return {"ok": True, "message": f"Connected successfully. Fetched data from {provider}.", "data": result}
     except Exception as exc:
         i = db.query(Integration).filter(Integration.provider == provider).first()
         if i:
             i.status = "error"
+            i.last_error = str(exc)[:1000]
+            i.last_error_at = utc_now()
             db.commit()
         if isinstance(exc, ConnectorNotConfigured):
             raise HTTPException(400, str(exc))
@@ -783,37 +784,72 @@ def test_integration(provider: str, request: Request, _: User = Depends(auth_use
 
 # ── Dashboard cache ───────────────────────────────────────────────────────────
 
-def _fetch_source_data(source: str, db: Session) -> dict:
-    """Attempt real connector; fall back to mock summary."""
+def _fetch_source_data(source: str, db: Session) -> tuple[bool, dict]:
+    """
+    Run a connector and return ``(success, payload)``.
+
+    On failure the returned payload describes the error so it can be cached
+    for UI display, but the boolean lets the caller flip the integration
+    status and avoid stamping the cache as "fresh" when nothing was loaded.
+    """
     try:
         from .services.connectors import get_connector
         connector = get_connector(source, db)
-        return connector.fetch()
-    except Exception as exc:
-        log.warning("Connector %s failed: %s", source, exc)
-        return {"source": source, "timestamp": datetime.now(timezone.utc).isoformat(), "summary": "mock", "error": str(exc)}
+        return True, connector.fetch()
+    except (ConnectorNotConfigured, ConnectorError) as exc:
+        log.warning("Connector %s failed (%s): %s", source, type(exc).__name__, exc)
+        return False, {
+            "source": source,
+            "timestamp": utc_now().isoformat(),
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        }
+    except Exception as exc:  # pragma: no cover - defensive catch-all
+        log.exception("Connector %s raised an unexpected exception", source)
+        return False, {
+            "source": source,
+            "timestamp": utc_now().isoformat(),
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        }
 
 
 @app.post("/dashboard/refresh/{source}")
 def refresh(source: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     if source not in SOURCES:
         raise HTTPException(404, "Unknown source")
-    now = datetime.now(timezone.utc)
-    data = _fetch_source_data(source, db)
-    c = db.query(DashboardCache).filter(DashboardCache.source == source).first() or DashboardCache(
+    now = utc_now()
+    success, data = _fetch_source_data(source, db)
+    i = db.query(Integration).filter(Integration.provider == source).first()
+
+    # Cache the payload either way so the UI can show what happened, but on
+    # failure the row is intentionally stamped as already expired so the next
+    # request retries instead of serving a stale error within the TTL window.
+    cache = db.query(DashboardCache).filter(DashboardCache.source == source).first() or DashboardCache(
         source=source, data_json="{}", expires_at=now
     )
-    c.data_json = json.dumps(data)
-    c.synced_at = now
-    c.expires_at = now + timedelta(minutes=CACHE_TTL_MINUTES)
-    db.add(c)
-    i = db.query(Integration).filter(Integration.provider == source).first()
+    cache.data_json = json.dumps(data)
+    cache.synced_at = now
+    cache.expires_at = now + timedelta(minutes=CACHE_TTL_MINUTES) if success else now
+    db.add(cache)
+
     if i:
-        had_error = "error" in data
-        i.status = "error" if had_error else "ok"
-        i.last_sync_at = now
+        if success:
+            i.status = "ok"
+            i.last_sync_at = now
+            i.last_error = ""
+            i.last_error_at = None
+        else:
+            i.status = "error"
+            i.last_error = (data.get("error") or "")[:1000]
+            i.last_error_at = now
+
     db.commit()
-    return {"status": "ok", "source": source}
+    return {
+        "status": "ok" if success else "error",
+        "source": source,
+        "error": None if success else data.get("error"),
+    }
 
 
 @app.get("/dashboard/jobber-stats")
@@ -841,7 +877,7 @@ def immich_asset_thumbnail(asset_id: str, _: User = Depends(auth_user), db: Sess
     except Exception:
         config = {}
     api_key = config.get("api_key", "")
-    if not api_key or all(c == '•' for c in api_key):
+    if not api_key or is_masked_secret(api_key):
         raise HTTPException(400, "Immich api_key not configured")
 
     try:
@@ -1214,7 +1250,7 @@ def _immich_config(db: Session) -> tuple[Integration | None, str, str]:
     except Exception:
         config = {}
     api_key = config.get("api_key", "")
-    if api_key and all(c == '•' for c in api_key):
+    if is_masked_secret(api_key):
         api_key = ""
     return integration, (integration.base_url or "").strip().rstrip("/"), api_key
 
@@ -1703,7 +1739,7 @@ def update_draft(
         d.planned_date = date.fromisoformat(pd_val) if pd_val else None
     if "planned_time" in payload:
         d.planned_time = payload["planned_time"] or ""
-    d.updated_at = datetime.utcnow()
+    d.updated_at = utc_now()
     db.commit()
     return {"updated": True, "id": d.id}
 
@@ -1715,14 +1751,17 @@ def move_draft(
     _: User = Depends(auth_user),
     db: Session = Depends(get_db),
 ):
-    from .schemas import DRAFT_STATUSES
-    if status not in DRAFT_STATUSES:
-        raise HTTPException(422, f"Invalid draft status '{status}'")
+    # Validate via the same Pydantic schema used elsewhere so the allowlist
+    # is owned in one place.
+    try:
+        validated = DraftStatusIn(status=status)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     d = db.query(ContentDraft).filter(ContentDraft.id == draft_id).first()
     if not d:
         raise HTTPException(404, "Draft not found")
-    d.status = status
-    d.updated_at = datetime.utcnow()
+    d.status = validated.status
+    d.updated_at = utc_now()
     db.commit()
     return {"updated": True}
 
@@ -1808,22 +1847,75 @@ def update_campaign(
 
 
 @app.post("/campaigns/{campaign_id}/generate")
-def campaign_generate(campaign_id: int, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+def campaign_generate(
+    campaign_id: int,
+    payload: dict | None = None,
+    _: User = Depends(auth_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Generate a draft from a campaign by routing through the same AI pipeline
+    Social Studio uses, so campaign drafts respect the same brand voice,
+    safety prompts, and provider configuration. Falls back to the local
+    template helper when no AI provider is configured.
+    """
+    from .services.ai import generate_social_content, AINotConfigured, AIError
+
     c = db.query(Campaign).filter(Campaign.id == campaign_id).first()
     if not c:
         raise HTTPException(404, "Campaign not found")
+
+    payload = payload or {}
+    social_cfg = _social_settings_map(db)
+    platform = (payload.get("platform") or "facebook").strip() or "facebook"
+    language = (payload.get("language") or social_cfg.get("default_language", "fr")).strip()
+    tone = (payload.get("tone") or social_cfg.get("default_tone", "local")).strip()
+    cta = (payload.get("cta") or social_cfg.get("default_cta", "request_quote")).strip()
+    city = (payload.get("city") or social_cfg.get("default_city", "Montréal")).strip()
+
+    job_description_parts = [c.message or "", payload.get("job_description") or ""]
+    if c.target_neighbourhoods:
+        job_description_parts.append(f"Target neighbourhoods: {c.target_neighbourhoods}.")
+    if c.notes:
+        job_description_parts.append(f"Campaign notes: {c.notes}.")
+    job_description = "\n\n".join(part for part in job_description_parts if part).strip()
+
+    draft_payload = {
+        "service_category": c.service_category or payload.get("service_category", ""),
+        "platform": platform,
+        "language": language,
+        "tone": tone,
+        "job_description": job_description or f"Campagne {c.name}",
+        "city": city,
+        "cta": cta,
+    }
+
+    ai_used = True
+    try:
+        generated = generate_social_content(draft_payload, db, model_override=social_cfg.get("copy_model", ""))
+    except AINotConfigured as exc:
+        log.info("Campaign %s: AI not configured, using template fallback (%s)", campaign_id, exc)
+        generated = _template_fallback(SimpleNamespace(**draft_payload))
+        ai_used = False
+    except AIError as exc:
+        log.error("Campaign %s: AI generation failed: %s", campaign_id, exc)
+        raise HTTPException(502, f"AI generation failed: {exc}")
+
     d = ContentDraft(
-        title=f"{c.name} — draft",
-        platform="facebook",
+        title=f"{c.name} — {platform}",
+        platform=platform,
+        language=language,
+        tone=tone,
         service_category=c.service_category,
-        body=c.message or f"Campagne {c.name} — {c.service_category}",
-        short_body=(c.message or c.name)[:120],
-        hashtags="#montreal #bricopro",
+        body=generated.get("main_copy", ""),
+        short_body=generated.get("short_variation", ""),
+        hashtags=generated.get("hashtags", ""),
+        cta=generated.get("cta_text") or cta,
         status="draft_generated",
         campaign_id=c.id,
     )
     db.add(d); db.commit(); db.refresh(d)
-    return {"draft_id": d.id, "campaign_id": c.id}
+    return {"draft_id": d.id, "campaign_id": c.id, "ai_used": ai_used}
 
 
 # ── KPI / performance tracking ────────────────────────────────────────────────

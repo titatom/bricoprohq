@@ -1,8 +1,20 @@
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from sqlalchemy import String, Integer, Boolean, DateTime, Date, Text, ForeignKey, Float
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 from .db import Base
+
+
+def utc_now() -> datetime:
+    """
+    Return the current UTC instant as a naive ``datetime``.
+
+    Columns in this module use SQLAlchemy ``DateTime`` without a timezone
+    because SQLite, the default storage engine, does not persist tz offsets.
+    Storing naive UTC keeps comparisons consistent across rows and avoids
+    the ``datetime.utcnow()`` deprecation warning.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class EncryptedText(TypeDecorator):
@@ -35,7 +47,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(50), default="admin")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 class Setting(Base):
     __tablename__ = "settings"
@@ -61,6 +73,10 @@ class Integration(Base):
     auth_type: Mapped[str] = mapped_column(String(100), default="none")
     status: Mapped[str] = mapped_column(String(50), default="unknown")
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Surfaced on the dashboard so users can see what the most recent failure
+    # was without having to dig into the cache row or server logs.
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # config_json contains API keys and OAuth client secrets — encrypted at rest.
     config_json: Mapped[str] = mapped_column(EncryptedText, default="{}")
     oauth_access_token: Mapped[str | None] = mapped_column(EncryptedText, nullable=True)
@@ -78,7 +94,7 @@ class OAuthState(Base):
     __tablename__ = "oauth_states"
     state: Mapped[str] = mapped_column(String(128), primary_key=True)
     provider: Mapped[str] = mapped_column(String(100), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
 
 class DashboardCache(Base):
@@ -86,7 +102,7 @@ class DashboardCache(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     source: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     data_json: Mapped[str] = mapped_column(Text, default="{}")
-    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
 
 class Campaign(Base):
@@ -111,7 +127,7 @@ class ContentAsset(Base):
     service_category: Mapped[str] = mapped_column(String(255), default="")
     status: Mapped[str] = mapped_column(String(100), default="new")
     note: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 class ContentDraft(Base):
     __tablename__ = "content_drafts"
@@ -130,8 +146,8 @@ class ContentDraft(Base):
     status: Mapped[str] = mapped_column(String(100), default="draft_generated")
     planned_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     planned_time: Mapped[str] = mapped_column(String(10), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 class PostMetric(Base):
     __tablename__ = "post_metrics"
@@ -154,4 +170,4 @@ class PostMetric(Base):
     messages: Mapped[int] = mapped_column(Integer, default=0)
     calls: Mapped[int] = mapped_column(Integer, default=0)
     notes: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
