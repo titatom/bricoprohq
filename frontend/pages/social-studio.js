@@ -778,7 +778,7 @@ function ImageGenerationTab({ albums, settings, apiFetch }) {
           <div className="space-y-4">
             <div className="rounded-xl overflow-hidden border border-gray-200 bg-gray-50">
               <img
-                src={result.image_url}
+                src={result.image_data_url || result.image_url}
                 alt="Generated image"
                 className="w-full max-w-2xl mx-auto block"
                 style={{ aspectRatio: (imgForm.size === '1792x1024' || imgForm.size === '1536x1024') ? '3/2' : (imgForm.size === '1024x1792' || imgForm.size === '1024x1536') ? '2/3' : '1/1' }}
