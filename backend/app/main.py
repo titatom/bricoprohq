@@ -1271,8 +1271,8 @@ def social_generate_image_actual(payload: dict, _: User = Depends(auth_user), db
         try:
             refined_result = generate_image_prompt(effective_prompt, social_cfg, db)
             final_prompt = refined_result.get("image_prompt", effective_prompt)
-        except (AINotConfigured, AIError):
-            pass
+        except (AINotConfigured, AIError) as exc:
+            log.warning("Image prompt refinement skipped (will use raw prompt): %s", exc)
 
     try:
         result = generate_image_dall_e(final_prompt, social_cfg, db, size=size, quality=quality)

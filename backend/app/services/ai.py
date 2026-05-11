@@ -27,6 +27,18 @@ DEFAULT_MODELS = {
     "ollama":      "llama3.2",
 }
 
+DEFAULT_IMAGE_MODELS = {
+    "openai":      "dall-e-3",
+    "openrouter":  "google/gemini-2.5-flash-image",
+}
+
+_QUALITY_TO_IMAGE_SIZE = {
+    "low": "1K",
+    "standard": "1K",
+    "high": "2K",
+    "hd": "2K",
+}
+
 
 class AINotConfigured(Exception):
     pass
@@ -424,14 +436,21 @@ def _generate_image_openrouter(
         "modalities": modalities,
     }
 
+    image_config = {}
     aspect_ratio = _SIZE_TO_ASPECT_RATIO.get(size)
     if aspect_ratio:
-        body["image_config"] = {"aspect_ratio": aspect_ratio}
+        image_config["aspect_ratio"] = aspect_ratio
+    image_size = _QUALITY_TO_IMAGE_SIZE.get(quality)
+    if image_size:
+        image_config["image_size"] = image_size
+    if image_config:
+        body["image_config"] = image_config
 
     log.info(
-        "AI image generation (OpenRouter chat): model=%s size=%s aspect_ratio=%s modalities=%s",
-        model, size, aspect_ratio, modalities,
+        "AI image generation (OpenRouter chat): model=%s size=%s image_config=%s modalities=%s",
+        model, size, json.dumps(image_config), modalities,
     )
+    log.debug("OpenRouter image gen request body: %s", json.dumps(body))
 
     try:
         r = httpx.post(
@@ -564,7 +583,7 @@ def generate_image_dall_e(prompt: str, social_cfg: dict, db: Session, size: str 
         raise AINotConfigured(f"API key not configured for {provider}. Go to Settings → AI Provider.")
 
     image_model = (social_cfg.get("image_generation_model") or "").strip()
-    effective_model = image_model or "dall-e-3"
+    effective_model = image_model or DEFAULT_IMAGE_MODELS.get(provider, "dall-e-3")
 
     log.info(
         "AI image generation: provider=%s model=%s size=%s quality=%s",

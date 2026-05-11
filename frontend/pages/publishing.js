@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import Calendar from 'react-calendar';
 import { useAuth } from '../context/AuthContext';
 import LoginForm from '../components/LoginForm';
 import StatusBadge from '../components/StatusBadge';
@@ -63,12 +64,39 @@ function DraftModal({ draft, onClose, onStatusChange, campaigns }) {
 
 function KanbanBoard({ drafts, onStatusChange }) {
   const [selected, setSelected] = useState(null);
+  const [dragOverCol, setDragOverCol] = useState(null);
   const grouped = {};
   KANBAN_COLS.forEach(({ key }) => { grouped[key] = []; });
   drafts.forEach((d) => {
     if (grouped[d.status]) grouped[d.status].push(d);
     else { grouped['draft_generated'] = grouped['draft_generated'] || []; grouped['draft_generated'].push(d); }
   });
+
+  const handleDragStart = (e, draft) => {
+    e.dataTransfer.setData('text/plain', JSON.stringify({ id: draft.id, status: draft.status }));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e, colKey) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverCol(colKey);
+  };
+
+  const handleDragLeave = () => {
+    setDragOverCol(null);
+  };
+
+  const handleDrop = async (e, targetStatus) => {
+    e.preventDefault();
+    setDragOverCol(null);
+    try {
+      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+      if (data.id && data.status !== targetStatus) {
+        await onStatusChange(data.id, targetStatus);
+      }
+    } catch {}
+  };
 
   return (
     <>
@@ -81,7 +109,13 @@ function KanbanBoard({ drafts, onStatusChange }) {
       )}
       <div className="flex gap-3 overflow-x-auto pb-4">
         {KANBAN_COLS.map(({ key, label, color }) => (
-          <div key={key} className={`flex-shrink-0 w-56 rounded-xl border p-3 ${color}`}>
+          <div
+            key={key}
+            className={`flex-shrink-0 w-56 rounded-xl border p-3 transition-colors ${color} ${dragOverCol === key ? 'ring-2 ring-brand-400 ring-offset-1' : ''}`}
+            onDragOver={(e) => handleDragOver(e, key)}
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => handleDrop(e, key)}
+          >
             <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-3">
               {label} <span className="text-gray-400 font-normal">({grouped[key]?.length || 0})</span>
             </p>
@@ -89,7 +123,9 @@ function KanbanBoard({ drafts, onStatusChange }) {
               {(grouped[key] || []).map((d) => (
                 <div
                   key={d.id}
-                  className="bg-white rounded-lg p-3 shadow-sm cursor-pointer hover:shadow-md transition-shadow border border-gray-100"
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, d)}
+                  className="bg-white rounded-lg p-3 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow border border-gray-100"
                   onClick={() => setSelected(d)}
                 >
                   <p className="text-sm font-medium text-gray-800 truncate">{d.title}</p>
@@ -97,7 +133,7 @@ function KanbanBoard({ drafts, onStatusChange }) {
                 </div>
               ))}
               {(!grouped[key] || grouped[key].length === 0) && (
-                <p className="text-xs text-gray-300 text-center py-4">Empty</p>
+                <p className="text-xs text-gray-300 text-center py-4">Drop here</p>
               )}
             </div>
           </div>
@@ -108,22 +144,75 @@ function KanbanBoard({ drafts, onStatusChange }) {
 }
 
 function CalendarView({ drafts }) {
+  const [selectedDate, setSelectedDate] = useState(null);
+
   const byDate = {};
   drafts.forEach((d) => {
-    if (d.date) { byDate[d.date] = byDate[d.date] || []; byDate[d.date].push(d); }
+    const key = d.date || d.planned_date;
+    if (key) { byDate[key] = byDate[key] || []; byDate[key].push(d); }
   });
-  const sorted = Object.keys(byDate).sort();
 
-  if (sorted.length === 0)
-    return <p className="text-sm text-gray-400 py-8 text-center">No posts scheduled yet. Assign a planned date to drafts.</p>;
+  const toDateStr = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const tileContent = ({ date, view }) => {
+    if (view !== 'month') return null;
+    const key = toDateStr(date);
+    const items = byDate[key];
+    if (!items || items.length === 0) return null;
+    return (
+      <div className="flex flex-wrap gap-0.5 justify-center mt-0.5">
+        {items.slice(0, 3).map((d) => (
+          <span key={d.id} className="w-1.5 h-1.5 rounded-full bg-brand-500 inline-block" />
+        ))}
+        {items.length > 3 && <span className="text-[9px] text-brand-500 leading-none">+{items.length - 3}</span>}
+      </div>
+    );
+  };
+
+  const tileClassName = ({ date, view }) => {
+    if (view !== 'month') return '';
+    const key = toDateStr(date);
+    return byDate[key] ? 'has-drafts' : '';
+  };
+
+  const handleDayClick = (date) => {
+    const key = toDateStr(date);
+    setSelectedDate(byDate[key] ? key : null);
+  };
+
+  const selectedDrafts = selectedDate ? (byDate[selectedDate] || []) : [];
 
   return (
-    <div className="space-y-4">
-      {sorted.map((date) => (
-        <div key={date}>
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">{date}</p>
+    <div>
+      <style>{`
+        .pub-calendar .react-calendar { width: 100%; border: none; font-family: inherit; }
+        .pub-calendar .react-calendar__tile { padding: 0.5em 0.25em; font-size: 0.8rem; border-radius: 0.5rem; min-height: 3.5rem; }
+        .pub-calendar .react-calendar__tile:hover { background: #f3f4f6; }
+        .pub-calendar .react-calendar__tile--active { background: #e0e7ff !important; color: #3730a3; }
+        .pub-calendar .react-calendar__tile.has-drafts { background: #eff6ff; font-weight: 600; }
+        .pub-calendar .react-calendar__navigation button { font-size: 0.9rem; font-weight: 600; padding: 0.5rem; border-radius: 0.5rem; }
+        .pub-calendar .react-calendar__navigation button:hover { background: #f3f4f6; }
+        .pub-calendar .react-calendar__month-view__weekdays { font-size: 0.7rem; text-transform: uppercase; color: #9ca3af; }
+        .pub-calendar .react-calendar__month-view__weekdays abbr { text-decoration: none; }
+      `}</style>
+      <div className="pub-calendar">
+        <Calendar
+          onClickDay={handleDayClick}
+          tileContent={tileContent}
+          tileClassName={tileClassName}
+          locale="en-US"
+        />
+      </div>
+      {selectedDate && (
+        <div className="mt-4 border-t border-gray-100 pt-4">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">{selectedDate}</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-            {byDate[date].map((d) => (
+            {selectedDrafts.map((d) => (
               <div key={d.id} className="bg-white border border-gray-100 rounded-lg p-3 shadow-sm">
                 <p className="text-sm font-medium text-gray-800 truncate">{d.title}</p>
                 <div className="flex gap-2 mt-1">
@@ -134,7 +223,13 @@ function CalendarView({ drafts }) {
             ))}
           </div>
         </div>
-      ))}
+      )}
+      {!selectedDate && Object.keys(byDate).length === 0 && (
+        <p className="text-sm text-gray-400 py-4 text-center">No posts scheduled yet. Assign a planned date to drafts.</p>
+      )}
+      {!selectedDate && Object.keys(byDate).length > 0 && (
+        <p className="text-sm text-gray-400 py-3 text-center">Click a date to see scheduled posts.</p>
+      )}
     </div>
   );
 }
