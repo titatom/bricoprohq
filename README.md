@@ -23,7 +23,7 @@ Bricopro HQ is a unified internal dashboard that centralizes daily business info
 | **Dashboard** | Live overview: integrations, widgets, quick links |
 | **Processing Queues** | Review pending photos (Immich) and documents (Paperless) |
 | **AI Social Studio** | Generate platform-specific social content from job info |
-| **Publishing Queue** | Kanban / calendar / list view for content drafts |
+| **Publishing Queue** | Kanban / calendar / list view for content drafts, with on-demand or scheduled posting to Meta and Google Business Profile |
 | **Campaigns** | Seasonal and service-based marketing campaigns |
 | **Settings** | Integration credentials, AI provider config |
 
@@ -304,6 +304,30 @@ Or in Unraid GUI: click the `bricoprohq` container → **Force Update**.
 
 ---
 
+## Publishing & KPIs
+
+Once Meta is connected via OAuth (Settings → Integrations) and the
+Facebook Page id is configured in **Settings → Social Studio** (key
+`social.facebook_account`), drafts in `status="scheduled"` will be
+auto-posted to that page by the in-process scheduler when their
+`planned_date` / `planned_time` is reached. You can also fire a publish
+manually via `POST /publishing/drafts/{id}/publish` — useful for ad-hoc
+posts. Supported platforms are `facebook` (page feed), `instagram`
+(Business container + publish two-step, requires an Instagram Business
+account id + a publicly reachable image URL), and `gbp` (Google
+Business Profile `localPosts.create`, requires
+`accounts/.../locations/...` in `social.google_business_account`).
+
+Every publish attempt is recorded in the `publish_attempts` audit
+table. `GET /publishing/drafts/{id}/attempts` returns the history so the
+UI can show "tried 4 min ago, got 'page admin permission required'".
+
+KPI ingestion runs hourly when the scheduler is enabled (or on demand
+via `POST /kpi/refresh`): for every published Facebook/Instagram draft
+with a stored `post_id`, Meta's `/insights` endpoint is queried and the
+corresponding `PostMetric` row is upserted with impressions, reach,
+clicks, engagements, and a derived engagement rate.
+
 ## MVP Acceptance Checklist
 
 - [x] Runs self-hosted in Docker
@@ -318,3 +342,4 @@ Or in Unraid GUI: click the `bricoprohq` container → **Force Update**.
 - [x] Supports basic seasonal campaigns
 - [x] User can log in / log out
 - [x] Integration failures show clear errors (not app crashes)
+- [x] Auto-publishes scheduled drafts to Meta + GBP and refreshes engagement metrics

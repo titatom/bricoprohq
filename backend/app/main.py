@@ -26,6 +26,7 @@ from .models import (
     Integration,
     OAuthState,
     PostMetric,
+    PublishAttempt,
     QuickLink,
     Setting,
     User,
@@ -1904,6 +1905,59 @@ def move_draft(
     return {"updated": True}
 
 
+@app.post("/publishing/drafts/{draft_id}/publish")
+def publish_draft_endpoint(
+    draft_id: int,
+    _: User = Depends(auth_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Publish a draft to its configured platform right now. Records a
+    PublishAttempt regardless of outcome; on success the draft moves to
+    status=posted with its post_id/post_url/published_at fields populated.
+    """
+    from .services.publishing import publish_draft
+    d = db.query(ContentDraft).filter(ContentDraft.id == draft_id).first()
+    if not d:
+        raise HTTPException(404, "Draft not found")
+    attempt = publish_draft(d, db)
+    return {
+        "attempt_id": attempt.id,
+        "status": attempt.status,
+        "post_id": attempt.post_id or None,
+        "post_url": attempt.post_url or None,
+        "error": attempt.error_message or None,
+    }
+
+
+@app.get("/publishing/drafts/{draft_id}/attempts")
+def list_publish_attempts(
+    draft_id: int,
+    _: User = Depends(auth_user),
+    db: Session = Depends(get_db),
+):
+    """Return the publish-attempt audit trail for a draft."""
+    rows = (
+        db.query(PublishAttempt)
+        .filter(PublishAttempt.draft_id == draft_id)
+        .order_by(PublishAttempt.requested_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "platform": r.platform,
+            "status": r.status,
+            "post_id": r.post_id,
+            "post_url": r.post_url,
+            "error_message": r.error_message,
+            "requested_at": r.requested_at.isoformat() if r.requested_at else None,
+            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+        }
+        for r in rows
+    ]
+
+
 @app.delete("/publishing/drafts/{draft_id}")
 def delete_draft(draft_id: int, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     d = db.query(ContentDraft).filter(ContentDraft.id == draft_id).first()
@@ -2121,6 +2175,21 @@ def create_kpi_record(payload: PostMetricIn, _: User = Depends(auth_user), db: S
     db.commit()
     db.refresh(metric)
     return _metric_payload(metric)
+
+
+@app.post("/kpi/refresh")
+def kpi_refresh(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """
+    Pull engagement metrics from Meta (and, when implemented, GBP) for
+    every published draft and upsert the corresponding PostMetric rows.
+    Returns the list of refreshed records.
+    """
+    from .services.kpi import refresh_meta_metrics
+    refreshed = refresh_meta_metrics(db)
+    return {
+        "refreshed_count": len(refreshed),
+        "records": [_metric_payload(m) for m in refreshed],
+    }
 
 
 @app.get("/kpi/summary")
