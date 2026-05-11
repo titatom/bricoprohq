@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import secrets
+import time
 from types import SimpleNamespace
 from datetime import datetime, timezone, timedelta, date
 from urllib.parse import urlencode, urlparse
@@ -36,6 +37,17 @@ from .auth import verify_password, create_access_token, hash_password, decode_ac
 from .secret_key import DEFAULT_PLACEHOLDER, resolve_secret_key
 from .services.connectors import validate_paperless_gpt_base_url, ConnectorNotConfigured, ConnectorError
 from .services.db_utils import commit_or_400, is_masked_secret
+from .services.observability import (
+    configure_logging,
+    current_request_id,
+    http_request_duration_seconds,
+    http_requests_total,
+    metrics_enabled,
+    new_request_id,
+    render_metrics,
+    set_request_id,
+    timed_connector_call,
+)
 from .services.rate_limit import (
     DEFAULT_LOGIN_LIMIT,
     DEFAULT_LOGIN_WINDOW_SECONDS,
@@ -44,6 +56,7 @@ from .services.rate_limit import (
 
 log = logging.getLogger("bricopro")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+configure_logging()  # opt-in JSON formatter when LOG_FORMAT=json
 
 
 def _build_cors_origins() -> tuple[list[str], bool]:
@@ -84,7 +97,10 @@ except Exception as exc:  # pragma: no cover - logged then re-raised
     log.critical("SECRET_KEY misconfiguration: %s", exc)
     raise
 
-app = FastAPI(title="Bricopro HQ API", version="1.0.0")
+APP_VERSION = os.getenv("APP_VERSION", "dev")
+GIT_SHA = os.getenv("GIT_SHA", "")
+
+app = FastAPI(title="Bricopro HQ API", version=APP_VERSION)
 
 _cors_origins, _cors_allow_credentials = _build_cors_origins()
 app.add_middleware(
@@ -95,6 +111,60 @@ app.add_middleware(
     allow_headers=["*"],
 )
 log.info("CORS allowed_origins=%s allow_credentials=%s", _cors_origins, _cors_allow_credentials)
+
+
+# ── Request observability middleware ─────────────────────────────────────────
+
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    """
+    Per-request observability:
+      - propagate or generate an X-Request-Id (binds to a contextvar so the
+        JSON log formatter can attach it to every record).
+      - record HTTP latency + status into Prometheus counters/histograms.
+      - log a single structured access line at the end of the request.
+    """
+    request_id = request.headers.get("x-request-id") or new_request_id()
+    set_request_id(request_id)
+
+    start = time.monotonic()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["X-Request-Id"] = request_id
+        return response
+    finally:
+        elapsed = time.monotonic() - start
+        # Use the matched route's path template when available so high-cardinality
+        # path parameters don't blow up the metric label set.
+        route_path = request.url.path
+        try:
+            scope_route = request.scope.get("route")
+            if scope_route is not None and getattr(scope_route, "path", None):
+                route_path = scope_route.path
+        except Exception:
+            pass
+        http_requests_total.labels(
+            method=request.method,
+            path=route_path,
+            status=str(status_code),
+        ).inc()
+        http_request_duration_seconds.labels(
+            method=request.method,
+            path=route_path,
+        ).observe(elapsed)
+        log.info(
+            "http_request",
+            extra={
+                "method": request.method,
+                "path": route_path,
+                "status": status_code,
+                "latency_ms": round(elapsed * 1000, 2),
+                "request_id": request_id,
+            },
+        )
+
 
 Base.metadata.create_all(bind=_db_module.engine)
 
@@ -224,11 +294,70 @@ def startup_seed():
         )
 
 
-# ── Health ────────────────────────────────────────────────────────────────────
+# ── Health / readiness / version / metrics ───────────────────────────────────
 
 @app.get("/health")
 def health():
+    """Process-liveness probe. No DB or upstream dependency."""
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/readyz")
+def readyz(db: Session = Depends(get_db)):
+    """
+    Readiness probe: verifies the app can serve traffic. Returns 503 if the
+    database is unreachable or the seeded admin row is missing.
+    """
+    from sqlalchemy import text as _sql_text
+
+    checks: dict[str, str] = {}
+    overall_ok = True
+
+    try:
+        db.execute(_sql_text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as exc:
+        checks["database"] = f"error: {exc}"
+        overall_ok = False
+
+    try:
+        admin = db.query(User).first()
+        checks["seed_admin"] = "ok" if admin else "missing"
+        if not admin:
+            overall_ok = False
+    except Exception as exc:
+        checks["seed_admin"] = f"error: {exc}"
+        overall_ok = False
+
+    body = {"status": "ready" if overall_ok else "not_ready", "checks": checks}
+    if not overall_ok:
+        raise HTTPException(503, body)
+    return body
+
+
+@app.get("/version")
+def version():
+    """Expose the running build identifiers so support threads can pin down what's deployed."""
+    return {
+        "version": APP_VERSION,
+        "git_sha": GIT_SHA,
+        "api_title": "Bricopro HQ API",
+    }
+
+
+@app.get("/metrics")
+def metrics():
+    """
+    Prometheus text-exposition payload. Disabled by default; set
+    METRICS_ENABLED=true to opt in. Intentionally unauthenticated so a
+    standard Prometheus scraper can pull without a service account token —
+    operators exposing the app publicly should rely on a reverse proxy
+    allowlist or keep METRICS_ENABLED off.
+    """
+    if not metrics_enabled():
+        raise HTTPException(404, "Metrics disabled. Set METRICS_ENABLED=true to expose /metrics.")
+    payload, content_type = render_metrics()
+    return Response(content=payload, media_type=content_type)
 
 
 # ── Auth endpoints ────────────────────────────────────────────────────────────
@@ -743,13 +872,14 @@ def test_integration(provider: str, request: Request, _: User = Depends(auth_use
     try:
         from .services.connectors import get_connector
         connector = get_connector(provider, db)
-        if provider == "paperless-gpt":
-            validate_paperless_gpt_base_url(connector.base_url, _request_app_base_urls(request))
-            result = connector.test_connection()
-        else:
-            # ping() is a cheap authoritative health check on connectors that
-            # support it; falls back to fetch() on connectors that do not.
-            result = connector.ping()
+        with timed_connector_call(provider):
+            if provider == "paperless-gpt":
+                validate_paperless_gpt_base_url(connector.base_url, _request_app_base_urls(request))
+                result = connector.test_connection()
+            else:
+                # ping() is a cheap authoritative health check on connectors that
+                # support it; falls back to fetch() on connectors that do not.
+                result = connector.ping()
         i = db.query(Integration).filter(Integration.provider == provider).first()
         if i:
             i.status = "ok"
@@ -803,9 +933,17 @@ def _fetch_source_data(source: str, db: Session) -> tuple[bool, dict]:
     try:
         from .services.connectors import get_connector
         connector = get_connector(source, db)
-        return True, connector.fetch()
+        with timed_connector_call(source):
+            return True, connector.fetch()
     except (ConnectorNotConfigured, ConnectorError) as exc:
-        log.warning("Connector %s failed (%s): %s", source, type(exc).__name__, exc)
+        log.warning(
+            "Connector failed",
+            extra={
+                "provider": source,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
         return False, {
             "source": source,
             "timestamp": utc_now().isoformat(),
@@ -813,7 +951,10 @@ def _fetch_source_data(source: str, db: Session) -> tuple[bool, dict]:
             "error_type": type(exc).__name__,
         }
     except Exception as exc:  # pragma: no cover - defensive catch-all
-        log.exception("Connector %s raised an unexpected exception", source)
+        log.exception(
+            "Connector raised unexpected exception",
+            extra={"provider": source, "error_type": type(exc).__name__},
+        )
         return False, {
             "source": source,
             "timestamp": utc_now().isoformat(),
