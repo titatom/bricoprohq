@@ -92,12 +92,12 @@ const DRAFT_STATUSES = [
 const PUB_PLATFORMS = ['facebook', 'instagram', 'gbp', 'linkedin', 'website', 'ad', 'email_sms'];
 
 const KANBAN_COLS = [
-  { key: 'idea',            label: 'Idea',           color: 'bg-purple-50 border-purple-200' },
-  { key: 'draft_generated', label: 'Draft',          color: 'bg-yellow-50 border-yellow-200' },
-  { key: 'needs_review',    label: 'Needs Review',   color: 'bg-orange-50 border-orange-200' },
-  { key: 'approved',        label: 'Approved',       color: 'bg-brand-50 border-brand-200' },
-  { key: 'scheduled',       label: 'Scheduled',      color: 'bg-cyan-50 border-cyan-200' },
-  { key: 'posted',          label: 'Posted',         color: 'bg-green-50 border-green-200' },
+  { key: 'idea',            label: 'Idea',           color: 'bg-purple-50 border-purple-200', emptyHint: 'Capture new content ideas here.' },
+  { key: 'draft_generated', label: 'Draft',          color: 'bg-yellow-50 border-yellow-200', emptyHint: 'Generate a post in the Post tab to get started.' },
+  { key: 'needs_review',    label: 'Needs Review',   color: 'bg-orange-50 border-orange-200', emptyHint: 'Move drafts here when ready for review.' },
+  { key: 'approved',        label: 'Approved',       color: 'bg-brand-50 border-brand-200',   emptyHint: 'Approved posts will appear here. Review drafts to approve them.' },
+  { key: 'scheduled',       label: 'Scheduled',      color: 'bg-cyan-50 border-cyan-200',     emptyHint: 'Drag approved posts here and assign a date to schedule.' },
+  { key: 'posted',          label: 'Posted',         color: 'bg-green-50 border-green-200',   emptyHint: 'Published posts will show up here.' },
 ];
 
 // ── Campaign constants ────────────────────────────────────────────────────────
@@ -1245,7 +1245,7 @@ function KanbanBoard({ drafts, onStatusChange, onDelete, onUpdate, apiFetch }) {
     <>
       {selected && <DraftModal draft={selected} onClose={() => { setSelected(null); if (onUpdate) onUpdate(); }} onStatusChange={onStatusChange} onDelete={onDelete} onUpdate={onUpdate} apiFetch={apiFetch} />}
       <div className="flex gap-3 overflow-x-auto pb-4">
-        {KANBAN_COLS.map(({ key, label, color }) => (
+        {KANBAN_COLS.map(({ key, label, color, emptyHint }) => (
           <div
             key={key}
             className={`flex-shrink-0 w-56 rounded-xl border p-3 transition-colors ${color} ${dragOverCol === key ? 'ring-2 ring-brand-400 ring-offset-1' : ''}`}
@@ -1274,7 +1274,10 @@ function KanbanBoard({ drafts, onStatusChange, onDelete, onUpdate, apiFetch }) {
                 </div>
               ))}
               {(!grouped[key] || grouped[key].length === 0) && (
-                <p className="text-xs text-gray-300 text-center py-4">Drop here</p>
+                <div className="text-center py-4 px-2">
+                  <p className="text-xs text-gray-400 italic">{emptyHint}</p>
+                  <p className="text-[10px] text-gray-300 mt-1">Drag &amp; drop cards here</p>
+                </div>
               )}
             </div>
           </div>
@@ -1415,9 +1418,49 @@ function InlineEditableTitle({ draft, apiFetch, onUpdate }) {
   );
 }
 
+function SortableHeader({ label, field, sortField, sortDir, onSort }) {
+  const active = sortField === field;
+  return (
+    <th
+      className="pb-2 font-medium pr-4 cursor-pointer select-none hover:text-gray-600 transition-colors"
+      onClick={() => onSort(field)}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        <span className={`text-[10px] ${active ? 'text-brand-600' : 'text-gray-300'}`}>
+          {active ? (sortDir === 'asc' ? '▲' : '▼') : '⇅'}
+        </span>
+      </span>
+    </th>
+  );
+}
+
 function ListView({ drafts, onStatusChange, onDelete, apiFetch, onUpdate }) {
   const [confirmId, setConfirmId] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
+  const [sortField, setSortField] = useState('');
+  const [sortDir, setSortDir] = useState('asc');
+
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDir('asc');
+    }
+  };
+
+  const sortedDrafts = [...drafts].sort((a, b) => {
+    if (!sortField) return 0;
+    let aVal = a[sortField] || '';
+    let bVal = b[sortField] || '';
+    if (sortField === 'planned_date') {
+      aVal = aVal || '9999-99-99';
+      bVal = bVal || '9999-99-99';
+    }
+    const cmp = String(aVal).localeCompare(String(bVal));
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
 
   const handleCopy = (d) => {
     if (copyDraftToClipboard(d)) {
@@ -1431,13 +1474,18 @@ function ListView({ drafts, onStatusChange, onDelete, apiFetch, onUpdate }) {
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
-            {['Title', 'Platform', 'Status', 'Planned Date', 'Campaign', 'Actions', '', ''].map((h) => (
-              <th key={`${h}-${Math.random()}`} className="pb-2 font-medium pr-4">{h}</th>
-            ))}
+            <SortableHeader label="Title" field="title" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
+            <SortableHeader label="Platform" field="platform" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
+            <SortableHeader label="Status" field="status" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
+            <SortableHeader label="Planned Date" field="planned_date" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
+            <th className="pb-2 font-medium pr-4">Campaign</th>
+            <th className="pb-2 font-medium pr-4">Actions</th>
+            <th className="pb-2 font-medium pr-4"></th>
+            <th className="pb-2 font-medium pr-4"></th>
           </tr>
         </thead>
         <tbody>
-          {drafts.map((d) => (
+          {sortedDrafts.map((d) => (
             <tr key={d.id} className="border-b border-gray-50 hover:bg-gray-50/50">
               <td className="py-2.5 pr-4 font-medium text-gray-800 max-w-xs">
                 <InlineEditableTitle draft={d} apiFetch={apiFetch} onUpdate={onUpdate} />
@@ -1491,6 +1539,79 @@ function ListView({ drafts, onStatusChange, onDelete, apiFetch, onUpdate }) {
       {drafts.length === 0 && (
         <p className="text-sm text-gray-400 py-8 text-center">No drafts yet. Generate content in the Post Generation tab.</p>
       )}
+    </div>
+  );
+}
+
+const LIBRARY_STATUSES = [
+  { key: 'reuse_later',    label: 'Reuse Later',    color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
+  { key: 'turn_into_ad',   label: 'Turn Into Ad',   color: 'text-amber-700 bg-amber-50 border-amber-200' },
+  { key: 'turn_into_page', label: 'Turn Into Page', color: 'text-teal-700 bg-teal-50 border-teal-200' },
+];
+
+function ContentLibrary({ drafts, onStatusChange, onDelete }) {
+  const [expanded, setExpanded] = useState({});
+  const libraryDrafts = drafts.filter((d) => ['reuse_later', 'turn_into_ad', 'turn_into_page'].includes(d.status));
+
+  const toggle = (key) => setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
+
+  if (libraryDrafts.length === 0) return null;
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h4 className="font-semibold text-gray-800 text-sm">Content Library</h4>
+          <p className="text-xs text-gray-400 mt-0.5">Saved content for reuse, ads, or landing pages.</p>
+        </div>
+        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{libraryDrafts.length} item{libraryDrafts.length !== 1 ? 's' : ''}</span>
+      </div>
+      {LIBRARY_STATUSES.map(({ key, label, color }) => {
+        const items = libraryDrafts.filter((d) => d.status === key);
+        if (items.length === 0) return null;
+        const isExpanded = expanded[key] !== false;
+        return (
+          <div key={key} className="mb-3">
+            <button
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border text-sm font-medium ${color} transition-colors hover:opacity-80`}
+              onClick={() => toggle(key)}
+            >
+              <span>{label} ({items.length})</span>
+              <span className="text-xs">{isExpanded ? '▾' : '▸'}</span>
+            </button>
+            {isExpanded && (
+              <div className="mt-2 space-y-1.5 pl-2">
+                {items.map((d) => (
+                  <div key={d.id} className="flex items-center justify-between p-2 rounded-lg bg-gray-50 border border-gray-100">
+                    <div className="flex-1 min-w-0 mr-3">
+                      <p className="text-sm font-medium text-gray-800 truncate">{d.title}</p>
+                      <p className="text-xs text-gray-400">{d.platform}{d.planned_date ? ` · ${d.planned_date}` : ''}</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <select
+                        className="text-xs border border-gray-200 rounded px-2 py-1 bg-white"
+                        value={d.status}
+                        onChange={(e) => onStatusChange(d.id, e.target.value)}
+                      >
+                        {DRAFT_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+                      </select>
+                      {onDelete && (
+                        <button
+                          className="text-xs text-red-400 hover:text-red-600"
+                          onClick={() => onDelete(d.id)}
+                          title="Delete"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1573,6 +1694,8 @@ function PublishingQueueTab({ apiFetch }) {
         {view === 'calendar' && <CalendarView drafts={calendar} />}
         {view === 'list'     && <ListView drafts={drafts} onStatusChange={updateStatus} onDelete={deleteDraft} apiFetch={apiFetch} onUpdate={() => { loadDrafts(); loadCalendar(); }} />}
       </div>
+
+      <ContentLibrary drafts={drafts} onStatusChange={updateStatus} onDelete={deleteDraft} />
     </div>
   );
 }
