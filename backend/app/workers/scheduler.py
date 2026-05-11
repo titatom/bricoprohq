@@ -24,11 +24,13 @@ import logging
 import os
 import threading
 from collections.abc import Iterable
+from datetime import datetime
+from datetime import time as time_cls
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from .. import db as _db_module
-from ..models import Integration
+from ..models import ContentDraft, Integration, utc_now
 from ..services.refresh import CACHE_TTL_MINUTES, refresh_source
 
 
@@ -111,6 +113,70 @@ def refresh_all_integrations(sources: Iterable[str] | None = None) -> dict:
     return {"providers": providers, "results": results}
 
 
+def _parse_planned_time(value: str) -> time_cls:
+    """Parse "HH:MM" or "HH:MM:SS" planned_time strings; default to noon UTC."""
+    if not value:
+        return time_cls(12, 0)
+    parts = value.split(":")
+    try:
+        hh = max(0, min(23, int(parts[0])))
+        mm = max(0, min(59, int(parts[1]) if len(parts) > 1 else 0))
+        return time_cls(hh, mm)
+    except (ValueError, IndexError):
+        return time_cls(12, 0)
+
+
+def publish_due_drafts() -> dict:
+    """
+    Find drafts in status=scheduled whose planned_date/time is in the past
+    and try to publish them. Drafts without a planned_date are skipped;
+    operators set those manually via the /publish endpoint.
+    """
+    from ..services.publishing import publish_draft
+
+    results: dict[int, str] = {}
+    now = utc_now()
+
+    with _session() as db:
+        candidates = (
+            db.query(ContentDraft)
+            .filter(ContentDraft.status == "scheduled")
+            .filter(ContentDraft.planned_date.is_not(None))
+            .all()
+        )
+        due: list[ContentDraft] = []
+        for d in candidates:
+            planned_at = datetime.combine(d.planned_date, _parse_planned_time(d.planned_time))
+            if planned_at <= now:
+                due.append(d)
+
+        if not due:
+            return {"due_count": 0, "results": {}}
+
+        for d in due:
+            try:
+                attempt = publish_draft(d, db)
+                results[d.id] = attempt.status
+            except Exception as exc:  # pragma: no cover - defensive
+                log.exception(
+                    "Scheduled publish raised",
+                    extra={"draft_id": d.id, "platform": d.platform, "error": str(exc)},
+                )
+                results[d.id] = "crashed"
+
+    log.info("Scheduler publish sweep complete", extra={"results": results})
+    return {"due_count": len(results), "results": results}
+
+
+def refresh_post_metrics() -> dict:
+    """Pull insights for every published Meta draft and upsert PostMetric rows."""
+    from ..services.kpi import refresh_meta_metrics
+
+    with _session() as db:
+        refreshed = refresh_meta_metrics(db)
+    return {"refreshed_count": len(refreshed)}
+
+
 def start_scheduler(*, sources: Iterable[str] | None = None) -> BackgroundScheduler | None:
     """Start the background scheduler if SCHEDULER_ENABLED is set. Idempotent."""
     global _scheduler
@@ -134,6 +200,24 @@ def start_scheduler(*, sources: Iterable[str] | None = None) -> BackgroundSchedu
             "interval",
             minutes=interval,
             id="refresh_all_integrations",
+            replace_existing=True,
+            next_run_time=None,
+        )
+        scheduler.add_job(
+            publish_due_drafts,
+            "interval",
+            minutes=1,
+            id="publish_due_drafts",
+            replace_existing=True,
+            next_run_time=None,
+        )
+        # Pull KPI metrics less frequently — Meta insights are eventually
+        # consistent and the API has tight rate limits.
+        scheduler.add_job(
+            refresh_post_metrics,
+            "interval",
+            minutes=60,
+            id="refresh_post_metrics",
             replace_existing=True,
             next_run_time=None,
         )

@@ -151,8 +151,35 @@ class ContentDraft(Base):
     status: Mapped[str] = mapped_column(String(100), default="draft_generated")
     planned_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     planned_time: Mapped[str] = mapped_column(String(10), default="")
+    # Populated by the publishing service once the draft has been delivered
+    # upstream. ``post_id`` is the platform-native id (Facebook page_id_post_id,
+    # IG media id, GBP localPosts/...) and ``post_url`` is the shareable URL.
+    post_id: Mapped[str] = mapped_column(String(255), default="")
+    post_url: Mapped[str] = mapped_column(String(1000), default="")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+class PublishAttempt(Base):
+    """
+    Audit row for every attempt to publish a draft to an external platform.
+    Stores the outcome (queued/success/error), the upstream post id when
+    successful, and a short error blurb when not. Lets the UI show "tried
+    to post 4 min ago, got 'page requires admin permission'" without
+    relying on log archaeology.
+    """
+    __tablename__ = "publish_attempts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    draft_id: Mapped[int] = mapped_column(ForeignKey("content_drafts.id"), index=True)
+    platform: Mapped[str] = mapped_column(String(50))
+    target_account: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[str] = mapped_column(String(50), default="queued")
+    post_id: Mapped[str] = mapped_column(String(255), default="")
+    post_url: Mapped[str] = mapped_column(String(1000), default="")
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    requested_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
 
 class PostMetric(Base):
     __tablename__ = "post_metrics"
