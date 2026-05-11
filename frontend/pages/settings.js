@@ -194,7 +194,6 @@ const SS_DEFAULTS = {
   facebook_prompt: 'Facebook: conversational, helpful, local, and clear about the service.',
   instagram_prompt: 'Instagram: concise caption, strong opening line, tasteful emojis, and relevant hashtags.',
   gbp_prompt: 'Google Business Profile: professional, service-focused, local, and direct.',
-  before_after_prompt: 'If the user marks photos as before/after candidates, propose or generate a clean side-by-side montage without inventing results.',
   safety_prompt: 'Never invent reviews, client names, addresses, prices, certifications, or regulated trade work.',
   facebook_account: '',
   instagram_account: '',
@@ -203,7 +202,6 @@ const SS_DEFAULTS = {
   google_ads_account_id: '',
   meta_ads_account: '',
   google_ads_account: '',
-  before_after_enabled: 'true',
 };
 
 async function parseApiResponse(response, fallbackMessage) {
@@ -802,13 +800,6 @@ function SocialStudioSettingsInline({ apiFetch }) {
             <label className="label">Brand voice</label>
             <textarea className="input h-24 resize-y" value={form.brand_voice} onChange={(e) => setForm({ ...form, brand_voice: e.target.value })} />
           </div>
-          <div>
-            <label className="label">Before / after generation</label>
-            <select className="select" value={form.before_after_enabled} onChange={(e) => setForm({ ...form, before_after_enabled: e.target.value })}>
-              <option value="true">Enabled when image pairs are available</option>
-              <option value="false">Disabled</option>
-            </select>
-          </div>
         </div>
       </section>
 
@@ -837,10 +828,6 @@ function SocialStudioSettingsInline({ apiFetch }) {
               <label className="label">GBP prompt</label>
               <textarea className="input h-28 resize-y" value={form.gbp_prompt} onChange={(e) => setForm({ ...form, gbp_prompt: e.target.value })} />
             </div>
-          </div>
-          <div>
-            <label className="label">Before / after prompt</label>
-            <textarea className="input h-20 resize-y" value={form.before_after_prompt} onChange={(e) => setForm({ ...form, before_after_prompt: e.target.value })} />
           </div>
           <div>
             <label className="label">Safety / compliance prompt</label>
