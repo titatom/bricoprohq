@@ -3,47 +3,66 @@ import logging
 import os
 import secrets
 import time
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
-from datetime import datetime, timezone, timedelta, date
 from urllib.parse import urlencode, urlparse
 
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response
-from sqlalchemy.orm import Session
 from jose import JWTError
+from sqlalchemy.orm import Session
 
 from . import db as _db_module
-from .db import Base, get_db, _reinit as _db_reinit
-_db_reinit()  # re-read DATABASE_URL in case env changed (e.g. test reloads)
+from .auth import create_access_token, decode_access_token, hash_password, verify_password
+from .db import Base, get_db
+from .db import _reinit as _db_reinit
 from .models import (
-    User, Setting, QuickLink, Integration, DashboardCache,
-    ContentAsset, ContentDraft, Campaign, PostMetric, OAuthState,
+    Campaign,
+    ContentAsset,
+    ContentDraft,
+    DashboardCache,
+    Integration,
+    OAuthState,
+    PostMetric,
+    QuickLink,
+    Setting,
+    User,
     utc_now,
 )
 from .schemas import (
-    LoginRequest, LoginResponse, UserMeResponse,
-    SettingIn, SettingOut,
-    QuickLinkIn, QuickLinkOut,
+    AssetCreateIn,
+    AssetStatusIn,
+    CampaignGenerateIn,
+    CampaignIn,
+    DraftIn,
+    DraftStatusIn,
+    DraftUpdateIn,
     IntegrationUpdateIn,
-    AssetStatusIn, AssetCreateIn,
-    SocialGenerateIn,
-    SocialCandidatesIn, SocialAnalyzeAlbumIn,
-    SocialGenerateImageIn, SocialGenerateImageActualIn,
-    UploadGeneratedImageToImmichIn,
-    SaveImagePresetsIn, SocialGeneratePackIn, SocialSettingsIn,
-    DraftIn, DraftStatusIn, DraftUpdateIn,
-    CampaignIn, CampaignGenerateIn,
+    LoginRequest,
+    LoginResponse,
     PostMetricIn,
+    QuickLinkIn,
+    QuickLinkOut,
+    SaveImagePresetsIn,
+    SettingIn,
+    SettingOut,
+    SocialAnalyzeAlbumIn,
+    SocialCandidatesIn,
+    SocialGenerateImageActualIn,
+    SocialGenerateImageIn,
+    SocialGenerateIn,
+    SocialGeneratePackIn,
+    SocialSettingsIn,
+    UploadGeneratedImageToImmichIn,
+    UserMeResponse,
 )
-from .auth import verify_password, create_access_token, hash_password, decode_access_token
 from .secret_key import DEFAULT_PLACEHOLDER, resolve_secret_key
-from .services.connectors import validate_paperless_gpt_base_url, ConnectorNotConfigured, ConnectorError
+from .services.connectors import ConnectorError, ConnectorNotConfigured, validate_paperless_gpt_base_url
 from .services.db_utils import commit_or_400, is_masked_secret
 from .services.observability import (
     configure_logging,
-    current_request_id,
     http_request_duration_seconds,
     http_requests_total,
     metrics_enabled,
@@ -57,6 +76,11 @@ from .services.rate_limit import (
     DEFAULT_LOGIN_WINDOW_SECONDS,
     default_limiter,
 )
+
+# Re-read DATABASE_URL after the imports above complete so tests that reload
+# this module pick up the freshly-set DATABASE_URL before any session is
+# opened. Importing the models does not touch the engine, only the metadata.
+_db_reinit()
 
 log = logging.getLogger("bricopro")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -313,7 +337,7 @@ def shutdown_scheduler():
 @app.get("/health")
 def health():
     """Process-liveness probe. No DB or upstream dependency."""
-    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+    return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
 
 
 @app.get("/readyz")
@@ -441,7 +465,9 @@ def settings(_: User = Depends(auth_user), db: Session = Depends(get_db)):
 def set_setting(key: str, payload: SettingIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     s = db.query(Setting).filter(Setting.key == key).first() or Setting(key=key, value="")
     s.value = payload.value
-    db.add(s); db.commit(); db.refresh(s)
+    db.add(s)
+    db.commit()
+    db.refresh(s)
     return s
 
 
@@ -455,7 +481,9 @@ def ql(_: User = Depends(auth_user), db: Session = Depends(get_db)):
 @app.post("/quick-links", response_model=QuickLinkOut)
 def ql_create(payload: QuickLinkIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     o = QuickLink(**payload.model_dump())
-    db.add(o); db.commit(); db.refresh(o)
+    db.add(o)
+    db.commit()
+    db.refresh(o)
     return o
 
 
@@ -466,7 +494,8 @@ def ql_update(id: int, payload: QuickLinkIn, _: User = Depends(auth_user), db: S
         raise HTTPException(404, "Not found")
     for k, v in payload.model_dump().items():
         setattr(o, k, v)
-    db.commit(); db.refresh(o)
+    db.commit()
+    db.refresh(o)
     return o
 
 
@@ -475,7 +504,8 @@ def ql_del(id: int, _: User = Depends(auth_user), db: Session = Depends(get_db))
     o = db.query(QuickLink).filter(QuickLink.id == id).first()
     if not o:
         raise HTTPException(404, "Not found")
-    db.delete(o); db.commit()
+    db.delete(o)
+    db.commit()
     return {"deleted": True}
 
 
@@ -581,7 +611,7 @@ def _store_oauth_tokens(
 ) -> None:
     """Persist OAuth tokens, syncing shared Google auth across Google integrations."""
     providers = sorted(_GOOGLE_PROVIDERS) if provider in _GOOGLE_PROVIDERS else [provider]
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+    expires_at = datetime.now(UTC) + timedelta(seconds=int(expires_in))
     for p in providers:
         i = db.query(Integration).filter(Integration.provider == p).first()
         if not i:
@@ -592,7 +622,7 @@ def _store_oauth_tokens(
             i.oauth_refresh_token = refresh_token
         i.oauth_token_expires_at = expires_at
         i.status = "ok"
-        i.last_sync_at = datetime.now(timezone.utc)
+        i.last_sync_at = datetime.now(UTC)
 
 
 def _clear_oauth_tokens(provider: str, db: Session) -> None:
@@ -947,7 +977,7 @@ def refresh(source: str, _: User = Depends(auth_user), db: Session = Depends(get
 @app.get("/dashboard/jobber-stats")
 def jobber_stats(_: User = Depends(auth_user), db: Session = Depends(get_db)):
     """Fetch Jobber stats directly for the dashboard header (independent from card limits)."""
-    from .services.connectors import JobberConnector, ConnectorNotConfigured, ConnectorError
+    from .services.connectors import ConnectorError, ConnectorNotConfigured, JobberConnector
     integration = db.query(Integration).filter(Integration.provider == "jobber").first()
     if not integration:
         return {"upcoming_unscheduled_count": 0, "action_required_count": 0, "new_requests_count": 0, "pending_invoice_count": 0}
@@ -995,7 +1025,7 @@ def immich_asset_thumbnail(asset_id: str, _: User = Depends(auth_user), db: Sess
 
 @app.get("/dashboard")
 def dashboard(_: User = Depends(auth_user), db: Session = Depends(get_db)):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     out = {}
     for s in SOURCES:
         c = db.query(DashboardCache).filter(DashboardCache.source == s).first()
@@ -1003,7 +1033,7 @@ def dashboard(_: User = Depends(auth_user), db: Session = Depends(get_db)):
         out[s] = {
             "status": i.status if i else "unknown",
             "cached": bool(c),
-            "stale": True if not c else c.expires_at.replace(tzinfo=timezone.utc) < now,
+            "stale": True if not c else c.expires_at.replace(tzinfo=UTC) < now,
             "data": {} if not c else json.loads(c.data_json),
         }
     return out
@@ -1074,7 +1104,9 @@ def create_asset(payload: AssetCreateIn, _: User = Depends(auth_user), db: Sessi
         service_category=payload.service_category,
         status=payload.status,
     )
-    db.add(a); db.commit(); db.refresh(a)
+    db.add(a)
+    db.commit()
+    db.refresh(a)
     return {"id": a.id}
 
 
@@ -1098,7 +1130,7 @@ def set_asset_status(
 
 @app.post("/ai/test")
 def ai_test(_: User = Depends(auth_user), db: Session = Depends(get_db)):
-    from .services.ai import test_connection, AINotConfigured, AIError
+    from .services.ai import AIError, AINotConfigured, test_connection
     try:
         result = test_connection(db)
         return {"ok": True, "message": result.get("message", "Connection successful"), "provider": result.get("provider"), "model": result.get("model")}
@@ -1144,7 +1176,7 @@ def _template_fallback(payload: SocialGenerateIn) -> dict:
 
 @app.post("/social/generate")
 def social_generate(payload: SocialGenerateIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
-    from .services.ai import generate_social_content, AINotConfigured, AIError
+    from .services.ai import AIError, AINotConfigured, generate_social_content
 
     social_cfg = _social_settings_map(db)
     copy_model = social_cfg.get("copy_model", "")
@@ -1173,7 +1205,9 @@ def social_generate(payload: SocialGenerateIn, _: User = Depends(auth_user), db:
         cta=payload.cta,
         status="draft_generated",
     )
-    db.add(d); db.commit(); db.refresh(d)
+    db.add(d)
+    db.commit()
+    db.refresh(d)
     return {
         "draft_id": d.id,
         "title": d.title,
@@ -1469,7 +1503,7 @@ def social_analyze_album(payload: SocialAnalyzeAlbumIn, _: User = Depends(auth_u
 @app.post("/social/generate-image")
 def social_generate_image(payload: SocialGenerateImageIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     """Generate an image using the configured image generation model."""
-    from .services.ai import generate_image_prompt, AINotConfigured, AIError
+    from .services.ai import AIError, AINotConfigured, generate_image_prompt
 
     social_cfg = _social_settings_map(db)
     prompt = payload.prompt.strip()
@@ -1507,7 +1541,8 @@ def social_generate_image_actual(payload: SocialGenerateImageActualIn, _: User =
     """Generate an actual image using the configured image generation model (DALL-E or compatible)."""
     import base64
     from pathlib import Path
-    from .services.ai import generate_image_prompt, generate_image_dall_e, AINotConfigured, AIError
+
+    from .services.ai import AIError, AINotConfigured, generate_image_dall_e, generate_image_prompt
 
     social_cfg = _social_settings_map(db)
     prompt = payload.prompt.strip()
@@ -1575,8 +1610,8 @@ def social_generate_image_actual(payload: SocialGenerateImageActualIn, _: User =
 @app.get("/social/generated-images/{image_id}")
 def social_generated_image(image_id: str, _: User = Depends(auth_user)):
     """Serve a previously generated image."""
-    from pathlib import Path
     import re
+    from pathlib import Path
 
     if not re.match(r'^[a-f0-9]+$', image_id):
         raise HTTPException(400, "Invalid image ID")
@@ -1601,8 +1636,8 @@ def upload_generated_image_to_immich(
     db: Session = Depends(get_db),
 ):
     """Upload a generated image to an Immich album."""
-    from pathlib import Path
     import re
+    from pathlib import Path
 
     if not re.match(r'^[a-f0-9]+$', image_id):
         raise HTTPException(400, "Invalid image ID")
@@ -1626,8 +1661,8 @@ def upload_generated_image_to_immich(
             data={
                 "deviceAssetId": f"bricopro-{image_id}",
                 "deviceId": "bricopro-hq",
-                "fileCreatedAt": datetime.now(timezone.utc).isoformat(),
-                "fileModifiedAt": datetime.now(timezone.utc).isoformat(),
+                "fileCreatedAt": datetime.now(UTC).isoformat(),
+                "fileModifiedAt": datetime.now(UTC).isoformat(),
             },
             timeout=60,
         )
@@ -1684,7 +1719,7 @@ def save_image_presets(payload: SaveImagePresetsIn, _: User = Depends(auth_user)
 
 @app.post("/social/generate-pack")
 def social_generate_pack(payload: SocialGeneratePackIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
-    from .services.ai import generate_social_content, AINotConfigured, AIError
+    from .services.ai import AIError, AINotConfigured, generate_social_content
 
     social_cfg = _social_settings_map(db)
     copy_model = social_cfg.get("copy_model", "")
@@ -1802,7 +1837,9 @@ def drafts(
 def create_draft(payload: DraftIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     pd = date.fromisoformat(payload.planned_date) if payload.planned_date else None
     d = ContentDraft(**payload.model_dump(exclude={"planned_date"}), planned_date=pd)
-    db.add(d); db.commit(); db.refresh(d)
+    db.add(d)
+    db.commit()
+    db.refresh(d)
     return {"id": d.id}
 
 
@@ -1927,7 +1964,9 @@ def create_campaign(payload: CampaignIn, _: User = Depends(auth_user), db: Sessi
         status=payload.status,
         message=payload.message,
     )
-    db.add(c); db.commit(); db.refresh(c)
+    db.add(c)
+    db.commit()
+    db.refresh(c)
     return {"id": c.id}
 
 
@@ -1960,7 +1999,7 @@ def campaign_generate(
     safety prompts, and provider configuration. Falls back to the local
     template helper when no AI provider is configured.
     """
-    from .services.ai import generate_social_content, AINotConfigured, AIError
+    from .services.ai import AIError, AINotConfigured, generate_social_content
 
     c = db.query(Campaign).filter(Campaign.id == campaign_id).first()
     if not c:
@@ -2015,7 +2054,9 @@ def campaign_generate(
         status="draft_generated",
         campaign_id=c.id,
     )
-    db.add(d); db.commit(); db.refresh(d)
+    db.add(d)
+    db.commit()
+    db.refresh(d)
     return {"draft_id": d.id, "campaign_id": c.id, "ai_used": ai_used}
 
 
@@ -2076,7 +2117,9 @@ def create_kpi_record(payload: PostMetricIn, _: User = Depends(auth_user), db: S
         engagement_rate=payload.engagement_rate,
         notes=payload.notes,
     )
-    db.add(metric); db.commit(); db.refresh(metric)
+    db.add(metric)
+    db.commit()
+    db.refresh(metric)
     return _metric_payload(metric)
 
 

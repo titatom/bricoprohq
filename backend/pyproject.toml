@@ -1,0 +1,36 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",   # line too long — handled by formatter in incremental cleanup
+    "E701",   # multiple statements on one line (colon) — pydantic class Config style
+    "E741",   # ambiguous variable names — l in list comprehensions
+    "B008",   # FastAPI Depends(...) in default arg is idiomatic for FastAPI
+    "B011",   # assert False in tests — used by error-path tests
+    "B904",   # raise from inside except — covered, churn-heavy
+    "UP007",  # X | None (3.10+) — codebase still has Optional[X] in places
+    "RUF012", # mutable class attrs — kept for explicit class-level cache
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:jose.jwt",
+    "ignore::DeprecationWarning:sqlalchemy",
+    "ignore::DeprecationWarning:pydantic",
+]

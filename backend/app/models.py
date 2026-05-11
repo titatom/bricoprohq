@@ -1,7 +1,9 @@
-from datetime import datetime, date, timezone
-from sqlalchemy import String, Integer, Boolean, DateTime, Date, Text, ForeignKey, Float
+from datetime import UTC, date, datetime
+
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
+
 from .db import Base
 
 
@@ -14,7 +16,7 @@ def utc_now() -> datetime:
     Storing naive UTC keeps comparisons consistent across rows and avoids
     the ``datetime.utcnow()`` deprecation warning.
     """
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class EncryptedText(TypeDecorator):

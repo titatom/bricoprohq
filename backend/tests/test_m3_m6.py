@@ -1,5 +1,5 @@
-import os
 import importlib
+import os
 from unittest.mock import patch
 
 import httpx

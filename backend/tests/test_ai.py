@@ -2,10 +2,11 @@
 Tests for AI generation, test-connection endpoint, and settings persistence.
 Uses unittest.mock to avoid calling real LLM APIs.
 """
+import importlib
 import json
 import os
-import importlib
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from fastapi.testclient import TestClient
 
 
@@ -234,7 +235,10 @@ def test_openrouter_image_gen_images_field():
 
     call_body = mock_post.call_args[1]["json"]
     assert call_body["modalities"] == ["image", "text"]
-    assert call_body["image_config"] == {"aspect_ratio": "1:1"}
+    # image_config carries aspect_ratio (derived from size) and optionally
+    # image_size (derived from quality). Only assert the aspect_ratio key so
+    # the test does not have to track the quality-to-size mapping table.
+    assert call_body["image_config"]["aspect_ratio"] == "1:1"
 
 
 def test_openrouter_image_gen_content_fallback():
@@ -302,7 +306,7 @@ def test_openrouter_image_gen_remote_url():
 
 def test_openrouter_image_gen_no_image_data_raises():
     """OpenRouter image gen raises AIError when no image data is in response."""
-    from app.services.ai import _generate_image_openrouter, AIError
+    from app.services.ai import AIError, _generate_image_openrouter
 
     mock_resp = MagicMock()
     mock_resp.status_code = 200
@@ -353,7 +357,7 @@ def test_openrouter_image_gen_aspect_ratio_mapping():
         )
 
     call_body = mock_post.call_args[1]["json"]
-    assert call_body["image_config"] == {"aspect_ratio": "9:16"}
+    assert call_body["image_config"]["aspect_ratio"] == "9:16"
 
 
 def test_openrouter_image_gen_no_aspect_for_unknown_size():
@@ -382,7 +386,10 @@ def test_openrouter_image_gen_no_aspect_for_unknown_size():
         )
 
     call_body = mock_post.call_args[1]["json"]
-    assert "image_config" not in call_body
+    # When no aspect_ratio is derivable from size, image_config may still
+    # carry image_size (derived from quality); assert only that aspect_ratio
+    # is absent so the test isn't coupled to the quality-mapping table.
+    assert "aspect_ratio" not in call_body.get("image_config", {})
 
 
 def test_openrouter_image_gen_image_only_model_modalities():

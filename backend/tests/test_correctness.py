@@ -12,7 +12,6 @@ import os
 from unittest.mock import patch
 
 import httpx
-import pytest
 from fastapi.testclient import TestClient
 
 
@@ -207,6 +206,7 @@ def test_update_integration_preserves_real_secret_for_client_secret():
 
         # Read raw column to verify the secret survived the round-trip.
         import sqlite3
+
         from app.services.crypto import decrypt
         raw = sqlite3.connect("test_correctness_mask_client_secret.db").execute(
             "SELECT config_json FROM integrations WHERE provider = 'jobber'"
