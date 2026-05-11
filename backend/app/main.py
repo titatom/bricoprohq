@@ -29,8 +29,12 @@ from .schemas import (
     IntegrationUpdateIn,
     AssetStatusIn, AssetCreateIn,
     SocialGenerateIn,
-    DraftIn, DraftStatusIn,
-    CampaignIn,
+    SocialCandidatesIn, SocialAnalyzeAlbumIn,
+    SocialGenerateImageIn, SocialGenerateImageActualIn,
+    UploadGeneratedImageToImmichIn,
+    SaveImagePresetsIn, SocialGeneratePackIn, SocialSettingsIn,
+    DraftIn, DraftStatusIn, DraftUpdateIn,
+    CampaignIn, CampaignGenerateIn,
     PostMetricIn,
 )
 from .auth import verify_password, create_access_token, hash_password, decode_access_token
@@ -1301,9 +1305,9 @@ def social_albums(_: User = Depends(auth_user), db: Session = Depends(get_db)):
 
 
 @app.post("/social/candidates")
-def social_candidates(payload: dict, _: User = Depends(auth_user)):
-    album_id = payload.get("album_id", "recent-work")
-    service = payload.get("service_category") or "Exterior painting"
+def social_candidates(payload: SocialCandidatesIn, _: User = Depends(auth_user)):
+    album_id = payload.album_id
+    service = payload.service_category or "Exterior painting"
     return {
         "album_id": album_id,
         "candidates": [
@@ -1437,14 +1441,15 @@ def social_settings(_: User = Depends(auth_user), db: Session = Depends(get_db))
 
 
 @app.put("/social/settings")
-def save_social_settings(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
-    if payload.get("meta_account_id") and not payload.get("meta_ads_account"):
-        payload["meta_ads_account"] = payload["meta_account_id"]
-    if payload.get("google_ads_account_id") and not payload.get("google_ads_account"):
-        payload["google_ads_account"] = payload["google_ads_account_id"]
+def save_social_settings(payload: SocialSettingsIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    raw = payload.model_dump()
+    if raw.get("meta_account_id") and not raw.get("meta_ads_account"):
+        raw["meta_ads_account"] = raw["meta_account_id"]
+    if raw.get("google_ads_account_id") and not raw.get("google_ads_account"):
+        raw["google_ads_account"] = raw["google_ads_account_id"]
     out = {}
     for key, default in SOCIAL_SETTING_DEFAULTS.items():
-        value = str(payload.get(key, default))
+        value = str(raw.get(key, default))
         setting_key = f"social_{key}"
         row = db.query(Setting).filter(Setting.key == setting_key).first() or Setting(key=setting_key, value="")
         row.value = value
@@ -1495,8 +1500,11 @@ def social_immich_album_assets(
 
 
 @app.post("/social/analyze-album")
-def social_analyze_album(payload: dict, _: User = Depends(auth_user)):
-    result = social_candidates({"album_id": payload.get("album_id"), "service_category": payload.get("service_category")}, _)
+def social_analyze_album(payload: SocialAnalyzeAlbumIn, _: User = Depends(auth_user)):
+    result = social_candidates(
+        SocialCandidatesIn(album_id=payload.album_id, service_category=payload.service_category),
+        _,
+    )
     candidates = [
         {
             "id": c["id"],
@@ -1520,14 +1528,14 @@ def social_analyze_album(payload: dict, _: User = Depends(auth_user)):
 
 
 @app.post("/social/generate-image")
-def social_generate_image(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+def social_generate_image(payload: SocialGenerateImageIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     """Generate an image using the configured image generation model."""
     from .services.ai import generate_image_prompt, AINotConfigured, AIError
 
     social_cfg = _social_settings_map(db)
-    prompt = payload.get("prompt", "").strip()
-    preset = payload.get("preset", "").strip()
-    asset_ids = payload.get("asset_ids", [])
+    prompt = payload.prompt.strip()
+    preset = payload.preset.strip()
+    asset_ids = payload.asset_ids
 
     if not prompt and not preset:
         raise HTTPException(400, "A prompt or preset is required.")
@@ -1556,19 +1564,19 @@ def social_generate_image(payload: dict, _: User = Depends(auth_user), db: Sessi
 
 
 @app.post("/social/generate-image-actual")
-def social_generate_image_actual(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+def social_generate_image_actual(payload: SocialGenerateImageActualIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     """Generate an actual image using the configured image generation model (DALL-E or compatible)."""
     import base64
     from pathlib import Path
     from .services.ai import generate_image_prompt, generate_image_dall_e, AINotConfigured, AIError
 
     social_cfg = _social_settings_map(db)
-    prompt = payload.get("prompt", "").strip()
-    preset = payload.get("preset", "").strip()
-    asset_ids = payload.get("asset_ids", [])
-    size = payload.get("size", "1024x1024")
-    quality = payload.get("quality", "standard")
-    refine_prompt = payload.get("refine_prompt", True)
+    prompt = payload.prompt.strip()
+    preset = payload.preset.strip()
+    asset_ids = payload.asset_ids
+    size = payload.size
+    quality = payload.quality
+    refine_prompt = payload.refine_prompt
 
     if not prompt and not preset:
         raise HTTPException(400, "A prompt or preset is required.")
@@ -1647,7 +1655,12 @@ def social_generated_image(image_id: str, _: User = Depends(auth_user)):
 
 
 @app.post("/social/generated-images/{image_id}/upload-to-immich")
-def upload_generated_image_to_immich(image_id: str, payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+def upload_generated_image_to_immich(
+    image_id: str,
+    payload: UploadGeneratedImageToImmichIn,
+    _: User = Depends(auth_user),
+    db: Session = Depends(get_db),
+):
     """Upload a generated image to an Immich album."""
     from pathlib import Path
     import re
@@ -1660,11 +1673,11 @@ def upload_generated_image_to_immich(image_id: str, payload: dict, _: User = Dep
     if not image_path.exists():
         raise HTTPException(404, "Generated image not found")
 
-    album_id = payload.get("album_id", "").strip()
+    album_id = payload.album_id.strip()
     _, base_url, api_key = _immich_ready(db)
 
     image_bytes = image_path.read_bytes()
-    filename = payload.get("filename", f"bricopro-generated-{image_id}.png")
+    filename = payload.filename or f"bricopro-generated-{image_id}.png"
 
     try:
         upload_resp = httpx.post(
@@ -1720,9 +1733,9 @@ def social_image_presets(_: User = Depends(auth_user), db: Session = Depends(get
 
 
 @app.put("/social/image-presets")
-def save_image_presets(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+def save_image_presets(payload: SaveImagePresetsIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     """Save image generation presets."""
-    presets = payload.get("presets", [])
+    presets = [p.model_dump() for p in payload.presets]
     row = db.query(Setting).filter(Setting.key == "social_image_presets").first() or Setting(key="social_image_presets", value="[]")
     row.value = json.dumps(presets)
     db.add(row)
@@ -1731,12 +1744,12 @@ def save_image_presets(payload: dict, _: User = Depends(auth_user), db: Session 
 
 
 @app.post("/social/generate-pack")
-def social_generate_pack(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+def social_generate_pack(payload: SocialGeneratePackIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     from .services.ai import generate_social_content, AINotConfigured, AIError
 
     social_cfg = _social_settings_map(db)
     copy_model = social_cfg.get("copy_model", "")
-    raw_platforms = payload.get("platforms")
+    raw_platforms = payload.platforms
     if isinstance(raw_platforms, str):
         platforms = [p.strip() for p in raw_platforms.split(",") if p.strip()]
     elif isinstance(raw_platforms, list):
@@ -1744,9 +1757,9 @@ def social_generate_pack(payload: dict, _: User = Depends(auth_user), db: Sessio
     else:
         platforms = [p.strip() for p in social_cfg.get("default_platforms", "facebook").split(",") if p.strip()]
     platforms = platforms or ["facebook"]
-    selected_assets = payload.get("asset_ids") or []
-    before_after_requested = bool(payload.get("before_after_requested") or payload.get("before_after"))
-    job_description = payload.get("job_description", "")
+    selected_assets = payload.asset_ids or []
+    before_after_requested = bool(payload.before_after_requested or payload.before_after)
+    job_description = payload.job_description or ""
     if selected_assets:
         job_description = (
             f"{job_description}\n\nSelected Immich asset IDs: {', '.join(map(str, selected_assets))}."
@@ -1768,13 +1781,13 @@ def social_generate_pack(payload: dict, _: User = Depends(auth_user), db: Sessio
             platform_job_description = f"{platform_job_description}\n\nBefore/after: {social_cfg['before_after_prompt']}".strip()
 
         draft_payload = {
-            "service_category": payload.get("service_category", "Bricopro project"),
+            "service_category": payload.service_category or "Bricopro project",
             "platform": platform,
-            "language": payload.get("language") or social_cfg.get("default_language", "bilingual"),
-            "tone": payload.get("tone") or social_cfg.get("default_tone", "local"),
+            "language": payload.language or social_cfg.get("default_language", "bilingual"),
+            "tone": payload.tone or social_cfg.get("default_tone", "local"),
             "job_description": platform_job_description,
-            "city": payload.get("city") or social_cfg.get("default_city", "Montréal"),
-            "cta": payload.get("cta") or social_cfg.get("default_cta", "request_quote"),
+            "city": payload.city or social_cfg.get("default_city", "Montréal"),
+            "cta": payload.cta or social_cfg.get("default_cta", "request_quote"),
         }
         ai_used = True
         try:
@@ -1857,37 +1870,37 @@ def create_draft(payload: DraftIn, _: User = Depends(auth_user), db: Session = D
 @app.put("/publishing/drafts/{draft_id}")
 def update_draft(
     draft_id: int,
-    payload: dict,
+    payload: DraftUpdateIn,
     _: User = Depends(auth_user),
     db: Session = Depends(get_db),
 ):
-    """Full draft update - title, body, status, planned_date, etc."""
+    """Partial draft update — every field in DraftUpdateIn is optional."""
     from .schemas import DRAFT_STATUSES
+
     d = db.query(ContentDraft).filter(ContentDraft.id == draft_id).first()
     if not d:
         raise HTTPException(404, "Draft not found")
 
-    if "title" in payload:
-        d.title = payload["title"]
-    if "body" in payload:
-        d.body = payload["body"]
-    if "short_body" in payload:
-        d.short_body = payload["short_body"]
-    if "hashtags" in payload:
-        d.hashtags = payload["hashtags"]
-    if "cta" in payload:
-        d.cta = payload["cta"]
-    if "image_ids" in payload:
-        d.image_ids = payload["image_ids"]
-    if "status" in payload:
-        if payload["status"] not in DRAFT_STATUSES:
-            raise HTTPException(422, f"Invalid draft status '{payload['status']}'")
-        d.status = payload["status"]
-    if "planned_date" in payload:
-        pd_val = payload["planned_date"]
+    # ``model_dump(exclude_unset=True)`` keeps the partial-update semantics:
+    # only the fields the caller actually included are applied.
+    data = payload.model_dump(exclude_unset=True)
+
+    for field in ("title", "body", "short_body", "hashtags", "cta", "image_ids"):
+        if field in data:
+            setattr(d, field, data[field] or "")
+
+    if "status" in data:
+        if data["status"] not in DRAFT_STATUSES:
+            raise HTTPException(422, f"Invalid draft status '{data['status']}'")
+        d.status = data["status"]
+
+    if "planned_date" in data:
+        pd_val = data["planned_date"]
         d.planned_date = date.fromisoformat(pd_val) if pd_val else None
-    if "planned_time" in payload:
-        d.planned_time = payload["planned_time"] or ""
+
+    if "planned_time" in data:
+        d.planned_time = data["planned_time"] or ""
+
     d.updated_at = utc_now()
     db.commit()
     return {"updated": True, "id": d.id}
@@ -1998,7 +2011,7 @@ def update_campaign(
 @app.post("/campaigns/{campaign_id}/generate")
 def campaign_generate(
     campaign_id: int,
-    payload: dict | None = None,
+    payload: CampaignGenerateIn | None = None,
     _: User = Depends(auth_user),
     db: Session = Depends(get_db),
 ):
@@ -2014,15 +2027,15 @@ def campaign_generate(
     if not c:
         raise HTTPException(404, "Campaign not found")
 
-    payload = payload or {}
+    payload = payload or CampaignGenerateIn()
     social_cfg = _social_settings_map(db)
-    platform = (payload.get("platform") or "facebook").strip() or "facebook"
-    language = (payload.get("language") or social_cfg.get("default_language", "fr")).strip()
-    tone = (payload.get("tone") or social_cfg.get("default_tone", "local")).strip()
-    cta = (payload.get("cta") or social_cfg.get("default_cta", "request_quote")).strip()
-    city = (payload.get("city") or social_cfg.get("default_city", "Montréal")).strip()
+    platform = ((payload.platform or "facebook").strip()) or "facebook"
+    language = (payload.language or social_cfg.get("default_language", "fr")).strip()
+    tone = (payload.tone or social_cfg.get("default_tone", "local")).strip()
+    cta = (payload.cta or social_cfg.get("default_cta", "request_quote")).strip()
+    city = (payload.city or social_cfg.get("default_city", "Montréal")).strip()
 
-    job_description_parts = [c.message or "", payload.get("job_description") or ""]
+    job_description_parts = [c.message or "", payload.job_description or ""]
     if c.target_neighbourhoods:
         job_description_parts.append(f"Target neighbourhoods: {c.target_neighbourhoods}.")
     if c.notes:
@@ -2030,7 +2043,7 @@ def campaign_generate(
     job_description = "\n\n".join(part for part in job_description_parts if part).strip()
 
     draft_payload = {
-        "service_category": c.service_category or payload.get("service_category", ""),
+        "service_category": c.service_category or payload.service_category or "",
         "platform": platform,
         "language": language,
         "tone": tone,
