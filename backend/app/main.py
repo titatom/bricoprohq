@@ -296,6 +296,16 @@ def startup_seed():
             "SECRET_KEY env var not set; using the on-disk dev fallback. "
             "Set SECRET_KEY explicitly in production."
         )
+    # Start the background scheduler if opted in. The scheduler runs in a
+    # daemon thread so it does not block uvicorn shutdown.
+    from .workers.scheduler import start_scheduler
+    start_scheduler()
+
+
+@app.on_event("shutdown")
+def shutdown_scheduler():
+    from .workers.scheduler import stop_scheduler
+    stop_scheduler()
 
 
 # ── Health / readiness / version / metrics ───────────────────────────────────
@@ -926,83 +936,12 @@ def test_integration(provider: str, request: Request, _: User = Depends(auth_use
 
 # ── Dashboard cache ───────────────────────────────────────────────────────────
 
-def _fetch_source_data(source: str, db: Session) -> tuple[bool, dict]:
-    """
-    Run a connector and return ``(success, payload)``.
-
-    On failure the returned payload describes the error so it can be cached
-    for UI display, but the boolean lets the caller flip the integration
-    status and avoid stamping the cache as "fresh" when nothing was loaded.
-    """
-    try:
-        from .services.connectors import get_connector
-        connector = get_connector(source, db)
-        with timed_connector_call(source):
-            return True, connector.fetch()
-    except (ConnectorNotConfigured, ConnectorError) as exc:
-        log.warning(
-            "Connector failed",
-            extra={
-                "provider": source,
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            },
-        )
-        return False, {
-            "source": source,
-            "timestamp": utc_now().isoformat(),
-            "error": str(exc),
-            "error_type": type(exc).__name__,
-        }
-    except Exception as exc:  # pragma: no cover - defensive catch-all
-        log.exception(
-            "Connector raised unexpected exception",
-            extra={"provider": source, "error_type": type(exc).__name__},
-        )
-        return False, {
-            "source": source,
-            "timestamp": utc_now().isoformat(),
-            "error": str(exc),
-            "error_type": type(exc).__name__,
-        }
-
-
 @app.post("/dashboard/refresh/{source}")
 def refresh(source: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
     if source not in SOURCES:
         raise HTTPException(404, "Unknown source")
-    now = utc_now()
-    success, data = _fetch_source_data(source, db)
-    i = db.query(Integration).filter(Integration.provider == source).first()
-
-    # Cache the payload either way so the UI can show what happened, but on
-    # failure the row is intentionally stamped as already expired so the next
-    # request retries instead of serving a stale error within the TTL window.
-    cache = db.query(DashboardCache).filter(DashboardCache.source == source).first() or DashboardCache(
-        source=source, data_json="{}", expires_at=now
-    )
-    cache.data_json = json.dumps(data)
-    cache.synced_at = now
-    cache.expires_at = now + timedelta(minutes=CACHE_TTL_MINUTES) if success else now
-    db.add(cache)
-
-    if i:
-        if success:
-            i.status = "ok"
-            i.last_sync_at = now
-            i.last_error = ""
-            i.last_error_at = None
-        else:
-            i.status = "error"
-            i.last_error = (data.get("error") or "")[:1000]
-            i.last_error_at = now
-
-    db.commit()
-    return {
-        "status": "ok" if success else "error",
-        "source": source,
-        "error": None if success else data.get("error"),
-    }
+    from .services.refresh import refresh_source
+    return refresh_source(source, db, ttl_minutes=CACHE_TTL_MINUTES)
 
 
 @app.get("/dashboard/jobber-stats")
