@@ -20,9 +20,20 @@ const KANBAN_COLS = [
   { key: 'posted',          label: 'Posted',         color: 'bg-green-50 border-green-200'   },
 ];
 
+function copyDraftToClipboard(d) {
+  const parts = [d.body || d.main_copy || '', d.hashtags, d.cta].filter(Boolean);
+  const text = parts.join('\n\n');
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).catch(() => {});
+    return true;
+  }
+  return false;
+}
+
 function DraftModal({ draft, onClose, onStatusChange, campaigns }) {
   const [status, setStatus] = useState(draft.status);
   const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const save = async () => {
     setSaving(true);
@@ -45,6 +56,11 @@ function DraftModal({ draft, onClose, onStatusChange, campaigns }) {
           </div>
           {draft.campaign_id && <p><strong>Campaign:</strong> #{draft.campaign_id}</p>}
         </div>
+        {draft.body && (
+          <div className="mb-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-700 max-h-40 overflow-y-auto whitespace-pre-wrap">
+            {draft.body}
+          </div>
+        )}
         <div className="mb-4">
           <label className="label">Move to status</label>
           <select className="select" value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -52,6 +68,12 @@ function DraftModal({ draft, onClose, onStatusChange, campaigns }) {
           </select>
         </div>
         <div className="flex gap-2 justify-end">
+          <button
+            className="px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-gray-700 text-sm font-medium hover:bg-gray-100 transition-colors"
+            onClick={() => { if (copyDraftToClipboard(draft)) { setCopied(true); setTimeout(() => setCopied(false), 2000); } }}
+          >
+            {copied ? 'Copied!' : 'Copy to Clipboard'}
+          </button>
           <button className="btn-secondary" onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={save} disabled={saving}>
             {saving ? 'Saving…' : 'Update Status'}
@@ -129,7 +151,7 @@ function KanbanBoard({ drafts, onStatusChange }) {
                   onClick={() => setSelected(d)}
                 >
                   <p className="text-sm font-medium text-gray-800 truncate">{d.title}</p>
-                  <p className="text-xs text-gray-400 mt-1">{d.platform} {d.planned_date ? `· ${d.planned_date}` : ''}</p>
+                  <p className="text-xs text-gray-400 mt-1">{d.platform} {d.planned_date ? `· ${d.planned_date}` : ''}{d.planned_time ? ` ${d.planned_time}` : ''}</p>
                 </div>
               ))}
               {(!grouped[key] || grouped[key].length === 0) && (
@@ -215,8 +237,9 @@ function CalendarView({ drafts }) {
             {selectedDrafts.map((d) => (
               <div key={d.id} className="bg-white border border-gray-100 rounded-lg p-3 shadow-sm">
                 <p className="text-sm font-medium text-gray-800 truncate">{d.title}</p>
-                <div className="flex gap-2 mt-1">
+                <div className="flex items-center gap-2 mt-1">
                   <span className="badge bg-gray-100 text-gray-600">{d.platform}</span>
+                  {d.planned_time && <span className="text-xs text-gray-400">{d.planned_time}</span>}
                   <StatusBadge status={d.status} />
                 </div>
               </div>
@@ -235,13 +258,22 @@ function CalendarView({ drafts }) {
 }
 
 function ListView({ drafts, onStatusChange }) {
+  const [copiedId, setCopiedId] = useState(null);
+
+  const handleCopy = (d) => {
+    if (copyDraftToClipboard(d)) {
+      setCopiedId(d.id);
+      setTimeout(() => setCopiedId(null), 2000);
+    }
+  };
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
-            {['Title', 'Platform', 'Status', 'Planned Date', 'Campaign', 'Actions'].map((h) => (
-              <th key={h} className="pb-2 font-medium pr-4">{h}</th>
+            {['Title', 'Platform', 'Status', 'Planned Date', 'Campaign', 'Actions', ''].map((h) => (
+              <th key={`${h}-${Math.random()}`} className="pb-2 font-medium pr-4">{h}</th>
             ))}
           </tr>
         </thead>
@@ -253,7 +285,7 @@ function ListView({ drafts, onStatusChange }) {
               <td className="py-2.5 pr-4"><StatusBadge status={d.status} /></td>
               <td className="py-2.5 pr-4 text-gray-500">{d.planned_date || '—'}</td>
               <td className="py-2.5 pr-4 text-gray-400">{d.campaign_id ? `#${d.campaign_id}` : '—'}</td>
-              <td className="py-2.5">
+              <td className="py-2.5 pr-4">
                 <select
                   className="text-xs border border-gray-200 rounded px-2 py-1 bg-white"
                   value={d.status}
@@ -263,6 +295,15 @@ function ListView({ drafts, onStatusChange }) {
                     <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
                   ))}
                 </select>
+              </td>
+              <td className="py-2.5">
+                <button
+                  className="text-xs text-gray-400 hover:text-brand-600 transition-colors"
+                  onClick={() => handleCopy(d)}
+                  title="Copy post to clipboard"
+                >
+                  {copiedId === d.id ? 'Copied!' : 'Copy'}
+                </button>
               </td>
             </tr>
           ))}

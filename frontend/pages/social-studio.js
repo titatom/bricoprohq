@@ -1043,17 +1043,20 @@ function DraftModal({ draft, onClose, onStatusChange, onDelete, onUpdate, apiFet
   const [hashtags, setHashtags] = useState(draft.hashtags || '');
   const [cta, setCta] = useState(draft.cta || '');
   const [plannedDate, setPlannedDate] = useState(draft.planned_date || '');
+  const [plannedTime, setPlannedTime] = useState(draft.planned_time || '');
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  const imageIdList = (draft.image_ids || '').split(',').filter(Boolean);
 
   const saveAll = async () => {
     setSaving(true);
     setFeedback('');
     const r = await apiFetch(`/publishing/drafts/${draft.id}`, {
       method: 'PUT',
-      body: JSON.stringify({ title, body, short_body: shortBody, hashtags, cta, planned_date: plannedDate || null, status }),
+      body: JSON.stringify({ title, body, short_body: shortBody, hashtags, cta, planned_date: plannedDate || null, planned_time: plannedTime, status }),
     });
     setSaving(false);
     if (r.ok) {
@@ -1128,10 +1131,14 @@ function DraftModal({ draft, onClose, onStatusChange, onDelete, onUpdate, apiFet
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="label">Scheduled date</label>
               <input className="input" type="date" value={plannedDate} onChange={(e) => setPlannedDate(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Time</label>
+              <input className="input" type="time" value={plannedTime} onChange={(e) => setPlannedTime(e.target.value)} />
             </div>
             <div>
               <label className="label">Status</label>
@@ -1140,6 +1147,19 @@ function DraftModal({ draft, onClose, onStatusChange, onDelete, onUpdate, apiFet
               </select>
             </div>
           </div>
+
+          {imageIdList.length > 0 && (
+            <div>
+              <label className="label">Attached images</label>
+              <div className="flex flex-wrap gap-1.5">
+                {imageIdList.map((assetId) => (
+                  <div key={assetId} className="w-12 h-12 rounded-lg overflow-hidden border border-brand-200 bg-gray-100">
+                    <ImmichPickerThumbnail asset={{ id: assetId }} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {draft.campaign_id && <p className="text-sm text-gray-500">Campaign: #{draft.campaign_id}</p>}
           {feedback && <p className="text-sm text-green-600 font-medium">{feedback}</p>}
@@ -1246,7 +1266,11 @@ function KanbanBoard({ drafts, onStatusChange, onDelete, onUpdate, apiFetch }) {
                   onClick={() => setSelected(d)}
                 >
                   <p className="text-sm font-medium text-gray-800 truncate">{d.title}</p>
-                  <p className="text-xs text-gray-400 mt-1">{d.platform} {d.planned_date ? `· ${d.planned_date}` : ''}</p>
+                  <div className="flex items-center gap-1.5 mt-1">
+                    <span className="text-xs text-gray-400">{d.platform}</span>
+                    {d.planned_date && <span className="text-xs text-gray-400">· {d.planned_date}{d.planned_time ? ` ${d.planned_time}` : ''}</span>}
+                    {d.image_ids && <span className="inline-flex items-center gap-0.5 text-[10px] text-brand-500 bg-brand-50 rounded px-1">IMG {d.image_ids.split(',').filter(Boolean).length}</span>}
+                  </div>
                 </div>
               ))}
               {(!grouped[key] || grouped[key].length === 0) && (
@@ -1332,9 +1356,11 @@ function CalendarView({ drafts }) {
             {selectedDrafts.map((d) => (
               <div key={d.id} className="bg-white border border-gray-100 rounded-lg p-3 shadow-sm">
                 <p className="text-sm font-medium text-gray-800 truncate">{d.title}</p>
-                <div className="flex gap-2 mt-1">
+                <div className="flex items-center gap-2 mt-1">
                   <span className="badge bg-gray-100 text-gray-600">{d.platform}</span>
+                  {(d.planned_time) && <span className="text-xs text-gray-400">{d.planned_time}</span>}
                   <StatusBadge status={d.status} />
+                  {d.image_ids && <span className="text-[10px] text-brand-500 bg-brand-50 rounded px-1">IMG</span>}
                 </div>
               </div>
             ))}
@@ -1351,7 +1377,45 @@ function CalendarView({ drafts }) {
   );
 }
 
-function ListView({ drafts, onStatusChange, onDelete }) {
+function InlineEditableTitle({ draft, apiFetch, onUpdate }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(draft.title);
+
+  const save = async () => {
+    setEditing(false);
+    if (value.trim() === draft.title) return;
+    await apiFetch(`/publishing/drafts/${draft.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ title: value.trim() }),
+    });
+    if (onUpdate) onUpdate();
+  };
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        className="text-sm font-medium text-gray-800 bg-white border border-brand-300 rounded px-1.5 py-0.5 w-full outline-none focus:ring-1 focus:ring-brand-400"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { setValue(draft.title); setEditing(false); } }}
+      />
+    );
+  }
+
+  return (
+    <span
+      className="cursor-text hover:bg-gray-100 rounded px-1 -mx-1 transition-colors"
+      onDoubleClick={() => setEditing(true)}
+      title="Double-click to edit"
+    >
+      {draft.title}
+    </span>
+  );
+}
+
+function ListView({ drafts, onStatusChange, onDelete, apiFetch, onUpdate }) {
   const [confirmId, setConfirmId] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
 
@@ -1375,11 +1439,21 @@ function ListView({ drafts, onStatusChange, onDelete }) {
         <tbody>
           {drafts.map((d) => (
             <tr key={d.id} className="border-b border-gray-50 hover:bg-gray-50/50">
-              <td className="py-2.5 pr-4 font-medium text-gray-800 max-w-xs truncate">{d.title}</td>
+              <td className="py-2.5 pr-4 font-medium text-gray-800 max-w-xs">
+                <InlineEditableTitle draft={d} apiFetch={apiFetch} onUpdate={onUpdate} />
+              </td>
               <td className="py-2.5 pr-4"><span className="badge bg-gray-100 text-gray-600">{d.platform}</span></td>
               <td className="py-2.5 pr-4"><StatusBadge status={d.status} /></td>
-              <td className="py-2.5 pr-4 text-gray-500">{d.planned_date || '—'}</td>
-              <td className="py-2.5 pr-4 text-gray-400">{d.campaign_id ? `#${d.campaign_id}` : '—'}</td>
+              <td className="py-2.5 pr-4 text-gray-500">
+                {d.planned_date || '—'}
+                {d.planned_time && <span className="text-gray-400 ml-1">{d.planned_time}</span>}
+              </td>
+              <td className="py-2.5 pr-4 text-gray-400">
+                <span className="flex items-center gap-1.5">
+                  {d.campaign_id ? `#${d.campaign_id}` : '—'}
+                  {d.image_ids && <span className="inline-flex items-center text-[10px] text-brand-500 bg-brand-50 rounded px-1">IMG {d.image_ids.split(',').filter(Boolean).length}</span>}
+                </span>
+              </td>
               <td className="py-2.5 pr-4">
                 <select
                   className="text-xs border border-gray-200 rounded px-2 py-1 bg-white"
@@ -1497,7 +1571,7 @@ function PublishingQueueTab({ apiFetch }) {
       <div className="card">
         {view === 'kanban'   && <KanbanBoard drafts={drafts} onStatusChange={updateStatus} onDelete={deleteDraft} onUpdate={() => { loadDrafts(); loadCalendar(); }} apiFetch={apiFetch} />}
         {view === 'calendar' && <CalendarView drafts={calendar} />}
-        {view === 'list'     && <ListView drafts={drafts} onStatusChange={updateStatus} onDelete={deleteDraft} />}
+        {view === 'list'     && <ListView drafts={drafts} onStatusChange={updateStatus} onDelete={deleteDraft} apiFetch={apiFetch} onUpdate={() => { loadDrafts(); loadCalendar(); }} />}
       </div>
     </div>
   );
@@ -1612,6 +1686,7 @@ export default function SocialStudioPage() {
   const saveDraft = async (drafts) => {
     setSaving(true);
     setError('');
+    const imgIds = selectedAssets.join(',');
     let savedAll = true;
     for (const draft of drafts) {
       const r = await apiFetch('/publishing/drafts', {
@@ -1626,6 +1701,7 @@ export default function SocialStudioPage() {
           short_body: draft.short_variation,
           hashtags: draft.hashtags,
           cta: draft.cta,
+          image_ids: imgIds,
           status: 'needs_review',
         }),
       });
@@ -1645,6 +1721,7 @@ export default function SocialStudioPage() {
   const saveSingleDraft = async (draft, status) => {
     setSaving(true);
     setError('');
+    const imgIds = selectedAssets.join(',');
     const r = await apiFetch('/publishing/drafts', {
       method: 'POST',
       body: JSON.stringify({
@@ -1657,6 +1734,7 @@ export default function SocialStudioPage() {
         short_body: draft.short_variation,
         hashtags: draft.hashtags,
         cta: draft.cta,
+        image_ids: imgIds,
         status: status,
       }),
     });

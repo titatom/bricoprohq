@@ -1515,6 +1515,7 @@ def drafts(
             "language": d.language,
             "status": d.status,
             "planned_date": d.planned_date.isoformat() if d.planned_date else None,
+            "planned_time": getattr(d, "planned_time", "") or "",
             "campaign_id": d.campaign_id,
             "body": d.body,
             "short_body": d.short_body,
@@ -1522,6 +1523,7 @@ def drafts(
             "cta": d.cta,
             "tone": d.tone,
             "service_category": d.service_category,
+            "image_ids": getattr(d, "image_ids", "") or "",
         }
         for d in q.all()
     ]
@@ -1558,6 +1560,8 @@ def update_draft(
         d.hashtags = payload["hashtags"]
     if "cta" in payload:
         d.cta = payload["cta"]
+    if "image_ids" in payload:
+        d.image_ids = payload["image_ids"]
     if "status" in payload:
         if payload["status"] not in DRAFT_STATUSES:
             raise HTTPException(422, f"Invalid draft status '{payload['status']}'")
@@ -1565,6 +1569,8 @@ def update_draft(
     if "planned_date" in payload:
         pd_val = payload["planned_date"]
         d.planned_date = date.fromisoformat(pd_val) if pd_val else None
+    if "planned_time" in payload:
+        d.planned_time = payload["planned_time"] or ""
     d.updated_at = datetime.utcnow()
     db.commit()
     return {"updated": True, "id": d.id}
@@ -1607,7 +1613,9 @@ def pub_calendar(_: User = Depends(auth_user), db: Session = Depends(get_db)):
             "title": d.title,
             "platform": d.platform,
             "date": d.planned_date.isoformat() if d.planned_date else None,
+            "planned_time": getattr(d, "planned_time", "") or "",
             "status": d.status,
+            "image_ids": getattr(d, "image_ids", "") or "",
         }
         for d in db.query(ContentDraft).all()
     ]
