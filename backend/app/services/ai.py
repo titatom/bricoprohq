@@ -148,6 +148,7 @@ def _call_openai_compatible(
     user: str,
     extra_headers: Optional[dict] = None,
     timeout: int = 30,
+    images: Optional[list] = None,
 ) -> dict:
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -156,11 +157,18 @@ def _call_openai_compatible(
     if extra_headers:
         headers.update(extra_headers)
 
+    if images:
+        user_content: object = [{"type": "text", "text": user}]
+        for img_data_url in images:
+            user_content.append({"type": "image_url", "image_url": {"url": img_data_url}})  # type: ignore[union-attr]
+    else:
+        user_content = user
+
     body = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
-            {"role": "user",   "content": user},
+            {"role": "user",   "content": user_content},
         ],
         "temperature": 0.7,
         "max_tokens": 1200,
@@ -182,12 +190,25 @@ def _call_openai_compatible(
         raise AIError(f"Could not parse AI response as JSON: {exc}") from exc
 
 
-def _call_ollama(base_url: str, model: str, system: str, user: str) -> dict:
+def _call_ollama(base_url: str, model: str, system: str, user: str, images: Optional[list] = None) -> dict:
+    # Ollama multimodal: raw base64 strings (no data-URL prefix) go in the
+    # message's "images" list alongside a plain-text "content" string.
+    user_msg: dict = {"role": "user", "content": user}
+    if images:
+        stripped = []
+        for img in images:
+            if isinstance(img, str) and img.startswith("data:") and "," in img:
+                stripped.append(img.split(",", 1)[1])
+            elif isinstance(img, str):
+                stripped.append(img)
+        if stripped:
+            user_msg["images"] = stripped
+
     body = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
-            {"role": "user",   "content": user},
+            user_msg,
         ],
         "stream": False,
         "format": "json",
@@ -225,6 +246,7 @@ def _dispatch_llm(
     model: str,
     system: str,
     user: str,
+    images: Optional[list] = None,
 ) -> dict:
     """Route a chat-completion call to the right backend."""
     api_key = cfg.get("ai_api_key", "").strip()
@@ -232,7 +254,7 @@ def _dispatch_llm(
 
     if provider == "ollama":
         effective_base = base_url or OLLAMA_DEFAULT_BASE
-        return _call_ollama(effective_base, model, system, user)
+        return _call_ollama(effective_base, model, system, user, images=images)
 
     if provider in ("openai", "openrouter"):
         if not api_key:
@@ -246,7 +268,7 @@ def _dispatch_llm(
                 "HTTP-Referer": "https://bricopro.ca",
                 "X-Title":      "Bricopro HQ",
             }
-        return _call_openai_compatible(effective_base, api_key, model, system, user, extra_headers=extra)
+        return _call_openai_compatible(effective_base, api_key, model, system, user, extra_headers=extra, images=images)
 
     raise AINotConfigured(f"Unknown provider '{provider}'. Choose openai, openrouter, or ollama in Settings.")
 
@@ -287,9 +309,13 @@ def generate_social_content(payload: dict, db: Session, model_override: str = ""
     }
 
 
-def generate_image_prompt(prompt: str, social_cfg: dict, db: Session) -> dict:
+def generate_image_prompt(prompt: str, social_cfg: dict, db: Session, images: Optional[list] = None) -> dict:
     """
-    Send an image generation prompt to the configured image generation model.
+    Refine an image generation prompt via the configured chat model.
+
+    When ``images`` (a list of base64 data-URL strings) is provided the model
+    receives the actual pixel data so it can produce a prompt that faithfully
+    describes or modifies the referenced photos.
 
     Model priority: image_generation_model > copy_model > global ai_model.
     """
@@ -319,9 +345,12 @@ def generate_image_prompt(prompt: str, social_cfg: dict, db: Session) -> dict:
         "Return only valid JSON. No markdown fences."
     )
 
-    log.info("AI image generate: provider=%s model=%s (override=%s)", provider, effective_model, model_override or "<none>")
+    log.info(
+        "AI image generate: provider=%s model=%s (override=%s) reference_images=%d",
+        provider, effective_model, model_override or "<none>", len(images) if images else 0,
+    )
 
-    result = _dispatch_llm(cfg, provider, effective_model, system, prompt)
+    result = _dispatch_llm(cfg, provider, effective_model, system, prompt, images=images)
 
     return {
         "image_prompt": result.get("image_prompt", prompt),
@@ -417,8 +446,14 @@ def _generate_image_openrouter(
     prompt: str,
     size: str,
     quality: str,
+    images: Optional[list] = None,
 ) -> dict:
-    """Generate an image via OpenRouter's chat/completions with image modalities."""
+    """Generate an image via OpenRouter's chat/completions with image modalities.
+
+    When ``images`` contains base64 data-URL strings the reference photos are
+    embedded directly in the user message so the model can use them as visual
+    context (img2img / inpainting style, depending on model support).
+    """
     effective_base = base_url or OPENROUTER_DEFAULT_BASE
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -430,9 +465,16 @@ def _generate_image_openrouter(
     image_only = model.lower().startswith(_IMAGE_ONLY_MODEL_PREFIXES)
     modalities = ["image"] if image_only else ["image", "text"]
 
+    if images:
+        user_content: object = [{"type": "text", "text": prompt}]
+        for img_data_url in images:
+            user_content.append({"type": "image_url", "image_url": {"url": img_data_url}})  # type: ignore[union-attr]
+    else:
+        user_content = prompt
+
     body: dict = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": user_content}],
         "modalities": modalities,
     }
 
@@ -560,12 +602,25 @@ def _generate_image_openrouter(
         raise AIError(f"Unexpected OpenRouter image response: {exc}") from exc
 
 
-def generate_image_dall_e(prompt: str, social_cfg: dict, db: Session, size: str = "1024x1024", quality: str = "standard") -> dict:
+def generate_image_dall_e(
+    prompt: str,
+    social_cfg: dict,
+    db: Session,
+    size: str = "1024x1024",
+    quality: str = "standard",
+    images: Optional[list] = None,
+) -> dict:
     """
     Generate an image using the OpenAI Images API (or compatible endpoint).
 
     Supports dall-e-2, dall-e-3, gpt-image-1, gpt-image-2, and OpenRouter
     image models. Automatically maps parameters for each model family.
+
+    ``images`` is an optional list of base64 data-URL strings for reference
+    photos. Passed through to OpenRouter models that support visual context;
+    silently ignored for DALL-E (which has no reference-image input in the
+    /images/generations API — the refinement step in generate_image_prompt
+    already handled those images via vision).
     """
     cfg = _get_settings(db)
     provider = cfg.get("ai_provider", "").strip()
@@ -586,12 +641,12 @@ def generate_image_dall_e(prompt: str, social_cfg: dict, db: Session, size: str 
     effective_model = image_model or DEFAULT_IMAGE_MODELS.get(provider, "dall-e-3")
 
     log.info(
-        "AI image generation: provider=%s model=%s size=%s quality=%s",
-        provider, effective_model, size, quality,
+        "AI image generation: provider=%s model=%s size=%s quality=%s reference_images=%d",
+        provider, effective_model, size, quality, len(images) if images else 0,
     )
 
     if provider == "openrouter":
-        return _generate_image_openrouter(api_key, base_url, effective_model, prompt, size, quality)
+        return _generate_image_openrouter(api_key, base_url, effective_model, prompt, size, quality, images=images)
 
     effective_base = base_url or OPENAI_DEFAULT_BASE
 
