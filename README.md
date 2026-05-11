@@ -232,7 +232,10 @@ It stores references (IDs / URLs) to source systems.
 ## Security Notes
 
 - Change `SECRET_KEY`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD` before exposing to any network
-- API keys are stored in the database — use a strong `SECRET_KEY` and restrict DB access
+- API keys and OAuth tokens are encrypted at rest with a Fernet key derived from `SECRET_KEY`. Rotating `SECRET_KEY` requires re-entering integration credentials.
+- Set `APP_ENV=production` so the app refuses to start with a default `SECRET_KEY` and logs critical warnings if `ADMIN_PASSWORD` is left at the default.
+- CORS allows only `APP_BASE_URL` by default; expand it via `CORS_ALLOWED_ORIGINS` (comma-separated) when fronting the app from multiple hostnames.
+- `/auth/login` is rate-limited per (client IP, email). Tune via `LOGIN_RATE_LIMIT` and `LOGIN_RATE_LIMIT_WINDOW_SECONDS`.
 - The app requires login — no public endpoints (except `/health`)
 - Do not commit `.env` to version control
 

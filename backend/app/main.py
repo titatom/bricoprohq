@@ -11,14 +11,14 @@ from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session
-from jose import jwt, JWTError
+from jose import JWTError
 
 from . import db as _db_module
 from .db import Base, get_db, _reinit as _db_reinit
 _db_reinit()  # re-read DATABASE_URL in case env changed (e.g. test reloads)
 from .models import (
     User, Setting, QuickLink, Integration, DashboardCache,
-    ContentAsset, ContentDraft, Campaign, PostMetric,
+    ContentAsset, ContentDraft, Campaign, PostMetric, OAuthState,
 )
 from .schemas import (
     LoginRequest, LoginResponse, UserMeResponse,
@@ -31,21 +31,68 @@ from .schemas import (
     CampaignIn,
     PostMetricIn,
 )
-from .auth import verify_password, create_access_token, hash_password, SECRET_KEY, ALGORITHM
+from .auth import verify_password, create_access_token, hash_password, decode_access_token
+from .secret_key import DEFAULT_PLACEHOLDER, resolve_secret_key
 from .services.connectors import validate_paperless_gpt_base_url, ConnectorNotConfigured, ConnectorError
+from .services.rate_limit import (
+    DEFAULT_LOGIN_LIMIT,
+    DEFAULT_LOGIN_WINDOW_SECONDS,
+    default_limiter,
+)
 
 log = logging.getLogger("bricopro")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
+
+def _build_cors_origins() -> tuple[list[str], bool]:
+    """
+    Build the CORS allowlist from APP_BASE_URL + CORS_ALLOWED_ORIGINS.
+
+    Returns ``(origins, allow_credentials)``. When the operator opts into the
+    legacy wildcard via ``CORS_ALLOWED_ORIGINS=*``, browsers require
+    ``allow_credentials=False``, so we honor that automatically.
+    """
+    raw_extra = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+    if raw_extra == "*":
+        return ["*"], False
+
+    origins: list[str] = []
+
+    def _add(value: str) -> None:
+        value = value.strip().rstrip("/")
+        if value and value not in origins:
+            origins.append(value)
+
+    _add(os.getenv("APP_BASE_URL", "").strip())
+    for value in raw_extra.split(","):
+        _add(value)
+
+    if not origins:
+        origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+    return origins, True
+
+
+# Resolve SECRET_KEY at import time so misconfigurations (production with the
+# default placeholder) fail loudly during startup rather than at the first
+# request — and so the dev-mode auto-generated key file is created up front.
+try:
+    resolve_secret_key()
+except Exception as exc:  # pragma: no cover - logged then re-raised
+    log.critical("SECRET_KEY misconfiguration: %s", exc)
+    raise
+
 app = FastAPI(title="Bricopro HQ API", version="1.0.0")
 
+_cors_origins, _cors_allow_credentials = _build_cors_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+log.info("CORS allowed_origins=%s allow_credentials=%s", _cors_origins, _cors_allow_credentials)
 
 Base.metadata.create_all(bind=_db_module.engine)
 
@@ -101,7 +148,7 @@ def auth_user(authorization: str = Header(default=""), db: Session = Depends(get
     if not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing bearer token")
     try:
-        email = jwt.decode(authorization[7:], SECRET_KEY, algorithms=[ALGORITHM]).get("sub")
+        email = decode_access_token(authorization[7:]).get("sub")
     except JWTError as exc:
         raise HTTPException(401, "Invalid token") from exc
     u = db.query(User).filter(User.email == email).first()
@@ -138,6 +185,27 @@ def _sync_configured_admin(db: Session) -> tuple[User, bool]:
     return admin, False
 
 
+def _is_production_env() -> bool:
+    return os.getenv("APP_ENV", "").strip().lower() == "production"
+
+
+def _warn_default_admin_password() -> None:
+    """Emit a loud warning when the admin password is left at the default."""
+    _, pwd = _admin_credentials_from_env()
+    if pwd == DEFAULT_ADMIN_PASSWORD:
+        if _is_production_env():
+            log.critical(
+                "ADMIN_PASSWORD is left at the default value while APP_ENV=production. "
+                "Set ADMIN_PASSWORD to a strong, unique value before exposing this app."
+            )
+        else:
+            log.warning(
+                "ADMIN_PASSWORD is left at the default value (%r). "
+                "Change it in your .env before deploying to any network.",
+                DEFAULT_ADMIN_PASSWORD,
+            )
+
+
 @app.on_event("startup")
 def startup_seed():
     db = next(get_db())
@@ -146,6 +214,12 @@ def startup_seed():
         if not db.query(Integration).filter(Integration.provider == s).first():
             db.add(Integration(provider=s, status="not_connected"))
     db.commit()
+    _warn_default_admin_password()
+    if (os.getenv("SECRET_KEY") or "").strip() in ("", DEFAULT_PLACEHOLDER):
+        log.warning(
+            "SECRET_KEY env var not set; using the on-disk dev fallback. "
+            "Set SECRET_KEY explicitly in production."
+        )
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -157,11 +231,38 @@ def health():
 
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 
+LOGIN_BUCKET = "auth.login"
+
+
+def _login_identity(request: Request, email: str) -> str:
+    """Build a per-IP+email key for login rate limiting."""
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    client_host = forwarded or (request.client.host if request.client else "unknown")
+    return f"{client_host}|{email}"
+
+
 @app.post("/auth/login", response_model=LoginResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     email = _normalize_email(payload.email)
+
+    limiter = default_limiter()
+    allowed, retry_after = limiter.check(
+        LOGIN_BUCKET,
+        _login_identity(request, email),
+        limit=int(os.getenv("LOGIN_RATE_LIMIT", DEFAULT_LOGIN_LIMIT)),
+        window_seconds=float(os.getenv("LOGIN_RATE_LIMIT_WINDOW_SECONDS", DEFAULT_LOGIN_WINDOW_SECONDS)),
+    )
+    if not allowed:
+        log.warning("Login rate limit hit for %s", email)
+        raise HTTPException(
+            429,
+            "Too many login attempts. Wait a moment and try again.",
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
+
     u = db.query(User).filter(User.email == email).first()
     if u and verify_password(payload.password, u.password_hash):
+        limiter.reset(LOGIN_BUCKET, _login_identity(request, email))
         return LoginResponse(access_token=create_access_token(u.email))
 
     env_email, env_pwd = _admin_credentials_from_env()
@@ -170,10 +271,12 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         if changed:
             db.commit()
             db.refresh(u)
+        limiter.reset(LOGIN_BUCKET, _login_identity(request, email))
         return LoginResponse(access_token=create_access_token(u.email))
 
     if not u or not verify_password(payload.password, u.password_hash):
         raise HTTPException(401, "Invalid credentials")
+    limiter.reset(LOGIN_BUCKET, _login_identity(request, email))
     return LoginResponse(access_token=create_access_token(u.email))
 
 
@@ -233,8 +336,39 @@ def ql_del(id: int, _: User = Depends(auth_user), db: Session = Depends(get_db))
 
 # ── Integrations ──────────────────────────────────────────────────────────────
 
-# In-memory CSRF state store: state_token → provider name
-_oauth_states: dict[str, str] = {}
+OAUTH_STATE_TTL_SECONDS = 600
+
+
+def _now_utc_naive() -> datetime:
+    """Return current UTC time as a naive datetime for legacy `DateTime` columns."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _persist_oauth_state(provider: str, db: Session) -> str:
+    """Generate, persist, and return a fresh OAuth CSRF state token."""
+    state = secrets.token_hex(16)
+    now = _now_utc_naive()
+    expires_at = now + timedelta(seconds=OAUTH_STATE_TTL_SECONDS)
+    db.add(OAuthState(state=state, provider=provider, created_at=now, expires_at=expires_at))
+    db.commit()
+    return state
+
+
+def _consume_oauth_state(state: str, expected_provider: str, db: Session) -> bool:
+    """Validate, then remove a stored OAuth state token."""
+    if not state:
+        return False
+    row = db.query(OAuthState).filter(OAuthState.state == state).first()
+    if not row:
+        return False
+    valid = row.provider == expected_provider and row.expires_at > _now_utc_naive()
+    db.delete(row)
+    db.flush()
+    # Best-effort cleanup of any other expired rows so the table doesn't grow.
+    db.query(OAuthState).filter(OAuthState.expires_at <= _now_utc_naive()).delete(synchronize_session=False)
+    db.commit()
+    return valid
+
 
 # Secret config keys that are always masked in API responses
 _SECRET_KEYS = {"api_key", "client_secret"}
@@ -403,8 +537,7 @@ def oauth_authorize(
     if not client_id:
         raise HTTPException(400, f"{provider} client_id not configured. Save Client ID first.")
 
-    state = secrets.token_hex(16)
-    _oauth_states[state] = provider
+    state = _persist_oauth_state(provider, db)
 
     prov = OAUTH_PROVIDERS[registry_provider]
     redirect_uri = _oauth_redirect_uri(provider)
@@ -443,9 +576,8 @@ def oauth_callback(
             f"{frontend_base}/settings?oauth_error={error}&oauth_provider={provider}"
         )
 
-    if not state or _oauth_states.get(state) != provider:
+    if not _consume_oauth_state(state or "", provider, db):
         raise HTTPException(400, "Invalid or expired OAuth state")
-    _oauth_states.pop(state, None)
 
     if not code:
         raise HTTPException(400, "Authorization code missing")
