@@ -85,8 +85,10 @@ class ContentDraft(Base):
     short_body: Mapped[str] = mapped_column(Text, default="")
     hashtags: Mapped[str] = mapped_column(Text, default="")
     cta: Mapped[str] = mapped_column(String(255), default="request_quote")
+    image_ids: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(100), default="draft_generated")
     planned_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    planned_time: Mapped[str] = mapped_column(String(10), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

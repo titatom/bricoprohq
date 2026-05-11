@@ -139,8 +139,10 @@ class DraftIn(BaseModel):
     short_body: str = ""
     hashtags: str = ""
     cta: str = "request_quote"
+    image_ids: str = ""
     status: str = "draft_generated"
     planned_date: str | None = None
+    planned_time: str = ""
     campaign_id: int | None = None
 
 class DraftStatusIn(BaseModel):
