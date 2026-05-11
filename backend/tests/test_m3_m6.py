@@ -145,7 +145,6 @@ def test_social_studio_album_candidate_and_settings_flow():
                 "google_business_account": "gbp",
                 "meta_ads_account": "meta",
                 "google_ads_account": "gads",
-                "before_after_enabled": "true",
             },
         )
         assert saved.status_code == 200

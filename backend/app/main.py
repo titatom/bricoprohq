@@ -1183,7 +1183,6 @@ SOCIAL_SETTING_DEFAULTS = {
     "facebook_prompt": "Facebook: conversational, helpful, local, and clear about the service.",
     "instagram_prompt": "Instagram: concise caption, strong opening line, tasteful emojis, and relevant hashtags.",
     "gbp_prompt": "Google Business Profile: professional, service-focused, local, and direct.",
-    "before_after_prompt": "If the user marks photos as before/after candidates, propose or generate a clean side-by-side montage without inventing results.",
     "safety_prompt": "Never invent reviews, client names, addresses, prices, certifications, or regulated trade work.",
     "facebook_account": "",
     "instagram_account": "",
@@ -1192,7 +1191,6 @@ SOCIAL_SETTING_DEFAULTS = {
     "google_ads_account_id": "",
     "meta_ads_account": "",
     "google_ads_account": "",
-    "before_after_enabled": "true",
 }
 
 
@@ -1348,9 +1346,6 @@ def social_generate_image(payload: dict, _: User = Depends(auth_user), db: Sessi
         raise HTTPException(400, "A prompt or preset is required.")
 
     effective_prompt = prompt
-    if preset == "before_after":
-        ba_prompt = social_cfg.get("before_after_prompt", "")
-        effective_prompt = f"{ba_prompt}\n\n{prompt}".strip() if prompt else ba_prompt
     if social_cfg.get("brand_voice"):
         effective_prompt = f"Brand voice: {social_cfg['brand_voice']}\n\n{effective_prompt}".strip()
     if asset_ids:
@@ -1389,9 +1384,6 @@ def social_generate_image_actual(payload: dict, _: User = Depends(auth_user), db
         raise HTTPException(400, "A prompt or preset is required.")
 
     effective_prompt = prompt
-    if preset == "before_after":
-        ba_prompt = social_cfg.get("before_after_prompt", "")
-        effective_prompt = f"{ba_prompt}\n\n{prompt}".strip() if prompt else ba_prompt
     if social_cfg.get("brand_voice"):
         effective_prompt = f"Brand voice: {social_cfg['brand_voice']}\n\n{effective_prompt}".strip()
     if asset_ids:
@@ -1589,7 +1581,6 @@ def social_generate_pack(payload: dict, _: User = Depends(auth_user), db: Sessio
         platforms = [p.strip() for p in social_cfg.get("default_platforms", "facebook").split(",") if p.strip()]
     platforms = platforms or ["facebook"]
     selected_assets = payload.get("asset_ids") or []
-    before_after_requested = bool(payload.get("before_after_requested") or payload.get("before_after"))
     job_description = payload.get("job_description", "")
     if selected_assets:
         job_description = (
@@ -1608,8 +1599,6 @@ def social_generate_pack(payload: dict, _: User = Depends(auth_user), db: Sessio
         platform_job_description = job_description
         if social_cfg.get(platform_key):
             platform_job_description = f"{platform_job_description}\n\n{social_cfg[platform_key]}".strip()
-        if before_after_requested and social_cfg.get("before_after_prompt"):
-            platform_job_description = f"{platform_job_description}\n\nBefore/after: {social_cfg['before_after_prompt']}".strip()
 
         draft_payload = {
             "service_category": payload.get("service_category", "Bricopro project"),
@@ -1639,12 +1628,7 @@ def social_generate_pack(payload: dict, _: User = Depends(auth_user), db: Sessio
             "hashtags": generated.get("hashtags", ""),
             "cta": generated.get("cta_text") or draft_payload["cta"],
             "selected_assets": selected_assets,
-            "before_after_requested": before_after_requested,
-            "visual_direction": (
-                social_cfg.get("before_after_prompt")
-                if before_after_requested
-                else "Use the selected project photos as-is; the user made the final image picks."
-            ),
+            "visual_direction": "Use the selected project photos as-is; the user made the final image picks.",
             "notes": generated.get("notes", "Review before publishing."),
             "ai_used": ai_used,
         })
