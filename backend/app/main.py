@@ -1224,6 +1224,30 @@ def _immich_ready(db: Session) -> tuple[Integration, str, str]:
     return integration, base_url, api_key
 
 
+def _fetch_immich_image_b64(asset_id: str, base_url: str, api_key: str) -> str | None:
+    """Fetch an Immich asset as a base64 data-URL for direct LLM upload.
+
+    Uses the preview thumbnail (large enough for vision models, small enough
+    to be fast). Returns ``None`` and logs a warning on any failure so a bad
+    asset ID never aborts the whole generation request.
+    """
+    import base64 as _base64
+    try:
+        r = httpx.get(
+            f"{base_url}/api/assets/{asset_id}/thumbnail",
+            params={"size": "preview"},
+            headers={"x-api-key": api_key},
+            timeout=30,
+        )
+        r.raise_for_status()
+        content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+        b64 = _base64.b64encode(r.content).decode("ascii")
+        return f"data:{content_type};base64,{b64}"
+    except Exception as exc:
+        log.warning("Could not fetch Immich asset %s for LLM upload: %s", asset_id, exc)
+        return None
+
+
 def _immich_asset_payload(asset: dict, base_url: str) -> dict:
     asset_id = asset.get("id") or asset.get("assetId")
     filename = (
@@ -1334,7 +1358,13 @@ def social_analyze_album(payload: dict, _: User = Depends(auth_user)):
 
 @app.post("/social/generate-image")
 def social_generate_image(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
-    """Generate an image using the configured image generation model."""
+    """Refine an image generation prompt using the configured chat model.
+
+    Only the prompt supplied on the image generation page is used — brand
+    voice and post-generation settings are intentionally excluded here.
+    Selected Immich assets are uploaded directly to the LLM as image data
+    rather than being appended as text IDs.
+    """
     from .services.ai import generate_image_prompt, AINotConfigured, AIError
 
     social_cfg = _social_settings_map(db)
@@ -1345,21 +1375,25 @@ def social_generate_image(payload: dict, _: User = Depends(auth_user), db: Sessi
     if not prompt and not preset:
         raise HTTPException(400, "A prompt or preset is required.")
 
-    effective_prompt = prompt
-    if social_cfg.get("brand_voice"):
-        effective_prompt = f"Brand voice: {social_cfg['brand_voice']}\n\n{effective_prompt}".strip()
+    # Fetch selected Immich images as base64 data-URLs for vision upload.
+    reference_images: list[str] = []
     if asset_ids:
-        effective_prompt = f"{effective_prompt}\n\nReference Immich asset IDs: {', '.join(map(str, asset_ids))}.".strip()
+        _, immich_base, immich_key = _immich_config(db)
+        if immich_base and immich_key:
+            for aid in asset_ids:
+                img = _fetch_immich_image_b64(str(aid), immich_base, immich_key)
+                if img:
+                    reference_images.append(img)
 
     try:
-        result = generate_image_prompt(effective_prompt, social_cfg, db)
+        result = generate_image_prompt(prompt, social_cfg, db, images=reference_images or None)
     except AINotConfigured as exc:
         raise HTTPException(400, str(exc))
     except AIError as exc:
         raise HTTPException(502, f"Image generation failed: {exc}")
 
     return {
-        "prompt_used": effective_prompt,
+        "prompt_used": prompt,
         "result": result,
         "asset_ids": asset_ids,
     }
@@ -1367,7 +1401,13 @@ def social_generate_image(payload: dict, _: User = Depends(auth_user), db: Sessi
 
 @app.post("/social/generate-image-actual")
 def social_generate_image_actual(payload: dict, _: User = Depends(auth_user), db: Session = Depends(get_db)):
-    """Generate an actual image using the configured image generation model (DALL-E or compatible)."""
+    """Generate an actual image using the configured image generation model (DALL-E or compatible).
+
+    Only the prompt supplied on the image generation page is used — brand
+    voice and post-generation settings are intentionally excluded here.
+    Selected Immich assets are fetched from Immich and uploaded directly to
+    the LLM as image data so the model can use them as visual reference.
+    """
     import base64
     from pathlib import Path
     from .services.ai import generate_image_prompt, generate_image_dall_e, AINotConfigured, AIError
@@ -1383,23 +1423,30 @@ def social_generate_image_actual(payload: dict, _: User = Depends(auth_user), db
     if not prompt and not preset:
         raise HTTPException(400, "A prompt or preset is required.")
 
-    effective_prompt = prompt
-    if social_cfg.get("brand_voice"):
-        effective_prompt = f"Brand voice: {social_cfg['brand_voice']}\n\n{effective_prompt}".strip()
+    # Fetch selected Immich images as base64 data-URLs for vision upload.
+    # Failures per-asset are logged and skipped so one bad ID never blocks generation.
+    reference_images: list[str] = []
     if asset_ids:
-        effective_prompt = f"{effective_prompt}\n\nReference Immich asset IDs: {', '.join(map(str, asset_ids))}.".strip()
+        _, immich_base, immich_key = _immich_config(db)
+        if immich_base and immich_key:
+            for aid in asset_ids:
+                img = _fetch_immich_image_b64(str(aid), immich_base, immich_key)
+                if img:
+                    reference_images.append(img)
 
-    final_prompt = effective_prompt
+    images_arg = reference_images or None
+
+    final_prompt = prompt
     refined_result = None
     if refine_prompt:
         try:
-            refined_result = generate_image_prompt(effective_prompt, social_cfg, db)
-            final_prompt = refined_result.get("image_prompt", effective_prompt)
+            refined_result = generate_image_prompt(prompt, social_cfg, db, images=images_arg)
+            final_prompt = refined_result.get("image_prompt", prompt)
         except (AINotConfigured, AIError) as exc:
             log.warning("Image prompt refinement skipped (will use raw prompt): %s", exc)
 
     try:
-        result = generate_image_dall_e(final_prompt, social_cfg, db, size=size, quality=quality)
+        result = generate_image_dall_e(final_prompt, social_cfg, db, size=size, quality=quality, images=images_arg)
     except AINotConfigured as exc:
         raise HTTPException(400, str(exc))
     except AIError as exc:
