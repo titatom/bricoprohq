@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -127,6 +127,96 @@ class SocialGenerateIn(BaseModel):
         if v not in LANGUAGES:
             raise ValueError(f"Unknown language '{v}'")
         return v
+
+# ── Social Studio (additional endpoints) ──────────────────────────────────────
+
+
+class SocialCandidatesIn(BaseModel):
+    album_id: str = "recent-work"
+    service_category: str = "Exterior painting"
+
+
+class SocialAnalyzeAlbumIn(BaseModel):
+    album_id: str = "recent-work"
+    service_category: str = "Exterior painting"
+
+
+class SocialGenerateImageIn(BaseModel):
+    prompt: str = ""
+    preset: str = ""
+    asset_ids: list[str] = Field(default_factory=list)
+
+
+class SocialGenerateImageActualIn(BaseModel):
+    prompt: str = ""
+    preset: str = ""
+    asset_ids: list[str] = Field(default_factory=list)
+    size: str = "1024x1024"
+    quality: str = "standard"
+    refine_prompt: bool = True
+
+
+class UploadGeneratedImageToImmichIn(BaseModel):
+    album_id: str = ""
+    filename: str = ""
+
+
+class ImagePresetIn(BaseModel):
+    id: str
+    name: str
+    prompt: str
+    editable: bool = True
+
+
+class SaveImagePresetsIn(BaseModel):
+    presets: list[ImagePresetIn] = Field(default_factory=list)
+
+
+class SocialGeneratePackIn(BaseModel):
+    service_category: str = "Bricopro project"
+    platforms: list[str] | str | None = None
+    asset_ids: list[str] = Field(default_factory=list)
+    before_after_requested: bool = False
+    before_after: bool = False
+    job_description: str = ""
+    language: str | None = None
+    tone: str | None = None
+    city: str | None = None
+    cta: str | None = None
+
+
+class SocialSettingsIn(BaseModel):
+    # Free-form, lots of optional knobs; we type the dict as ``dict[str, str]``
+    # so callers cannot pass arbitrary nested data, but every known key from
+    # SOCIAL_SETTING_DEFAULTS is still accepted.
+    model_config = {"extra": "allow"}
+
+
+class DraftUpdateIn(BaseModel):
+    """Partial update for a content draft.
+
+    All fields are optional so callers can patch one attribute at a time.
+    """
+    title: str | None = None
+    body: str | None = None
+    short_body: str | None = None
+    hashtags: str | None = None
+    cta: str | None = None
+    image_ids: str | None = None
+    status: str | None = None
+    planned_date: str | None = None
+    planned_time: str | None = None
+
+
+class CampaignGenerateIn(BaseModel):
+    platform: str | None = None
+    language: str | None = None
+    tone: str | None = None
+    cta: str | None = None
+    city: str | None = None
+    job_description: str | None = None
+    service_category: str | None = None
+
 
 # ── Drafts ────────────────────────────────────────────────────────────────────
 

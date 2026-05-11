@@ -202,11 +202,18 @@ alembic upgrade head
 |-------|------------|
 | Frontend | Next.js 14, React 18, Tailwind CSS 3 |
 | Backend | FastAPI, SQLAlchemy 2, Alembic |
-| Database | PostgreSQL 16 |
-| Cache / Queue | Redis 7 |
+| Database | SQLite (default, stored under `DATA_DIR`); Postgres-compatible via `DATABASE_URL` |
 | Auth | JWT (python-jose), bcrypt |
+| At-rest encryption | cryptography (Fernet, key derived from `SECRET_KEY`) |
+| Observability | Structured JSON logs (opt-in), Prometheus `/metrics` (opt-in) |
 | HTTP client | httpx |
-| Deployment | Docker Compose |
+| Deployment | Docker Compose / single container |
+
+> **Note**: the bundled `docker-compose.yml` ships SQLite only. The earlier
+> README mentioned Postgres 16 + Redis 7 in the stack — that is a future
+> direction, not the supported runtime. SQL Alchemy's URL-driven dialect
+> selection means `DATABASE_URL=postgresql+psycopg://…` works if you bring
+> your own Postgres; Redis is not currently a runtime dependency.
 
 ---
 
