@@ -1,7 +1,33 @@
 from datetime import datetime, date
 from sqlalchemy import String, Integer, Boolean, DateTime, Date, Text, ForeignKey, Float
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import TypeDecorator
 from .db import Base
+
+
+class EncryptedText(TypeDecorator):
+    """
+    Transparent at-rest encryption for `Text` columns.
+
+    Values are encrypted on write and decrypted on read. Plaintext values
+    written before this column type was introduced are read back unchanged
+    (the prefix-tagged ciphertext format makes legacy rows distinguishable),
+    and they are upgraded to ciphertext the next time the row is updated.
+    """
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        from .services.crypto import encrypt
+        return encrypt(str(value))
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        from .services.crypto import decrypt
+        return decrypt(value)
 
 class User(Base):
     __tablename__ = "users"
@@ -35,10 +61,25 @@ class Integration(Base):
     auth_type: Mapped[str] = mapped_column(String(100), default="none")
     status: Mapped[str] = mapped_column(String(50), default="unknown")
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    config_json: Mapped[str] = mapped_column(Text, default="{}")
-    oauth_access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
-    oauth_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # config_json contains API keys and OAuth client secrets — encrypted at rest.
+    config_json: Mapped[str] = mapped_column(EncryptedText, default="{}")
+    oauth_access_token: Mapped[str | None] = mapped_column(EncryptedText, nullable=True)
+    oauth_refresh_token: Mapped[str | None] = mapped_column(EncryptedText, nullable=True)
     oauth_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class OAuthState(Base):
+    """
+    Short-lived CSRF state tokens for in-flight OAuth authorization requests.
+    Persisted so the callback can verify state across worker restarts and
+    multi-process deployments. Rows older than `expires_at` are treated as
+    invalid and may be cleaned up at any time.
+    """
+    __tablename__ = "oauth_states"
+    state: Mapped[str] = mapped_column(String(128), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(100), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
 
 class DashboardCache(Base):
     __tablename__ = "dashboard_cache"
