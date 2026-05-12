@@ -7,6 +7,10 @@ export default function Terms() {
       <Head>
         <title>Terms &amp; Conditions – Bricopro HQ</title>
         <meta name="description" content="Terms and Conditions for Bricopro HQ" />
+        <meta property="og:title" content="Terms &amp; Conditions – Bricopro HQ" />
+        <meta property="og:description" content="Terms and Conditions for Bricopro HQ" />
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content={`${process.env.NEXT_PUBLIC_APP_URL || ''}/terms`} />
       </Head>
 
       <div className="min-h-screen bg-gray-50">
