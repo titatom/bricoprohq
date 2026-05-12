@@ -379,16 +379,25 @@ class GoogleCalendarConnector(BaseConnector):
         access_token = self._get_access_token()
         calendar_id = self.config.get("calendar_id", "primary")
         url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
+        # Fetch from start of current week (Monday) through end of next week so
+        # the weekly calendar widget can render the full current and next week.
+        days_since_monday = now.weekday()  # 0=Mon … 6=Sun
+        week_start = (now - timedelta(days=days_since_monday)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        week_end = week_start + timedelta(days=14)
+        params = {
+            "timeMin": week_start.isoformat(),
+            "timeMax": week_end.isoformat(),
+            "maxResults": 50,
+            "orderBy": "startTime",
+            "singleEvents": "true",
+        }
         try:
             r = httpx.get(
                 url,
-                params={
-                    "timeMin": now,
-                    "maxResults": 10,
-                    "orderBy": "startTime",
-                    "singleEvents": "true",
-                },
+                params=params,
                 headers={"Authorization": f"Bearer {access_token}"},
                 timeout=10,
             )
@@ -397,12 +406,7 @@ class GoogleCalendarConnector(BaseConnector):
                 self._refresh_token()
                 r = httpx.get(
                     url,
-                    params={
-                        "timeMin": now,
-                        "maxResults": 10,
-                        "orderBy": "startTime",
-                        "singleEvents": "true",
-                    },
+                    params=params,
                     headers={"Authorization": f"Bearer {self.integration.oauth_access_token}"},
                     timeout=10,
                 )
@@ -413,6 +417,9 @@ class GoogleCalendarConnector(BaseConnector):
                     "summary": e.get("summary", "(No title)"),
                     "start": e.get("start", {}).get("dateTime") or e.get("start", {}).get("date"),
                     "end": e.get("end", {}).get("dateTime") or e.get("end", {}).get("date"),
+                    "location": e.get("location") or "",
+                    "description": e.get("description") or "",
+                    "all_day": "date" in e.get("start", {}) and "dateTime" not in e.get("start", {}),
                 }
                 for e in items
             ]
@@ -706,34 +713,55 @@ class JobberConnector(BaseConnector):
             "action_required_count": 0,
             "new_requests_count": 0,
             "pending_invoice_count": 0,
+            "jobs_by_status": {"coming_up": 0, "action_required": 0, "requires_invoicing": 0},
+            "requests_by_status": {"new": 0, "pending": 0},
+            "invoices_by_status": {"late": 0, "awaiting_payment": 0, "sent": 0},
         }
 
         try:
             jobs_data = self._post_graphql(graphql_url, bearer, upcoming_jobs_query)
             all_jobs = jobs_data.get("jobs", {}).get("nodes", [])
-            upcoming = [
+            coming_up = [
                 j for j in all_jobs
                 if not j.get("startAt") or (j.get("jobStatus") or "").lower() in ("upcoming", "today", "active")
             ]
-            stats["upcoming_unscheduled_count"] = len(upcoming)
-            action_required = [j for j in all_jobs if (j.get("jobStatus") or "").lower() in ("action_required", "requires_invoicing")]
-            stats["action_required_count"] = len(action_required)
+            action_required = [j for j in all_jobs if (j.get("jobStatus") or "").lower() == "action_required"]
+            requires_invoicing = [j for j in all_jobs if (j.get("jobStatus") or "").lower() == "requires_invoicing"]
+            stats["upcoming_unscheduled_count"] = len(coming_up)
+            stats["action_required_count"] = len(action_required) + len(requires_invoicing)
+            stats["jobs_by_status"] = {
+                "coming_up": len(coming_up),
+                "action_required": len(action_required),
+                "requires_invoicing": len(requires_invoicing),
+            }
         except Exception as exc:
             log.warning("Jobber stats jobs query failed: %s", exc)
 
         try:
             req_data = self._post_graphql(graphql_url, bearer, requests_query)
             all_requests = req_data.get("requests", {}).get("nodes", [])
-            new_requests = [r for r in all_requests if (r.get("requestStatus") or "").lower() in ("new", "pending")]
-            stats["new_requests_count"] = len(new_requests)
+            new_reqs = [r for r in all_requests if (r.get("requestStatus") or "").lower() == "new"]
+            pending_reqs = [r for r in all_requests if (r.get("requestStatus") or "").lower() == "pending"]
+            stats["new_requests_count"] = len(new_reqs) + len(pending_reqs)
+            stats["requests_by_status"] = {
+                "new": len(new_reqs),
+                "pending": len(pending_reqs),
+            }
         except Exception as exc:
             log.warning("Jobber stats requests query failed: %s", exc)
 
         try:
             inv_data = self._post_graphql(graphql_url, bearer, invoices_query)
             all_invoices = inv_data.get("invoices", {}).get("nodes", [])
-            pending_invoices = [i for i in all_invoices if (i.get("invoiceStatus") or "").lower() in ("late", "overdue", "awaiting_payment", "sent")]
-            stats["pending_invoice_count"] = len(pending_invoices)
+            late_inv = [i for i in all_invoices if (i.get("invoiceStatus") or "").lower() in ("late", "overdue")]
+            awaiting_inv = [i for i in all_invoices if (i.get("invoiceStatus") or "").lower() == "awaiting_payment"]
+            sent_inv = [i for i in all_invoices if (i.get("invoiceStatus") or "").lower() == "sent"]
+            stats["pending_invoice_count"] = len(late_inv) + len(awaiting_inv) + len(sent_inv)
+            stats["invoices_by_status"] = {
+                "late": len(late_inv),
+                "awaiting_payment": len(awaiting_inv),
+                "sent": len(sent_inv),
+            }
         except Exception as exc:
             log.warning("Jobber stats invoices query failed: %s", exc)
 
@@ -1129,15 +1157,19 @@ class PaperlessGptConnector(BaseConnector):
         try:
             stats = self._get_json("/stats")
             result["stats"] = stats
+            result["stats_error"] = None
         except Exception as exc:
             log.warning("Paperless-GPT stats fetch failed: %s", exc)
-            result["stats"] = {}
+            result["stats"] = None
+            result["stats_error"] = str(exc)
         try:
             health = self._get_json("/health")
             result["health"] = health
+            result["health_error"] = None
         except Exception as exc:
             log.warning("Paperless-GPT health fetch failed: %s", exc)
-            result["health"] = {}
+            result["health"] = None
+            result["health_error"] = str(exc)
         return result
 
 

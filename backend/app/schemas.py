@@ -130,8 +130,8 @@ DRAFT_STATUSES = {
 }
 
 class DraftIn(BaseModel):
-    title: str
-    platform: str
+    title: str = ""
+    platform: str = "facebook"
     language: str = "fr"
     tone: str = "professional"
     service_category: str = ""

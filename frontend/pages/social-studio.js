@@ -55,10 +55,10 @@ const DEFAULT_FORM = {
 };
 
 const SS_TABS = [
-  { key: 'post', label: 'Post Generation' },
-  { key: 'image', label: 'Image Generation' },
-  { key: 'campaigns', label: 'Campaigns' },
-  { key: 'publishing', label: 'Publishing Queue' },
+  { key: 'post', label: 'Post Generation', icon: '✏️' },
+  { key: 'image', label: 'Image Generation', icon: '🖼' },
+  { key: 'campaigns', label: 'Campaigns', icon: '📋' },
+  { key: 'publishing', label: 'Publishing Queue', icon: '📤' },
 ];
 
 const SEASONAL_CAMPAIGN_IDEAS = [
@@ -208,32 +208,68 @@ function SelectedAssetThumbnails({ assets, selectedAssets }) {
 }
 
 function ImmichImagePicker({ albums, assets, selectedAssets, setSelectedAssets, loadAlbumAssets, loadingAssets, form, setForm, settings, error, setError }) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Auto-expand when photos are loaded
+  const prevAssetsLen = assets.length;
+  if (assets.length > 0 && !expanded) setExpanded(true);
+
   return (
     <div className="card">
-      <h3 className="font-semibold text-gray-800 mb-1">Pick images from Immich</h3>
-      <p className="text-xs text-gray-400 mb-4">Select photos to provide context for AI copy generation and to use in the post.</p>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="md:col-span-2">
-          <label className="label">Immich album</label>
-          <select className="select" value={form.album_id} onChange={(e) => setForm({ ...form, album_id: e.target.value })}>
-            <option value="">Choose album...</option>
-            {albums.map((album) => <option key={album.id} value={album.id}>{album.name} {album.asset_count ? `(${album.asset_count})` : ''}</option>)}
-          </select>
+      {/* Header row — always visible */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-base">🖼</span>
+          <div className="min-w-0">
+            <h3 className="font-semibold text-gray-800 text-sm leading-tight">Project photos</h3>
+            {selectedAssets.length > 0 && (
+              <p className="text-xs text-brand-600 font-medium">{selectedAssets.length} photo{selectedAssets.length !== 1 ? 's' : ''} selected</p>
+            )}
+          </div>
         </div>
-        <div className="flex items-end">
-          <button className="btn-primary w-full" type="button" onClick={loadAlbumAssets} disabled={loadingAssets || !form.album_id}>
-            {loadingAssets ? 'Loading photos...' : 'Load Photos'}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {albums.length > 0 && (
+            <select
+              className="select text-sm w-auto max-w-[180px]"
+              value={form.album_id}
+              onChange={(e) => setForm({ ...form, album_id: e.target.value })}
+            >
+              <option value="">Choose album…</option>
+              {albums.map((album) => <option key={album.id} value={album.id}>{album.name}{album.asset_count ? ` (${album.asset_count})` : ''}</option>)}
+            </select>
+          )}
+          <button
+            className="btn-primary text-sm py-1.5 px-3 whitespace-nowrap"
+            type="button"
+            onClick={() => { loadAlbumAssets(); setExpanded(true); }}
+            disabled={loadingAssets || !form.album_id}
+          >
+            {loadingAssets ? '…' : assets.length > 0 ? `${assets.length} photos` : 'Load'}
           </button>
+          {assets.length > 0 && (
+            <button
+              className="btn-secondary text-sm py-1.5 px-3"
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-label={expanded ? 'Collapse photo picker' : 'Expand photo picker'}
+            >
+              {expanded ? '▲' : '▼'}
+            </button>
+          )}
         </div>
       </div>
-      {assets.length > 0 && (
-        <div className="mt-5">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-sm text-gray-500">{selectedAssets.length} of {assets.length} photos selected</p>
-            <button className="btn-secondary text-xs py-1 px-3" type="button" onClick={() => setSelectedAssets([])}>Clear selection</button>
+
+      {/* Expandable photo grid */}
+      {expanded && assets.length > 0 && (
+        <div className="mt-4">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs text-gray-500">{selectedAssets.length} of {assets.length} selected</p>
+            {selectedAssets.length > 0 && (
+              <button className="btn-secondary text-xs py-1 px-2.5" type="button" onClick={() => setSelectedAssets([])}>Clear</button>
+            )}
           </div>
-          <div className="max-h-[400px] overflow-y-auto rounded-xl border border-gray-100 p-2">
-            <div className="grid grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-2">
+          <div className="max-h-[320px] overflow-y-auto rounded-xl border border-gray-100 p-2">
+            <div className="grid grid-cols-3 md:grid-cols-5 xl:grid-cols-6 gap-2">
               {assets.map((asset) => (
                 <ImmichImageCard
                   key={asset.id}
@@ -248,12 +284,47 @@ function ImmichImagePicker({ albums, assets, selectedAssets, setSelectedAssets, 
           </div>
         </div>
       )}
+
       <SelectedAssetThumbnails assets={assets} selectedAssets={selectedAssets} />
     </div>
   );
 }
 
 // ── Result card ───────────────────────────────────────────────────────────────
+
+const DRAFT_STATUS_OPTIONS = [
+  { value: 'idea',            label: '💡 Idea',          color: 'text-purple-700 bg-purple-50 border-purple-200 hover:bg-purple-100' },
+  { value: 'draft_generated', label: '📝 Draft',          color: 'text-yellow-700 bg-yellow-50 border-yellow-200 hover:bg-yellow-100' },
+  { value: 'needs_review',    label: '👁 Send to review', color: 'text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100' },
+  { value: 'approved',        label: '✅ Approve',        color: 'text-green-700 bg-green-50 border-green-200 hover:bg-green-100' },
+];
+
+function DraftSaveActions({ idx, saving, onSave }) {
+  const [status, setStatus] = useState('needs_review');
+  const opt = DRAFT_STATUS_OPTIONS.find((o) => o.value === status) || DRAFT_STATUS_OPTIONS[2];
+  return (
+    <div className="flex items-center gap-1.5 mt-4 pt-3 border-t border-gray-100">
+      <select
+        className="select text-xs w-auto pr-7 py-1.5"
+        value={status}
+        onChange={(e) => setStatus(e.target.value)}
+        disabled={saving}
+      >
+        {DRAFT_STATUS_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+      <button
+        className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${opt.color}`}
+        onClick={() => onSave(idx, status)}
+        disabled={saving}
+        title={`Save as "${opt.label}"`}
+      >
+        {saving ? '…' : 'Save'}
+      </button>
+    </div>
+  );
+}
 
 function ResultCard({ result, onSave, onSaveSingle, saving, assets, selectedAssets }) {
   const [editedDrafts, setEditedDrafts] = useState(result.drafts || []);
@@ -273,9 +344,9 @@ function ResultCard({ result, onSave, onSaveSingle, saving, assets, selectedAsse
 
   if (editedDrafts.length === 0) {
     return (
-      <div className="card mt-6 border-l-4 border-green-500">
+      <div className="card mt-5 border-l-4 border-green-500">
         <div className="flex items-center gap-3 py-2">
-          <span className="text-green-600 text-lg">&#10003;</span>
+          <span className="text-green-600 text-lg">✓</span>
           <div>
             <h3 className="font-semibold text-gray-800">All posts saved</h3>
             <p className="text-xs text-gray-400">Every generated draft has been sent to the publishing queue. Generate new content or review the Publishing Queue tab.</p>
@@ -286,25 +357,23 @@ function ResultCard({ result, onSave, onSaveSingle, saving, assets, selectedAsse
   }
 
   return (
-    <div className="card mt-6 border-l-4 border-accent-500">
+    <div className="card mt-5 border-l-4 border-accent-500">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <h3 className="font-semibold text-gray-800">Review generated posts</h3>
-          <p className="text-xs text-gray-400">Edit each platform draft before saving to the publishing queue. Saved posts are removed automatically.</p>
+          <p className="text-xs text-gray-400">Edit each draft, then choose a status and save. Saved drafts disappear from this list.</p>
         </div>
-        <div className="flex gap-2">
-          <button className="btn-primary" onClick={() => onSave(editedDrafts)} disabled={saving}>
-            {saving ? 'Saving...' : `Save All to Queue (${editedDrafts.length})`}
-          </button>
-        </div>
+        <button className="btn-primary text-sm" onClick={() => onSave(editedDrafts)} disabled={saving}>
+          {saving ? 'Saving…' : `Save all (${editedDrafts.length}) → Review`}
+        </button>
       </div>
 
       {selectedPhotos.length > 0 && (
         <div className="mb-4 p-3 bg-gray-50 rounded-xl">
-          <p className="text-xs text-gray-500 mb-2">Selected photos sent to AI for analysis</p>
+          <p className="text-xs text-gray-500 mb-2">Photos used for AI context</p>
           <div className="flex flex-wrap gap-2">
             {selectedPhotos.map((asset) => (
-              <div key={asset.id} className="w-14 h-14 rounded-lg overflow-hidden border border-brand-200 bg-gray-100">
+              <div key={asset.id} className="w-12 h-12 rounded-lg overflow-hidden border border-brand-200 bg-gray-100">
                 <ImmichPickerThumbnail asset={asset} />
               </div>
             ))}
@@ -312,58 +381,43 @@ function ResultCard({ result, onSave, onSaveSingle, saving, assets, selectedAsse
         </div>
       )}
 
-      <div className="space-y-5">
+      <div className="space-y-4">
         {editedDrafts.map((draft, idx) => (
           <div key={`${draft.platform}-${idx}`} className="rounded-2xl border border-gray-100 p-4">
             <div className="flex items-center justify-between mb-3">
-              <span className="badge bg-brand-100 text-brand-700">{draft.platform}</span>
-              <div className="flex items-center gap-2">
-                {draft.ai_used === false && <span className="badge bg-yellow-100 text-yellow-700">Template fallback</span>}
-              </div>
+              <span className="badge bg-brand-100 text-brand-700 capitalize">{draft.platform}</span>
+              {draft.ai_used === false && <span className="badge bg-yellow-100 text-yellow-700 text-xs">Template fallback</span>}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <label className="label">Title</label>
-                <input className="input" value={draft.title || ''} onChange={(e) => updateDraft(idx, { title: e.target.value })} />
+                <input className="input text-sm" value={draft.title || ''} onChange={(e) => updateDraft(idx, { title: e.target.value })} />
               </div>
               <div>
                 <label className="label">Platform</label>
-                <select className="select" value={draft.platform || 'facebook'} onChange={(e) => updateDraft(idx, { platform: e.target.value })}>
+                <select className="select text-sm w-auto" value={draft.platform || 'facebook'} onChange={(e) => updateDraft(idx, { platform: e.target.value })}>
                   {PLATFORMS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
                 </select>
               </div>
               <div>
                 <label className="label">Main copy</label>
-                <textarea className="input h-40 resize-y" value={draft.main_copy || ''} onChange={(e) => updateDraft(idx, { main_copy: e.target.value })} />
+                <textarea className="input h-36 resize-y text-sm" value={draft.main_copy || ''} onChange={(e) => updateDraft(idx, { main_copy: e.target.value })} />
               </div>
               <div>
                 <label className="label">Short variation</label>
-                <textarea className="input h-40 resize-y" value={draft.short_variation || ''} onChange={(e) => updateDraft(idx, { short_variation: e.target.value })} />
+                <textarea className="input h-36 resize-y text-sm" value={draft.short_variation || ''} onChange={(e) => updateDraft(idx, { short_variation: e.target.value })} />
               </div>
               <div>
                 <label className="label">Hashtags</label>
-                <input className="input" value={draft.hashtags || ''} onChange={(e) => updateDraft(idx, { hashtags: e.target.value })} />
+                <input className="input text-sm" value={draft.hashtags || ''} onChange={(e) => updateDraft(idx, { hashtags: e.target.value })} />
               </div>
               <div>
-                <label className="label">Call to action</label>
-                <input className="input" value={draft.cta || ''} onChange={(e) => updateDraft(idx, { cta: e.target.value })} />
+                <label className="label">CTA</label>
+                <input className="input text-sm" value={draft.cta || ''} onChange={(e) => updateDraft(idx, { cta: e.target.value })} />
               </div>
             </div>
-            {draft.notes && <p className="text-xs text-gray-400 mt-3">{draft.notes}</p>}
-            <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-gray-100">
-              <button className="px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 text-purple-700 text-xs font-medium hover:bg-purple-100 transition-colors" onClick={() => handleSaveSingle(idx, 'idea')} disabled={saving}>
-                Save as Idea
-              </button>
-              <button className="px-3 py-1.5 rounded-lg border border-yellow-200 bg-yellow-50 text-yellow-700 text-xs font-medium hover:bg-yellow-100 transition-colors" onClick={() => handleSaveSingle(idx, 'draft_generated')} disabled={saving}>
-                Save as Draft
-              </button>
-              <button className="px-3 py-1.5 rounded-lg border border-orange-200 bg-orange-50 text-orange-700 text-xs font-medium hover:bg-orange-100 transition-colors" onClick={() => handleSaveSingle(idx, 'needs_review')} disabled={saving}>
-                Send to Review
-              </button>
-              <button className="px-3 py-1.5 rounded-lg border border-green-200 bg-green-50 text-green-700 text-xs font-medium hover:bg-green-100 transition-colors" onClick={() => handleSaveSingle(idx, 'approved')} disabled={saving}>
-                Approve
-              </button>
-            </div>
+            {draft.notes && <p className="text-xs text-gray-400 mt-2">{draft.notes}</p>}
+            <DraftSaveActions idx={idx} saving={saving} onSave={handleSaveSingle} />
           </div>
         ))}
       </div>
@@ -372,6 +426,18 @@ function ResultCard({ result, onSave, onSaveSingle, saving, assets, selectedAsse
 }
 
 // ── Post Generation Tab ───────────────────────────────────────────────────────
+
+function Tooltip({ text, children }) {
+  return (
+    <span className="relative group inline-flex items-center">
+      {children}
+      <span className="ml-1 w-4 h-4 rounded-full bg-gray-200 text-gray-500 text-[10px] font-bold flex items-center justify-center cursor-default select-none">i</span>
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-52 rounded-lg bg-gray-900 text-white text-xs px-2.5 py-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-50 shadow-lg">
+        {text}
+      </span>
+    </span>
+  );
+}
 
 function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAssets, setSelectedAssets, loadAlbumAssets, loadingAssets, generate, generating, result, saveDraft, saveSingleDraft, saving, error, setError }) {
   const togglePlatform = (platform) => {
@@ -385,7 +451,7 @@ function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAs
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <ImmichImagePicker
         albums={albums}
         assets={assets}
@@ -401,42 +467,56 @@ function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAs
       />
 
       <div className="card">
-        <h3 className="font-semibold text-gray-800 mb-4">Post options</h3>
-        <form onSubmit={generate} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <h3 className="font-semibold text-gray-800 mb-4 border-b border-gray-100 pb-3">Content settings</h3>
+        <form onSubmit={generate} className="space-y-4">
+
+          {/* Row 1: Service category (full width) */}
           <div>
-            <label className="label">Service category</label>
+            <label className="label">
+              <Tooltip text="Describe the renovation service — this is the main input to AI copy generation.">
+                Service category
+              </Tooltip>
+            </label>
             <input
               className="input"
               value={form.service_category}
               onChange={(e) => setForm({ ...form, service_category: e.target.value })}
-              placeholder="e.g. Peinture intérieure, Réparation de gypse..."
+              placeholder="e.g. Peinture intérieure, Réparation de gypse…"
             />
-            <p className="text-xs text-gray-400 mt-1">Describe the service — fed to the AI for copy generation.</p>
-          </div>
-          <div>
-            <label className="label">Language</label>
-            <select className="select" value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })}>
-              {LANGUAGES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="label">Tone</label>
-            <select className="select" value={form.tone} onChange={(e) => setForm({ ...form, tone: e.target.value })}>
-              {TONES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="label">City / neighbourhood</label>
-            <input className="input" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
-          </div>
-          <div>
-            <label className="label">Call to action</label>
-            <select className="select" value={form.cta} onChange={(e) => setForm({ ...form, cta: e.target.value })}>
-              {CTAS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
-            </select>
           </div>
 
-          <div className="md:col-span-2">
+          {/* Row 2: Language, Tone, CTA, City inline */}
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="label text-xs">Language</label>
+              <select className="select w-auto pr-8 text-sm" value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })}>
+                {LANGUAGES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label text-xs">Tone</label>
+              <select className="select w-auto pr-8 text-sm" value={form.tone} onChange={(e) => setForm({ ...form, tone: e.target.value })}>
+                {TONES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label text-xs">
+                <Tooltip text="The call-to-action appended to every generated post.">CTA</Tooltip>
+              </label>
+              <select className="select w-auto pr-8 text-sm" value={form.cta} onChange={(e) => setForm({ ...form, cta: e.target.value })}>
+                {CTAS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label text-xs">
+                <Tooltip text="City or neighbourhood for geo-targeted copy.">City</Tooltip>
+              </label>
+              <input className="input w-36 text-sm" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="Montréal" />
+            </div>
+          </div>
+
+          {/* Row 3: Platforms */}
+          <div>
             <label className="label">Platforms</label>
             <div className="flex flex-wrap gap-2">
               {PLATFORMS.map(({ value, label, color, icon }) => {
@@ -445,37 +525,48 @@ function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAs
                   <button
                     type="button"
                     key={value}
+                    title={label}
                     onClick={() => togglePlatform(value)}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 text-sm font-medium transition-all ${
+                    className={`flex items-center gap-2 px-3 py-2 rounded-xl border-2 text-sm font-medium transition-all ${
                       active
-                        ? `${color} ${active ? 'text-white' : ''} border-transparent shadow-sm`
+                        ? `${color} text-white border-transparent shadow-sm`
                         : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
                     }`}
                   >
                     <span className={`w-6 h-6 rounded-md flex items-center justify-center text-xs font-bold ${
                       active ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-400'
                     }`}>{icon}</span>
-                    {label}
+                    <span className="hidden sm:inline">{label}</span>
                   </button>
                 );
               })}
             </div>
           </div>
-          <div className="md:col-span-2">
-            <label className="label">Short job description</label>
+
+          {/* Row 4: Job description */}
+          <div>
+            <label className="label">
+              <Tooltip text="Optional: describe what was done on the job. AI will craft copy around it.">
+                Job description
+              </Tooltip>
+            </label>
             <textarea
-              className="input h-28 resize-y"
+              className="input h-24 resize-y"
               value={form.job_description}
               onChange={(e) => setForm({ ...form, job_description: e.target.value })}
-              placeholder="Example: Repainted salon walls, fixed two drywall cracks, cleaned trim, finished in a warm neutral colour..."
+              placeholder="e.g. Repainted salon walls, fixed two drywall cracks, cleaned trim, finished in a warm neutral colour…"
             />
           </div>
-          {error && <p className="md:col-span-2 text-sm text-red-600">{error}</p>}
-          <div className="md:col-span-2 flex gap-3">
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
+
+          <div className="flex gap-3 pt-1">
             <button type="submit" className="btn-primary" disabled={generating || selectedAssets.length === 0}>
-              {generating ? 'Generating...' : 'Generate Posts'}
+              {generating ? (
+                <span className="flex items-center gap-2"><span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full"></span>Generating…</span>
+              ) : 'Generate Posts'}
             </button>
-            <button type="button" className="btn-secondary" onClick={() => setForm({ ...DEFAULT_FORM, album_id: form.album_id })}>Reset options</button>
+            <button type="button" className="btn-secondary" onClick={() => setForm({ ...DEFAULT_FORM, album_id: form.album_id })}>Reset</button>
           </div>
         </form>
       </div>
@@ -1978,22 +2069,24 @@ export default function SocialStudioPage() {
       const r = await apiFetch('/publishing/drafts', {
         method: 'POST',
         body: JSON.stringify({
-          title: draft.title,
-          platform: draft.platform,
+          title: draft.title || `${draft.platform || 'post'} draft`,
+          platform: draft.platform || 'facebook',
           language: form.language,
           tone: form.tone,
           service_category: form.service_category,
-          body: draft.main_copy,
-          short_body: draft.short_variation,
-          hashtags: draft.hashtags,
-          cta: draft.cta,
+          body: draft.main_copy || '',
+          short_body: draft.short_variation || '',
+          hashtags: draft.hashtags || '',
+          cta: draft.cta || 'request_quote',
           image_ids: imgIds,
           status: 'needs_review',
         }),
       });
       if (!r.ok) {
         savedAll = false;
-        setError('Saving draft failed. Please review the generated content and try again.');
+        let detail = `HTTP ${r.status}`;
+        try { const d = await r.json(); detail = d.detail || (Array.isArray(d.detail) ? d.detail[0]?.msg : null) || detail; } catch {}
+        setError(`Saving draft failed: ${detail}`);
         break;
       }
     }
@@ -2011,15 +2104,15 @@ export default function SocialStudioPage() {
     const r = await apiFetch('/publishing/drafts', {
       method: 'POST',
       body: JSON.stringify({
-        title: draft.title,
-        platform: draft.platform,
+        title: draft.title || `${draft.platform || 'post'} draft`,
+        platform: draft.platform || 'facebook',
         language: form.language,
         tone: form.tone,
         service_category: form.service_category,
-        body: draft.main_copy,
-        short_body: draft.short_variation,
-        hashtags: draft.hashtags,
-        cta: draft.cta,
+        body: draft.main_copy || '',
+        short_body: draft.short_variation || '',
+        hashtags: draft.hashtags || '',
+        cta: draft.cta || 'request_quote',
         image_ids: imgIds,
         status: status,
       }),
@@ -2029,7 +2122,9 @@ export default function SocialStudioPage() {
       setError(`Draft saved as "${status.replace(/_/g, ' ')}".`);
       return true;
     }
-    setError('Saving draft failed.');
+    let detail = `HTTP ${r.status}`;
+    try { const d = await r.json(); detail = d.detail || (Array.isArray(d.detail) ? d.detail[0]?.msg : null) || detail; } catch {}
+    setError(`Saving draft failed: ${detail}`);
     return false;
   };
 
@@ -2052,14 +2147,15 @@ export default function SocialStudioPage() {
           <button
             key={tab.key}
             type="button"
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
               activeTab === tab.key
                 ? 'border-brand-600 text-brand-700'
                 : 'border-transparent text-gray-500 hover:text-gray-800'
             }`}
             onClick={() => setActiveTab(tab.key)}
           >
-            {tab.label}
+            <span className="text-base leading-none">{tab.icon}</span>
+            <span className="hidden sm:inline">{tab.label}</span>
           </button>
         ))}
       </div>
