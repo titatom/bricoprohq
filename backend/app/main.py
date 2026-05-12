@@ -401,12 +401,13 @@ OAUTH_PROVIDERS: dict[str, dict] = {
         "authorize_url": "https://www.facebook.com/v21.0/dialog/oauth",
         "token_url":     "https://graph.facebook.com/v21.0/oauth/access_token",
         # Pages permissions: manage posts + read page insights; Instagram requires pages_show_list
+        # Instagram publishing uses the current Instagram Platform scopes (instagram_business_*)
         "scopes": [
             "pages_show_list",
             "pages_read_engagement",
             "pages_manage_posts",
-            "instagram_basic",
-            "instagram_content_publish",
+            "instagram_business_basic",
+            "instagram_business_content_publish",
             "business_management",
         ],
         "extra_params": {},
