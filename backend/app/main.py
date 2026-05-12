@@ -454,6 +454,17 @@ def _oauth_config_integration(provider: str, db: Session) -> Integration | None:
         if canonical and canonical.config_json:
             return canonical
     if provider in _META_PROVIDERS:
+        # Use the provider's own row first (allows Instagram-specific App ID/Secret).
+        # Fall back to the meta row so the user only has to enter credentials once
+        # when both integrations share the same Meta app.
+        own = db.query(Integration).filter(Integration.provider == provider).first()
+        if own and own.config_json:
+            try:
+                own_cfg = json.loads(own.config_json)
+                if own_cfg.get("client_id") and own_cfg.get("client_secret"):
+                    return own
+            except Exception:
+                pass
         canonical = db.query(Integration).filter(Integration.provider == _META_CANONICAL_PROVIDER).first()
         if canonical and canonical.config_json:
             return canonical
@@ -799,6 +810,14 @@ def update_integration(
 
     if provider == "paperless-gpt":
         existing_config = {"api_key": existing_config.get("api_key", "")}
+
+    # If a raw access token was pasted into the config (supported for instagram),
+    # move it to oauth_access_token rather than persisting it in config_json.
+    manual_token = (existing_config.pop("access_token", "") or "").strip()
+    if manual_token and not all(c == "•" for c in manual_token):
+        i.oauth_access_token = manual_token
+        i.status = "ok"
+        i.last_sync_at = datetime.now(timezone.utc)
 
     i.config_json = json.dumps(existing_config)
     db.add(i)

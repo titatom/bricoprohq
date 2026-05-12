@@ -111,11 +111,15 @@ const INTEGRATION_FIELDS = {
     label: 'Instagram',
     icon: '📸',
     logoDomain: 'instagram.com',
-    description: 'Connect your Instagram Professional account for publishing. Uses your Meta App ID and Secret from the Meta integration above.',
+    description: 'Connect your Instagram Professional account for publishing. Leave App ID and Secret blank to reuse the Meta credentials above, or enter separate Instagram App credentials if your Meta app uses a different App ID for Instagram Login.',
     authType: 'oauth',
     connectLabel: 'Connect with Instagram',
     connectStyle: 'bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 border-purple-500',
-    fields: [],
+    fields: [
+      { key: 'client_id',     label: 'Instagram App ID (optional)',     placeholder: 'Leave blank to use Meta App ID above', help: 'Only needed if your Instagram Login product uses a different App ID than your Meta / Facebook Login app. Found at developers.facebook.com → Your App → Settings → Basic → App ID.' },
+      { key: 'client_secret', label: 'Instagram App Secret (optional)', placeholder: 'Leave blank to use Meta App Secret above', type: 'password', help: 'Corresponding App Secret for the Instagram App ID above.' },
+      { key: 'access_token',  label: 'Access Token (optional)',         placeholder: 'Paste a token to connect without OAuth', type: 'password', help: 'If you generated an Instagram User Access Token in the Meta developer portal or Graph API Explorer, paste it here and Save. The field clears after saving — the token is stored securely. You can still use the Connect button above instead.' },
+    ],
   },
   jobber: {
     label: 'Jobber',
