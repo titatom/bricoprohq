@@ -1047,6 +1047,130 @@ function copyDraftToClipboard(d) {
   return false;
 }
 
+const PLATFORM_ICONS = {
+  facebook: { label: 'Facebook', color: 'text-blue-600', bg: 'bg-blue-50 border-blue-200' },
+  instagram: { label: 'Instagram', color: 'text-pink-600', bg: 'bg-pink-50 border-pink-200' },
+  gbp: { label: 'Google Business', color: 'text-green-700', bg: 'bg-green-50 border-green-200' },
+  linkedin: { label: 'LinkedIn', color: 'text-blue-700', bg: 'bg-blue-50 border-blue-200' },
+};
+
+function PublishPanel({ draft, apiFetch, onSuccess }) {
+  const [accounts, setAccounts] = useState([]);
+  const [loadingAccounts, setLoadingAccounts] = useState(true);
+  const [selectedAccount, setSelectedAccount] = useState('');
+  const [publishing, setPublishing] = useState(false);
+  const [scheduleMode, setScheduleMode] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    setLoadingAccounts(true);
+    apiFetch('/publishing/accounts').then(async (r) => {
+      if (r.ok) {
+        const all = await r.json();
+        // Filter accounts to match this draft's platform
+        const platformMap = { facebook: 'facebook_page', instagram: 'instagram', gbp: 'gbp_location' };
+        const filtered = all.filter((a) => a.type === platformMap[draft.platform]) || all;
+        setAccounts(filtered.length ? filtered : all);
+        if (filtered.length === 1) setSelectedAccount(filtered[0].account_id);
+      }
+      setLoadingAccounts(false);
+    }).catch(() => setLoadingAccounts(false));
+  }, [draft.platform]); // eslint-disable-line
+
+  const isInstagram = draft.platform === 'instagram';
+  const imageIds = (draft.image_ids || '').split(',').filter(Boolean);
+  const hasImages = imageIds.length > 0;
+
+  const doPublish = async () => {
+    if (!selectedAccount) { setError('Please select an account.'); return; }
+    if (isInstagram && !hasImages) { setError('Instagram requires at least one image. Add images to this draft first.'); return; }
+    setPublishing(true);
+    setError('');
+    const r = await apiFetch(`/publishing/drafts/${draft.id}/publish`, {
+      method: 'POST',
+      body: JSON.stringify({ platform_account_id: selectedAccount, schedule: scheduleMode }),
+    });
+    setPublishing(false);
+    if (r.ok) {
+      const data = await r.json();
+      setResult(data);
+      if (onSuccess) onSuccess();
+    } else {
+      const err = await r.json().catch(() => ({}));
+      setError(err.detail || 'Publish failed. Check your connection and try again.');
+    }
+  };
+
+  if (result) {
+    return (
+      <div className="rounded-xl bg-green-50 border border-green-200 p-4 space-y-2">
+        <p className="font-semibold text-green-800 text-sm">
+          {result.scheduled ? 'Scheduled successfully!' : 'Published successfully!'}
+        </p>
+        {result.platform_post_id && (
+          <p className="text-xs text-green-700">Post ID: <span className="font-mono">{result.platform_post_id}</span></p>
+        )}
+        {result.published_at && (
+          <p className="text-xs text-green-600">Published at: {new Date(result.published_at).toLocaleString()}</p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl bg-gray-50 border border-gray-200 p-4 space-y-3">
+      <p className="text-sm font-semibold text-gray-800">Publish to {PLATFORM_ICONS[draft.platform]?.label || draft.platform}</p>
+
+      {loadingAccounts ? (
+        <p className="text-xs text-gray-400">Loading connected accounts…</p>
+      ) : accounts.length === 0 ? (
+        <p className="text-xs text-red-500">No {draft.platform} accounts connected. Check Settings → Integrations.</p>
+      ) : (
+        <div>
+          <label className="label text-xs">Account / Page</label>
+          <select className="select text-sm" value={selectedAccount} onChange={(e) => setSelectedAccount(e.target.value)}>
+            <option value="">Select account…</option>
+            {accounts.map((a) => <option key={a.account_id} value={a.account_id}>{a.account_name}</option>)}
+          </select>
+        </div>
+      )}
+
+      {isInstagram && !hasImages && (
+        <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          Instagram requires at least one image. Add images to this draft before publishing.
+        </p>
+      )}
+
+      <div className="flex items-center gap-3">
+        <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+          <input
+            type="checkbox"
+            className="rounded border-gray-300"
+            checked={scheduleMode}
+            onChange={(e) => setScheduleMode(e.target.checked)}
+          />
+          Schedule for planned date/time
+        </label>
+      </div>
+
+      {scheduleMode && (!draft.planned_date || !draft.planned_time) && (
+        <p className="text-xs text-amber-600">Set a planned date and time above before scheduling.</p>
+      )}
+
+      {error && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">{error}</p>}
+
+      <button
+        className="btn-primary w-full text-sm py-2"
+        onClick={doPublish}
+        disabled={publishing || loadingAccounts || accounts.length === 0}
+      >
+        {publishing ? 'Publishing…' : scheduleMode ? 'Schedule Post' : 'Publish Now'}
+      </button>
+    </div>
+  );
+}
+
 function DraftModal({ draft, onClose, onStatusChange, onDelete, onUpdate, apiFetch }) {
   const [status, setStatus] = useState(draft.status);
   const [title, setTitle] = useState(draft.title || '');
@@ -1060,8 +1184,11 @@ function DraftModal({ draft, onClose, onStatusChange, onDelete, onUpdate, apiFet
   const [feedback, setFeedback] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showPublish, setShowPublish] = useState(false);
 
   const imageIdList = (draft.image_ids || '').split(',').filter(Boolean);
+  const isPublishable = ['facebook', 'instagram', 'gbp'].includes(draft.platform);
+  const isAlreadyPublished = !!draft.platform_post_id;
 
   const saveAll = async () => {
     setSaving(true);
@@ -1079,14 +1206,6 @@ function DraftModal({ draft, onClose, onStatusChange, onDelete, onUpdate, apiFet
     }
   };
 
-  const markPosted = async () => {
-    setSaving(true);
-    await onStatusChange(draft.id, 'posted');
-    setSaving(false);
-    setFeedback('Marked as posted.');
-    if (onUpdate) onUpdate();
-  };
-
   const handleDelete = async () => {
     setSaving(true);
     await onDelete(draft.id);
@@ -1098,7 +1217,20 @@ function DraftModal({ draft, onClose, onStatusChange, onDelete, onUpdate, apiFet
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-4">
-          <h3 className="font-semibold text-gray-900 text-lg">Edit Draft</h3>
+          <div>
+            <h3 className="font-semibold text-gray-900 text-lg">Edit Draft</h3>
+            {isAlreadyPublished && (
+              <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5 mt-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                Live · {draft.platform_post_id}
+              </span>
+            )}
+            {draft.publish_error && (
+              <span className="inline-flex items-center gap-1 text-xs text-red-600 bg-red-50 border border-red-200 rounded-full px-2 py-0.5 mt-1">
+                Failed: {draft.publish_error.slice(0, 60)}
+              </span>
+            )}
+          </div>
           <button className="text-gray-400 hover:text-gray-600 text-xl leading-none" onClick={onClose}>×</button>
         </div>
 
@@ -1173,6 +1305,14 @@ function DraftModal({ draft, onClose, onStatusChange, onDelete, onUpdate, apiFet
             </div>
           )}
 
+          {isPublishable && showPublish && (
+            <PublishPanel
+              draft={{ ...draft, planned_date: plannedDate, planned_time: plannedTime, body, hashtags, cta }}
+              apiFetch={apiFetch}
+              onSuccess={() => { if (onUpdate) onUpdate(); }}
+            />
+          )}
+
           {draft.campaign_id && <p className="text-sm text-gray-500">Campaign: #{draft.campaign_id}</p>}
           {feedback && <p className="text-sm text-green-600 font-medium">{feedback}</p>}
         </div>
@@ -1185,12 +1325,15 @@ function DraftModal({ draft, onClose, onStatusChange, onDelete, onUpdate, apiFet
             >
               {copied ? 'Copied!' : 'Copy to Clipboard'}
             </button>
-            <button className="px-3 py-2 rounded-lg border border-green-200 bg-green-50 text-green-700 text-sm font-medium hover:bg-green-100 transition-colors" onClick={markPosted} disabled={saving}>
-              Mark as Posted
-            </button>
-            <button className="px-3 py-2 rounded-lg border border-cyan-200 bg-cyan-50 text-cyan-700 text-sm font-medium hover:bg-cyan-100 transition-colors" onClick={() => { setStatus('scheduled'); }} disabled={saving}>
-              Schedule
-            </button>
+            {isPublishable && !isAlreadyPublished && (
+              <button
+                className="px-3 py-2 rounded-lg border border-brand-300 bg-brand-50 text-brand-700 text-sm font-semibold hover:bg-brand-100 transition-colors"
+                onClick={() => setShowPublish((v) => !v)}
+                disabled={saving}
+              >
+                {showPublish ? 'Hide Publish' : 'Publish / Schedule'}
+              </button>
+            )}
             {confirmDelete ? (
               <div className="flex items-center gap-2">
                 <span className="text-xs text-red-600">Delete this draft?</span>
@@ -1208,7 +1351,7 @@ function DraftModal({ draft, onClose, onStatusChange, onDelete, onUpdate, apiFet
           <div className="flex gap-2">
             <button className="btn-secondary" onClick={onClose}>Close</button>
             <button className="btn-primary" onClick={saveAll} disabled={saving}>
-              {saving ? 'Saving...' : 'Save Changes'}
+              {saving ? 'Saving…' : 'Save Changes'}
             </button>
           </div>
         </div>
@@ -1277,7 +1420,15 @@ function KanbanBoard({ drafts, onStatusChange, onDelete, onUpdate, apiFetch }) {
                   className="bg-white rounded-lg p-3 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow border border-gray-100"
                   onClick={() => setSelected(d)}
                 >
-                  <p className="text-sm font-medium text-gray-800 truncate">{d.title}</p>
+                  <div className="flex items-start justify-between gap-1">
+                    <p className="text-sm font-medium text-gray-800 truncate">{d.title}</p>
+                    {d.platform_post_id && (
+                      <span className="flex-shrink-0 w-2 h-2 rounded-full bg-green-500 mt-1" title="Published — live on platform" />
+                    )}
+                    {d.status === 'failed' && (
+                      <span className="flex-shrink-0 w-2 h-2 rounded-full bg-red-500 mt-1" title={d.publish_error || 'Publish failed'} />
+                    )}
+                  </div>
                   <div className="flex items-center gap-1.5 mt-1">
                     <span className="text-xs text-gray-400">{d.platform}</span>
                     {d.planned_date && <span className="text-xs text-gray-400">· {d.planned_date}{d.planned_time ? ` ${d.planned_time}` : ''}</span>}

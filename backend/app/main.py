@@ -9,7 +9,7 @@ from urllib.parse import urlencode, urlparse
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response, FileResponse
 from sqlalchemy.orm import Session
 from jose import JWTError
 
@@ -18,7 +18,7 @@ from .db import Base, get_db, _reinit as _db_reinit
 _db_reinit()  # re-read DATABASE_URL in case env changed (e.g. test reloads)
 from .models import (
     User, Setting, QuickLink, Integration, DashboardCache,
-    ContentAsset, ContentDraft, Campaign, PostMetric, OAuthState,
+    ContentAsset, ContentDraft, Campaign, PostMetric, PostMetricSnapshot, OAuthState,
 )
 from .schemas import (
     LoginRequest, LoginResponse, UserMeResponse,
@@ -220,6 +220,83 @@ def startup_seed():
             "SECRET_KEY env var not set; using the on-disk dev fallback. "
             "Set SECRET_KEY explicitly in production."
         )
+    _start_scheduler()
+
+
+def _start_scheduler():
+    """Start the APScheduler background scheduler for scheduled post publishing."""
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(_run_scheduled_posts, "interval", minutes=1, id="publish_scheduled", max_instances=1)
+        scheduler.add_job(_cleanup_publish_assets, "interval", hours=6, id="cleanup_assets", max_instances=1)
+        scheduler.start()
+        app.state.scheduler = scheduler
+        log.info("APScheduler started — checking scheduled posts every minute")
+    except Exception as exc:
+        log.warning("Could not start APScheduler: %s", exc)
+
+
+@app.on_event("shutdown")
+def shutdown_scheduler():
+    scheduler = getattr(app.state, "scheduler", None)
+    if scheduler:
+        try:
+            scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+
+
+def _cleanup_publish_assets():
+    from .services.social_publisher import cleanup_old_publish_assets
+    cleanup_old_publish_assets()
+
+
+def _run_scheduled_posts():
+    """Publish any drafts that are scheduled and past their planned_date/time."""
+    from .services.social_publisher import _publish_draft
+    db = next(get_db())
+    try:
+        now = datetime.now(timezone.utc)
+        due = (
+            db.query(ContentDraft)
+            .filter(
+                ContentDraft.status == "scheduled",
+                ContentDraft.planned_date.isnot(None),
+                ContentDraft.platform_account_id.isnot(None),
+            )
+            .all()
+        )
+        for draft in due:
+            if not _draft_is_due(draft, now):
+                continue
+            try:
+                app_base = os.getenv("APP_BASE_URL", "http://localhost:8000")
+                _publish_draft(draft, db, app_base)
+                log.info("Scheduled post published: draft_id=%s platform=%s", draft.id, draft.platform)
+            except Exception as exc:
+                log.error("Scheduled post failed draft_id=%s: %s", draft.id, exc)
+                draft.status = "failed"
+                draft.publish_error = str(exc)
+                draft.updated_at = datetime.utcnow()
+                db.commit()
+    finally:
+        db.close()
+
+
+def _draft_is_due(draft: ContentDraft, now: datetime) -> bool:
+    if not draft.planned_date:
+        return False
+    time_str = (draft.planned_time or "00:00").strip() or "00:00"
+    try:
+        hour, minute = [int(x) for x in time_str.split(":")[:2]]
+    except (ValueError, AttributeError):
+        hour, minute = 0, 0
+    dt = datetime(
+        draft.planned_date.year, draft.planned_date.month, draft.planned_date.day,
+        hour, minute, tzinfo=timezone.utc
+    )
+    return now >= dt
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -915,6 +992,94 @@ def jobber_stats(_: User = Depends(auth_user), db: Session = Depends(get_db)):
     except (ConnectorNotConfigured, ConnectorError) as exc:
         log.warning("Jobber stats fetch failed: %s", exc)
         return {"upcoming_unscheduled_count": 0, "action_required_count": 0, "new_requests_count": 0, "pending_invoice_count": 0, "error": str(exc)}
+
+
+def _publish_draft(draft: ContentDraft, db: Session, app_base_url: str) -> str:
+    """
+    Core publish logic used by both the on-demand endpoint and the scheduler.
+    Returns the platform_post_id.
+    """
+    from .services.social_publisher import (
+        post_to_facebook, post_to_instagram, post_to_gbp,
+        _get_meta_token, _get_pages,
+    )
+
+    platform = (draft.platform or "").lower()
+    account_id = draft.platform_account_id or ""
+    image_ids = [x for x in (draft.image_ids or "").split(",") if x.strip()]
+    message = "\n\n".join(filter(None, [draft.body, draft.hashtags]))
+
+    if platform == "facebook":
+        user_token = _get_meta_token(db)
+        post_id = post_to_facebook(account_id, message, image_ids, db, user_token)
+    elif platform == "instagram":
+        user_token = _get_meta_token(db)
+        pages = _get_pages(user_token)
+        page_token = ""
+        ig_user_id = account_id
+        for p in pages:
+            if p.get("ig_user_id") == account_id:
+                page_token = p["access_token"]
+                break
+        if not page_token:
+            page_token = _get_meta_token(db)
+        caption = "\n\n".join(filter(None, [draft.body, draft.hashtags]))
+        post_id = post_to_instagram(ig_user_id, caption, image_ids, db, page_token, app_base_url)
+    elif platform == "gbp":
+        post_id = post_to_gbp(account_id, message, draft.cta or "", image_ids, db, app_base_url)
+    else:
+        raise HTTPException(422, f"Direct publishing not supported for platform '{platform}'")
+
+    now = datetime.utcnow()
+    draft.platform_post_id = post_id
+    draft.status = "posted"
+    draft.published_at = now
+    draft.publish_error = None
+    draft.updated_at = now
+    db.commit()
+    return post_id
+
+
+@app.get("/integrations/immich/assets/{asset_id}/original")
+def immich_asset_original(asset_id: str, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Proxy a full-size Immich asset for use in social uploads."""
+    i = db.query(Integration).filter(Integration.provider == "immich").first()
+    if not i or not i.base_url:
+        raise HTTPException(400, "Immich base_url not configured")
+    try:
+        config = json.loads(i.config_json or "{}")
+    except Exception:
+        config = {}
+    api_key = config.get("api_key", "")
+    if not api_key or all(c == '•' for c in api_key):
+        raise HTTPException(400, "Immich api_key not configured")
+    try:
+        upstream = httpx.get(
+            f"{i.base_url.rstrip('/')}/api/assets/{asset_id}/original",
+            headers={"x-api-key": api_key},
+            timeout=60,
+            follow_redirects=True,
+        )
+        upstream.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(exc.response.status_code, "Immich original request failed") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(502, f"Immich original request failed: {exc}") from exc
+    content_type = upstream.headers.get("content-type", "image/jpeg")
+    return Response(content=upstream.content, media_type=content_type)
+
+
+@app.get("/media/publish-assets/{filename}")
+def serve_publish_asset(filename: str):
+    """Serve a temp publish asset publicly (no auth) for Instagram / GBP image URLs."""
+    from .services.social_publisher import PUBLISH_ASSETS_DIR
+    import re
+    if not re.match(r'^[a-f0-9]{32}\.[a-z]+$', filename):
+        raise HTTPException(404, "Not found")
+    path = PUBLISH_ASSETS_DIR / filename
+    if not path.exists():
+        raise HTTPException(404, "Asset not found or expired")
+    return FileResponse(str(path))
 
 
 @app.get("/integrations/immich/assets/{asset_id}/thumbnail")
@@ -1786,26 +1951,31 @@ def drafts(
         q = q.filter(ContentDraft.status == status)
     if campaign_id:
         q = q.filter(ContentDraft.campaign_id == campaign_id)
-    return [
-        {
-            "id": d.id,
-            "title": d.title,
-            "platform": d.platform,
-            "language": d.language,
-            "status": d.status,
-            "planned_date": d.planned_date.isoformat() if d.planned_date else None,
-            "planned_time": getattr(d, "planned_time", "") or "",
-            "campaign_id": d.campaign_id,
-            "body": d.body,
-            "short_body": d.short_body,
-            "hashtags": d.hashtags,
-            "cta": d.cta,
-            "tone": d.tone,
-            "service_category": d.service_category,
-            "image_ids": getattr(d, "image_ids", "") or "",
-        }
-        for d in q.all()
-    ]
+    return [_draft_payload(d) for d in q.all()]
+
+
+def _draft_payload(d: ContentDraft) -> dict:
+    return {
+        "id": d.id,
+        "title": d.title,
+        "platform": d.platform,
+        "language": d.language,
+        "status": d.status,
+        "planned_date": d.planned_date.isoformat() if d.planned_date else None,
+        "planned_time": getattr(d, "planned_time", "") or "",
+        "campaign_id": d.campaign_id,
+        "body": d.body,
+        "short_body": d.short_body,
+        "hashtags": d.hashtags,
+        "cta": d.cta,
+        "tone": d.tone,
+        "service_category": d.service_category,
+        "image_ids": getattr(d, "image_ids", "") or "",
+        "platform_post_id": getattr(d, "platform_post_id", None),
+        "platform_account_id": getattr(d, "platform_account_id", None),
+        "published_at": d.published_at.isoformat() if getattr(d, "published_at", None) else None,
+        "publish_error": getattr(d, "publish_error", None),
+    }
 
 
 @app.post("/publishing/drafts")
@@ -1882,6 +2052,86 @@ def delete_draft(draft_id: int, _: User = Depends(auth_user), db: Session = Depe
     db.delete(d)
     db.commit()
     return {"deleted": True, "id": draft_id}
+
+
+@app.get("/publishing/accounts")
+def publishing_accounts(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Return all accounts available for publishing (Facebook Pages, Instagram, GBP locations)."""
+    from .services.social_publisher import get_publishable_accounts
+    try:
+        return get_publishable_accounts(db)
+    except Exception as exc:
+        log.warning("Error fetching publishing accounts: %s", exc)
+        return []
+
+
+@app.post("/publishing/drafts/{draft_id}/publish")
+def publish_draft(
+    draft_id: int,
+    payload: dict,
+    request: Request,
+    _: User = Depends(auth_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Publish a draft immediately to the selected platform account,
+    or schedule it (set status to 'scheduled' with account saved for later).
+
+    payload:
+      - platform_account_id: str  (required)
+      - schedule: bool            (optional, default false — if true just saves account + status=scheduled)
+    """
+    d = db.query(ContentDraft).filter(ContentDraft.id == draft_id).first()
+    if not d:
+        raise HTTPException(404, "Draft not found")
+
+    account_id = (payload.get("platform_account_id") or "").strip()
+    if not account_id:
+        raise HTTPException(422, "platform_account_id is required")
+
+    schedule_only = bool(payload.get("schedule", False))
+
+    # Always persist the chosen account so the scheduler can use it
+    d.platform_account_id = account_id
+    d.updated_at = datetime.utcnow()
+
+    if schedule_only:
+        d.status = "scheduled"
+        db.commit()
+        return {"scheduled": True, "draft_id": draft_id}
+
+    app_base = _request_app_base_urls(request).split(",")[0] or os.getenv("APP_BASE_URL", "")
+    if not app_base:
+        app_base = str(request.base_url).rstrip("/")
+
+    try:
+        post_id = _publish_draft(d, db, app_base)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("Publish failed for draft %s: %s", draft_id, exc)
+        d.publish_error = str(exc)
+        d.updated_at = datetime.utcnow()
+        db.commit()
+        raise HTTPException(502, f"Publish failed: {exc}") from exc
+
+    # Kick off an immediate insights seed (best-effort; non-blocking via thread)
+    import threading
+    def _seed():
+        try:
+            from .services.social_publisher import sync_post_insights
+            seed_db = next(get_db())
+            sync_post_insights(draft_id, seed_db)
+        except Exception as e:
+            log.info("Initial insights seed for draft %s: %s", draft_id, e)
+    threading.Thread(target=_seed, daemon=True).start()
+
+    return {
+        "published": True,
+        "draft_id": draft_id,
+        "platform_post_id": post_id,
+        "published_at": d.published_at.isoformat() if d.published_at else None,
+    }
 
 
 @app.get("/publishing/calendar")
@@ -2055,3 +2305,84 @@ def kpi_summary(_: User = Depends(auth_user), db: Session = Depends(get_db)):
         "cost_per_lead": round(total_spend / total_leads, 2) if total_leads else 0,
         "click_through_rate": round((total_clicks / total_impressions) * 100, 2) if total_impressions else 0,
     }
+
+
+# ── KPI: per-post tracking ────────────────────────────────────────────────────
+
+@app.get("/kpi/posts")
+def kpi_posts(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Return all published (or tracked) drafts with their latest PostMetric data."""
+    drafts = (
+        db.query(ContentDraft)
+        .filter(ContentDraft.status.in_(["posted", "scheduled", "failed"]))
+        .order_by(ContentDraft.published_at.desc().nullslast(), ContentDraft.updated_at.desc())
+        .all()
+    )
+    result = []
+    for d in drafts:
+        metric = db.query(PostMetric).filter(PostMetric.draft_id == d.id).first()
+        result.append({
+            "draft": _draft_payload(d),
+            "metric": _metric_payload(metric) if metric else None,
+        })
+    return result
+
+
+@app.get("/kpi/posts/{draft_id}/snapshots")
+def kpi_post_snapshots(draft_id: int, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Return time-series snapshot data for sparkline charts."""
+    snaps = (
+        db.query(PostMetricSnapshot)
+        .filter(PostMetricSnapshot.draft_id == draft_id)
+        .order_by(PostMetricSnapshot.captured_at.asc())
+        .all()
+    )
+    return [
+        {
+            "captured_at": s.captured_at.isoformat(),
+            "impressions": s.impressions,
+            "reach": s.reach,
+            "clicks": s.clicks,
+            "engagements": s.engagements,
+            "reactions": s.reactions,
+            "shares": s.shares,
+            "saves": s.saves,
+        }
+        for s in snaps
+    ]
+
+
+@app.post("/kpi/sync-post/{draft_id}")
+def kpi_sync_post(draft_id: int, _: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Fetch latest platform metrics for a single published draft."""
+    from .services.social_publisher import sync_post_insights
+    try:
+        metrics = sync_post_insights(draft_id, db)
+        return {"synced": True, "draft_id": draft_id, "metrics": metrics}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        log.error("kpi_sync_post error for draft %s: %s", draft_id, exc)
+        raise HTTPException(502, f"Insights sync failed: {exc}") from exc
+
+
+@app.post("/kpi/sync-all")
+def kpi_sync_all(_: User = Depends(auth_user), db: Session = Depends(get_db)):
+    """Bulk sync insights for all published drafts that have a platform_post_id."""
+    from .services.social_publisher import sync_post_insights
+    drafts = (
+        db.query(ContentDraft)
+        .filter(
+            ContentDraft.status == "posted",
+            ContentDraft.platform_post_id.isnot(None),
+        )
+        .all()
+    )
+    ok, failed = 0, []
+    for d in drafts:
+        try:
+            sync_post_insights(d.id, db)
+            ok += 1
+        except Exception as exc:
+            failed.append({"draft_id": d.id, "error": str(exc)})
+    return {"synced": ok, "failed": failed, "total": len(drafts)}

@@ -1,0 +1,559 @@
+"""
+Social publishing service.
+
+Handles direct posting to Facebook, Instagram, and Google Business Profile,
+image asset management for uploads, and post-insight syncing back into the
+PostMetric / PostMetricSnapshot tables.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import httpx
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+log = logging.getLogger("bricopro.publisher")
+
+GRAPH_API_BASE = "https://graph.facebook.com/v21.0"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GBP_MYBUSINESS_BASE = "https://mybusiness.googleapis.com/v4"
+GBP_ACCOUNTS_BASE = "https://mybusinessaccountmanagement.googleapis.com/v1"
+
+PUBLISH_ASSETS_DIR = Path(os.getenv("PUBLISH_ASSETS_DIR", "/data/publish_assets"))
+
+# ── Asset helpers ─────────────────────────────────────────────────────────────
+
+def _ensure_assets_dir() -> Path:
+    PUBLISH_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    return PUBLISH_ASSETS_DIR
+
+
+def fetch_immich_original(asset_id: str, db: "Session") -> bytes:
+    """Download the full-size original of an Immich asset."""
+    from ..models import Integration
+    i = db.query(Integration).filter(Integration.provider == "immich").first()
+    if not i or not i.base_url:
+        raise ValueError("Immich not configured")
+    try:
+        config = json.loads(i.config_json or "{}")
+    except Exception:
+        config = {}
+    api_key = config.get("api_key", "")
+    if not api_key:
+        raise ValueError("Immich api_key not configured")
+
+    r = httpx.get(
+        f"{i.base_url.rstrip('/')}/api/assets/{asset_id}/original",
+        headers={"x-api-key": api_key},
+        timeout=60,
+        follow_redirects=True,
+    )
+    r.raise_for_status()
+    return r.content
+
+
+def save_asset_for_public_serving(asset_bytes: bytes, content_type: str = "image/jpeg") -> tuple[str, Path]:
+    """
+    Save image bytes to PUBLISH_ASSETS_DIR and return (filename, path).
+    The file is served publicly at /media/publish-assets/{filename}.
+    """
+    ext = "jpg"
+    if "png" in content_type:
+        ext = "png"
+    elif "webp" in content_type:
+        ext = "webp"
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    dest = _ensure_assets_dir() / filename
+    dest.write_bytes(asset_bytes)
+    return filename, dest
+
+
+def cleanup_old_publish_assets(max_age_hours: int = 24) -> None:
+    """Delete temp publish assets older than max_age_hours."""
+    cutoff = datetime.now(timezone.utc).timestamp() - max_age_hours * 3600
+    try:
+        for f in _ensure_assets_dir().iterdir():
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink(missing_ok=True)
+    except Exception as exc:
+        log.warning("cleanup_old_publish_assets error: %s", exc)
+
+
+# ── Meta helpers ──────────────────────────────────────────────────────────────
+
+def _get_meta_token(db: "Session") -> str:
+    from ..models import Integration
+    intg = db.query(Integration).filter(Integration.provider == "meta").first()
+    if not intg or not intg.oauth_access_token:
+        raise ValueError("Meta not connected. Connect via Settings → Integrations.")
+    return intg.oauth_access_token
+
+
+def _get_pages(user_token: str) -> list[dict]:
+    """Return list of {id, name, access_token, ig_user_id} for all managed pages."""
+    r = httpx.get(
+        f"{GRAPH_API_BASE}/me/accounts",
+        params={"access_token": user_token, "fields": "id,name,access_token,instagram_business_account"},
+        timeout=15,
+    )
+    r.raise_for_status()
+    pages = []
+    for p in r.json().get("data", []):
+        ig = p.get("instagram_business_account")
+        ig_id = (ig.get("id") if isinstance(ig, dict) else ig) if ig else None
+        pages.append({
+            "id": p["id"],
+            "name": p.get("name", ""),
+            "access_token": p.get("access_token", ""),
+            "ig_user_id": ig_id,
+            "type": "facebook_page",
+        })
+    return pages
+
+
+def _page_token_for(user_token: str, page_id: str) -> str:
+    pages = _get_pages(user_token)
+    for p in pages:
+        if p["id"] == page_id:
+            return p["access_token"]
+    raise ValueError(f"Page {page_id} not found in connected accounts")
+
+
+# ── Facebook posting ──────────────────────────────────────────────────────────
+
+def post_to_facebook(
+    page_id: str,
+    message: str,
+    image_ids: list[str],
+    db: "Session",
+    user_token: str,
+) -> str:
+    """
+    Publish a post to a Facebook Page. Returns the platform post ID.
+    If image_ids is non-empty, images are uploaded first as unpublished photos
+    then attached to the feed post.
+    """
+    page_token = _page_token_for(user_token, page_id)
+
+    if not image_ids:
+        r = httpx.post(
+            f"{GRAPH_API_BASE}/{page_id}/feed",
+            params={"access_token": page_token},
+            json={"message": message},
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json()["id"]
+
+    # Upload each image as an unpublished photo
+    photo_ids: list[str] = []
+    for asset_id in image_ids:
+        try:
+            img_bytes = fetch_immich_original(asset_id, db)
+        except Exception as exc:
+            log.warning("Could not fetch Immich asset %s: %s", asset_id, exc)
+            continue
+        upload_r = httpx.post(
+            f"{GRAPH_API_BASE}/{page_id}/photos",
+            params={"access_token": page_token},
+            content=img_bytes,
+            headers={"Content-Type": "image/jpeg"},
+            data={"published": "false"},
+            timeout=60,
+        )
+        if upload_r.is_success:
+            photo_ids.append(upload_r.json()["id"])
+        else:
+            log.warning("FB photo upload failed for asset %s: %s", asset_id, upload_r.text)
+
+    attached = [{"media_fbid": pid} for pid in photo_ids]
+    body: dict = {"message": message}
+    if attached:
+        body["attached_media"] = json.dumps(attached)
+
+    r = httpx.post(
+        f"{GRAPH_API_BASE}/{page_id}/feed",
+        params={"access_token": page_token},
+        data=body,
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["id"]
+
+
+# ── Instagram posting ─────────────────────────────────────────────────────────
+
+def post_to_instagram(
+    ig_user_id: str,
+    caption: str,
+    image_ids: list[str],
+    db: "Session",
+    page_token: str,
+    app_base_url: str,
+) -> str:
+    """
+    Publish a post to an Instagram Business account. Returns the media ID.
+    Requires at least one image (Instagram does not support text-only posts).
+    For multiple images a carousel is created.
+    """
+    if not image_ids:
+        raise ValueError("Instagram requires at least one image.")
+
+    if len(image_ids) == 1:
+        public_url = _prepare_public_image(image_ids[0], db, app_base_url)
+        container_r = httpx.post(
+            f"{GRAPH_API_BASE}/{ig_user_id}/media",
+            params={"access_token": page_token},
+            json={"image_url": public_url, "caption": caption},
+            timeout=30,
+        )
+        container_r.raise_for_status()
+        creation_id = container_r.json()["id"]
+    else:
+        # Carousel: max 10 items
+        item_ids: list[str] = []
+        for asset_id in image_ids[:10]:
+            public_url = _prepare_public_image(asset_id, db, app_base_url)
+            item_r = httpx.post(
+                f"{GRAPH_API_BASE}/{ig_user_id}/media",
+                params={"access_token": page_token},
+                json={"image_url": public_url, "is_carousel_item": True},
+                timeout=30,
+            )
+            if item_r.is_success:
+                item_ids.append(item_r.json()["id"])
+            else:
+                log.warning("IG carousel item failed for %s: %s", asset_id, item_r.text)
+        if not item_ids:
+            raise ValueError("No Instagram carousel items could be uploaded.")
+        carousel_r = httpx.post(
+            f"{GRAPH_API_BASE}/{ig_user_id}/media",
+            params={"access_token": page_token},
+            json={"media_type": "CAROUSEL", "children": ",".join(item_ids), "caption": caption},
+            timeout=30,
+        )
+        carousel_r.raise_for_status()
+        creation_id = carousel_r.json()["id"]
+
+    # Publish the container
+    pub_r = httpx.post(
+        f"{GRAPH_API_BASE}/{ig_user_id}/media_publish",
+        params={"access_token": page_token},
+        json={"creation_id": creation_id},
+        timeout=30,
+    )
+    pub_r.raise_for_status()
+    return pub_r.json()["id"]
+
+
+def _prepare_public_image(asset_id: str, db: "Session", app_base_url: str) -> str:
+    """Download Immich asset, save to publish-assets dir, return public URL."""
+    img_bytes = fetch_immich_original(asset_id, db)
+    filename, _ = save_asset_for_public_serving(img_bytes)
+    return f"{app_base_url.rstrip('/')}/media/publish-assets/{filename}"
+
+
+# ── Google Business Profile posting ──────────────────────────────────────────
+
+def _get_gbp_token(db: "Session") -> str:
+    """Return a valid GBP access token, refreshing if needed."""
+    from ..models import Integration
+    from .connectors import GoogleBusinessConnector, _google_oauth_config, _sync_google_tokens
+    intg = db.query(Integration).filter(Integration.provider == "google_business").first()
+    if not intg or not intg.oauth_access_token:
+        raise ValueError("Google Business not connected. Connect via Settings → Integrations.")
+    connector = GoogleBusinessConnector(intg)
+    return connector._get_access_token()
+
+
+def _get_gbp_locations(token: str, db: "Session") -> list[dict]:
+    """Return list of {name, title, account} for all GBP locations."""
+    from ..models import Integration
+    headers = {"Authorization": f"Bearer {token}"}
+    accounts_r = httpx.get(f"{GBP_ACCOUNTS_BASE}/accounts", headers=headers, timeout=15)
+    accounts_r.raise_for_status()
+    accounts = accounts_r.json().get("accounts", [])
+    locations = []
+    for acct in accounts:
+        acct_name = acct.get("name", "")
+        loc_r = httpx.get(
+            f"https://mybusinessinformation.googleapis.com/v1/{acct_name}/locations",
+            params={"readMask": "name,title"},
+            headers=headers,
+            timeout=15,
+        )
+        if loc_r.is_success:
+            for loc in loc_r.json().get("locations", []):
+                locations.append({
+                    "name": loc.get("name", ""),
+                    "title": loc.get("title", ""),
+                    "account": acct_name,
+                    "type": "gbp_location",
+                })
+    return locations
+
+
+def post_to_gbp(
+    location_name: str,
+    summary: str,
+    cta: str,
+    image_ids: list[str],
+    db: "Session",
+    app_base_url: str,
+) -> str:
+    """
+    Publish a Local Post to Google Business Profile. Returns the post resource name.
+    """
+    token = _get_gbp_token(db)
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    body: dict = {
+        "languageCode": "fr",
+        "summary": summary,
+        "topicType": "STANDARD",
+    }
+
+    if cta and cta not in ("", "none"):
+        action_type = _cta_to_gbp_action(cta)
+        if action_type:
+            body["callToAction"] = {"actionType": action_type}
+
+    if image_ids:
+        public_url = _prepare_public_image(image_ids[0], db, app_base_url)
+        body["media"] = [{"mediaFormat": "PHOTO", "sourceUrl": public_url}]
+
+    r = httpx.post(
+        f"{GBP_MYBUSINESS_BASE}/{location_name}/localPosts",
+        headers=headers,
+        json=body,
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json().get("name", "")
+
+
+def _cta_to_gbp_action(cta: str) -> str:
+    mapping = {
+        "request_quote": "GET_OFFER",
+        "book_spring": "BOOK",
+        "book_winter": "BOOK",
+        "visit_website": "LEARN_MORE",
+        "call_message": "CALL",
+        "ask_availability": "GET_OFFER",
+        "leave_review": "LEARN_MORE",
+        "see_projects": "LEARN_MORE",
+    }
+    return mapping.get(cta, "LEARN_MORE")
+
+
+# ── Account discovery ─────────────────────────────────────────────────────────
+
+def get_publishable_accounts(db: "Session") -> list[dict]:
+    """
+    Return all accounts available for publishing:
+    - Facebook Pages (from Meta OAuth)
+    - Instagram Business accounts (linked to FB pages)
+    - GBP locations (from Google Business OAuth)
+    """
+    accounts: list[dict] = []
+
+    try:
+        user_token = _get_meta_token(db)
+        pages = _get_pages(user_token)
+        for p in pages:
+            accounts.append({
+                "provider": "meta",
+                "account_id": p["id"],
+                "account_name": p["name"],
+                "type": "facebook_page",
+            })
+            if p.get("ig_user_id"):
+                accounts.append({
+                    "provider": "meta",
+                    "account_id": p["ig_user_id"],
+                    "account_name": f"{p['name']} (Instagram)",
+                    "type": "instagram",
+                    "page_id": p["id"],
+                })
+    except Exception as exc:
+        log.info("Meta accounts unavailable: %s", exc)
+
+    try:
+        token = _get_gbp_token(db)
+        locations = _get_gbp_locations(token, db)
+        for loc in locations:
+            accounts.append({
+                "provider": "google_business",
+                "account_id": loc["name"],
+                "account_name": loc.get("title") or loc["name"],
+                "type": "gbp_location",
+            })
+    except Exception as exc:
+        log.info("GBP accounts unavailable: %s", exc)
+
+    return accounts
+
+
+# ── Insights fetching ─────────────────────────────────────────────────────────
+
+def fetch_facebook_post_insights(post_id: str, page_id: str, db: "Session") -> dict:
+    """Fetch engagement metrics for a Facebook Page post."""
+    user_token = _get_meta_token(db)
+    page_token = _page_token_for(user_token, page_id)
+    metrics = "post_impressions,post_impressions_unique,post_clicks,post_engaged_users,post_reactions_by_type_total,post_activity_by_action_type"
+    r = httpx.get(
+        f"{GRAPH_API_BASE}/{post_id}/insights",
+        params={"metric": metrics, "access_token": page_token},
+        timeout=15,
+    )
+    r.raise_for_status()
+    data = {item["name"]: (item.get("values") or [{}])[0].get("value", 0) for item in r.json().get("data", [])}
+
+    reactions = data.get("post_reactions_by_type_total", {})
+    total_reactions = sum(reactions.values()) if isinstance(reactions, dict) else 0
+    activity = data.get("post_activity_by_action_type", {})
+    shares = activity.get("share", 0) if isinstance(activity, dict) else 0
+
+    return {
+        "impressions": data.get("post_impressions", 0),
+        "reach": data.get("post_impressions_unique", 0),
+        "clicks": data.get("post_clicks", 0),
+        "engagements": data.get("post_engaged_users", 0),
+        "reactions": total_reactions,
+        "shares": shares,
+        "saves": 0,
+    }
+
+
+def fetch_instagram_media_insights(media_id: str, page_id: str, db: "Session") -> dict:
+    """Fetch engagement metrics for an Instagram Business media post."""
+    user_token = _get_meta_token(db)
+    page_token = _page_token_for(user_token, page_id)
+    metrics = "impressions,reach,likes,comments,shares,saved,total_interactions"
+    r = httpx.get(
+        f"{GRAPH_API_BASE}/{media_id}/insights",
+        params={"metric": metrics, "access_token": page_token},
+        timeout=15,
+    )
+    r.raise_for_status()
+    data = {item["name"]: item.get("values", [{"value": 0}])[0].get("value", 0) for item in r.json().get("data", [])}
+    return {
+        "impressions": data.get("impressions", 0),
+        "reach": data.get("reach", 0),
+        "clicks": 0,
+        "engagements": data.get("total_interactions", 0),
+        "reactions": data.get("likes", 0),
+        "shares": data.get("shares", 0),
+        "saves": data.get("saved", 0),
+    }
+
+
+def fetch_gbp_post_insights(local_post_name: str, db: "Session") -> dict:
+    """Fetch view/action metrics for a GBP Local Post."""
+    token = _get_gbp_token(db)
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    r = httpx.post(
+        f"{GBP_MYBUSINESS_BASE}/{local_post_name}:reportInsights",
+        headers=headers,
+        json={"basicRequest": {}},
+        timeout=15,
+    )
+    if not r.is_success:
+        log.warning("GBP insights request failed %s: %s", r.status_code, r.text)
+        return {"impressions": 0, "reach": 0, "clicks": 0, "engagements": 0, "reactions": 0, "shares": 0, "saves": 0}
+
+    result = r.json()
+    metrics = {}
+    for item in result.get("localPostMetrics", [{}])[0].get("metricValues", []):
+        metrics[item.get("metric", "")] = item.get("totalValue", {}).get("value", 0)
+
+    return {
+        "impressions": metrics.get("LOCAL_POST_VIEWS_SEARCH", 0),
+        "reach": metrics.get("LOCAL_POST_VIEWS_SEARCH", 0),
+        "clicks": metrics.get("LOCAL_POST_ACTIONS_CALL_TO_ACTION", 0),
+        "engagements": metrics.get("LOCAL_POST_ACTIONS_CALL_TO_ACTION", 0),
+        "reactions": 0,
+        "shares": 0,
+        "saves": 0,
+    }
+
+
+# ── Core sync function ────────────────────────────────────────────────────────
+
+def sync_post_insights(draft_id: int, db: "Session") -> dict:
+    """
+    Fetch current platform metrics for a published draft and upsert into
+    PostMetric + append a PostMetricSnapshot row.
+    Returns the normalized metrics dict.
+    """
+    from ..models import ContentDraft, PostMetric, PostMetricSnapshot
+
+    draft = db.query(ContentDraft).filter(ContentDraft.id == draft_id).first()
+    if not draft:
+        raise ValueError(f"Draft {draft_id} not found")
+    if not draft.platform_post_id:
+        raise ValueError(f"Draft {draft_id} has no platform_post_id; publish it first.")
+
+    platform = (draft.platform or "").lower()
+    account_id = draft.platform_account_id or ""
+
+    try:
+        if platform == "facebook":
+            page_id = account_id.split("_")[0] if "_" in account_id else account_id
+            metrics = fetch_facebook_post_insights(draft.platform_post_id, page_id, db)
+        elif platform == "instagram":
+            # account_id for instagram is stored as page_id:ig_user_id
+            page_id = account_id.split(":")[0] if ":" in account_id else account_id
+            metrics = fetch_instagram_media_insights(draft.platform_post_id, page_id, db)
+        elif platform == "gbp":
+            metrics = fetch_gbp_post_insights(draft.platform_post_id, db)
+        else:
+            raise ValueError(f"Insights not supported for platform '{platform}'")
+    except Exception as exc:
+        log.error("Insights fetch failed for draft %s: %s", draft_id, exc)
+        raise
+
+    now = datetime.utcnow()
+
+    # Upsert PostMetric (latest snapshot summary)
+    metric = db.query(PostMetric).filter(PostMetric.draft_id == draft_id).first()
+    if not metric:
+        metric = PostMetric(
+            draft_id=draft_id,
+            title=draft.title,
+            platform=draft.platform,
+            post_id=draft.platform_post_id,
+            posted_at=draft.published_at.date() if draft.published_at else None,
+        )
+        db.add(metric)
+    metric.impressions = metrics["impressions"]
+    metric.reach = metrics["reach"]
+    metric.clicks = metrics["clicks"]
+    metric.engagements = metrics["engagements"]
+    if metric.reach:
+        metric.engagement_rate = round(metrics["engagements"] / metric.reach * 100, 2)
+
+    # Append time-series snapshot
+    snapshot = PostMetricSnapshot(
+        draft_id=draft_id,
+        captured_at=now,
+        impressions=metrics["impressions"],
+        reach=metrics["reach"],
+        clicks=metrics["clicks"],
+        engagements=metrics["engagements"],
+        reactions=metrics["reactions"],
+        shares=metrics["shares"],
+        saves=metrics["saves"],
+    )
+    db.add(snapshot)
+    db.commit()
+
+    return metrics

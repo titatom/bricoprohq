@@ -126,7 +126,7 @@ class SocialGenerateIn(BaseModel):
 
 DRAFT_STATUSES = {
     "idea", "draft_generated", "needs_images", "needs_review", "approved",
-    "scheduled", "posted", "reuse_later", "turn_into_ad", "turn_into_page", "archived",
+    "scheduled", "posted", "failed", "reuse_later", "turn_into_ad", "turn_into_page", "archived",
 }
 
 class DraftIn(BaseModel):
