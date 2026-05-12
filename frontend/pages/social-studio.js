@@ -891,8 +891,20 @@ function CampaignsTab({ apiFetch }) {
     }
   };
 
-  const updateStatus = async (id, status) => {
-    setCampaigns((prev) => prev.map((c) => c.id === id ? { ...c, status } : c));
+  const updateStatus = async (id, newStatus) => {
+    const campaign = campaigns.find((c) => c.id === id);
+    setCampaigns((prev) => prev.map((c) => c.id === id ? { ...c, status: newStatus } : c));
+    if (campaign) {
+      await apiFetch(`/campaigns/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          name: campaign.name,
+          service_category: campaign.service_category || '',
+          message: campaign.message || '',
+          status: newStatus,
+        }),
+      });
+    }
   };
 
   return (

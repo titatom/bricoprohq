@@ -21,11 +21,18 @@ Bricopro HQ is a unified internal dashboard that centralizes daily business info
 | Module | Purpose |
 |--------|---------|
 | **Dashboard** | Live overview: integrations, widgets, quick links |
-| **Processing Queues** | Review pending photos (Immich) and documents (Paperless) |
-| **AI Social Studio** | Generate platform-specific social content from job info |
-| **Publishing Queue** | Kanban / calendar / list view for content drafts |
-| **Campaigns** | Seasonal and service-based marketing campaigns |
-| **Settings** | Integration credentials, AI provider config |
+| **Social Studio** | Generate content, manage campaigns, and schedule publishing — all in one place |
+| **KPI Tracking** | Record and summarise post and ad performance (spend, leads, clicks, CPL) |
+| **Settings** | Integration credentials, AI provider config, Social Studio defaults |
+
+### Social Studio tabs
+
+| Tab | Purpose |
+|-----|---------|
+| Post Generation | AI-generated platform-specific social posts from job details and selected photos |
+| Image Generation | AI-assisted image creation and upload to Immich |
+| Campaigns | Seasonal and service-based marketing campaigns |
+| Publishing Queue | Kanban / calendar / list view for content drafts |
 
 ---
 
@@ -102,21 +109,24 @@ branding.
 
 Once logged in, go to **Settings** to configure each integration.
 
-### Google Calendar
+### Google (Calendar + Business Profile)
 
-1. Create a Google API key at https://console.cloud.google.com
-2. Enable the Calendar API
-3. In Settings → Google Calendar:
-   - **Base URL:** leave blank (uses Google's API directly)
-   - **API Key:** your Google API key
-   - In `config_json` add: `{"calendar_id": "your-calendar-id@gmail.com"}`
+Google Calendar and Google Business Profile share a single OAuth connection.
+
+1. Create an OAuth 2.0 Client ID at https://console.cloud.google.com → APIs & Services → Credentials
+2. Enable the **Google Calendar API** and **Google Business Profile API**
+3. Add your `APP_BASE_URL/api/integrations/google_calendar/oauth/callback` as an authorised redirect URI
+4. In Settings → Integrations → Google Services:
+   - Enter Client ID and Client Secret
+   - Optionally set a Calendar ID (leave blank to use primary)
+   - Click **Connect with Google** to complete the OAuth flow
 
 ### Jobber
 
-1. Generate an API key in Jobber Settings → Connected Apps
-2. In Settings → Jobber:
-   - **Base URL:** `https://api.getjobber.com/api/graphql`
-   - **API Key:** your Jobber bearer token
+1. Register an app at https://developer.getjobber.com
+2. In Settings → Integrations → Jobber:
+   - Enter Client ID and Client Secret
+   - Click **Connect with Jobber** to complete the OAuth flow
 
 ### Immich
 
@@ -200,10 +210,9 @@ alembic upgrade head
 
 | Layer | Technology |
 |-------|------------|
-| Frontend | Next.js 14, React 18, Tailwind CSS 3 |
+| Frontend | Next.js 14, React 18, Tailwind CSS 3, Heroicons |
 | Backend | FastAPI, SQLAlchemy 2, Alembic |
-| Database | PostgreSQL 16 |
-| Cache / Queue | Redis 7 |
+| Database | SQLite (default) — swap to PostgreSQL via `DATABASE_URL` |
 | Auth | JWT (python-jose), bcrypt |
 | HTTP client | httpx |
 | Deployment | Docker Compose |
@@ -297,17 +306,19 @@ Or in Unraid GUI: click the `bricoprohq` container → **Force Update**.
 
 ---
 
-## MVP Acceptance Checklist
+## Acceptance Checklist
 
 - [x] Runs self-hosted in Docker
 - [x] Shows a useful main business dashboard
 - [x] Displays upcoming calendar/job information (via configurable connectors)
-- [x] Displays pending Immich/Paperless queues
+- [x] Dashboard widgets show pending Immich/Paperless queue counts
 - [x] Provides editable quick links to important tools
 - [x] Generates AI social content packs
 - [x] Saves generated content as drafts
-- [x] Organizes drafts in a publishing queue (kanban + calendar + list)
+- [x] Organises drafts in a publishing queue (kanban + calendar + list)
 - [x] Shows a content calendar
-- [x] Supports basic seasonal campaigns
+- [x] Supports seasonal campaigns with configurable status
+- [x] Tracks KPI / ad performance (spend, leads, clicks, cost-per-lead)
 - [x] User can log in / log out
 - [x] Integration failures show clear errors (not app crashes)
+- [x] All credentials encrypted at rest

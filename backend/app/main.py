@@ -1177,6 +1177,7 @@ SOCIAL_SETTING_DEFAULTS = {
     "default_tone": "local",
     "default_city": "Montréal",
     "default_cta": "request_quote",
+    "default_hashtags": "#montreal #renovation",
     "brand_voice": "Local, practical, trustworthy Bricopro voice",
     "image_picker_prompt": "Help identify clear project photos, but let the user make the final selection.",
     "copy_prompt": "Write practical, local, trustworthy Bricopro social posts based only on the provided job details and selected images.",
@@ -1872,13 +1873,15 @@ def campaign_generate(campaign_id: int, _: User = Depends(auth_user), db: Sessio
     c = db.query(Campaign).filter(Campaign.id == campaign_id).first()
     if not c:
         raise HTTPException(404, "Campaign not found")
+    social_cfg = _social_settings_map(db)
+    default_hashtags = social_cfg.get("default_hashtags", "#montreal #renovation")
     d = ContentDraft(
         title=f"{c.name} — draft",
         platform="facebook",
         service_category=c.service_category,
         body=c.message or f"Campagne {c.name} — {c.service_category}",
         short_body=(c.message or c.name)[:120],
-        hashtags="#montreal #bricopro",
+        hashtags=default_hashtags,
         status="draft_generated",
         campaign_id=c.id,
     )
