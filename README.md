@@ -21,7 +21,7 @@ Bricopro HQ is a unified internal dashboard that centralizes daily business info
 | Module | Purpose |
 |--------|---------|
 | **Dashboard** | Live overview: integrations, widgets, quick links |
-| **Social Studio** | Generate content, manage campaigns, publishing queue, and process media queues — all in one place |
+| **Social Studio** | Generate content, manage campaigns, and schedule publishing — all in one place |
 | **KPI Tracking** | Record and summarise post and ad performance (spend, leads, clicks, CPL) |
 | **Settings** | Integration credentials, AI provider config, Social Studio defaults |
 
@@ -33,7 +33,6 @@ Bricopro HQ is a unified internal dashboard that centralizes daily business info
 | Image Generation | AI-assisted image creation and upload to Immich |
 | Campaigns | Seasonal and service-based marketing campaigns |
 | Publishing Queue | Kanban / calendar / list view for content drafts |
-| Processing Queues | Review pending photos (Immich) and documents (Paperless) |
 
 ---
 
@@ -312,7 +311,7 @@ Or in Unraid GUI: click the `bricoprohq` container → **Force Update**.
 - [x] Runs self-hosted in Docker
 - [x] Shows a useful main business dashboard
 - [x] Displays upcoming calendar/job information (via configurable connectors)
-- [x] Displays pending Immich/Paperless queues (Processing Queues tab in Social Studio)
+- [x] Dashboard widgets show pending Immich/Paperless queue counts
 - [x] Provides editable quick links to important tools
 - [x] Generates AI social content packs
 - [x] Saves generated content as drafts

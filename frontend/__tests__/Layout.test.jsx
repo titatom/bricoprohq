@@ -25,11 +25,10 @@ describe('Layout sidebar', () => {
     expect(screen.getByRole('link', { name: /settings/i })).toBeInTheDocument();
   });
 
-  it('does not expose direct nav links to /queues, /publishing, or /campaigns', () => {
+  it('does not expose direct nav links to standalone sub-section routes', () => {
     render(<Layout><div>content</div></Layout>);
     const links = screen.getAllByRole('link');
     const hrefs = links.map((l) => l.getAttribute('href'));
-    expect(hrefs).not.toContain('/queues');
     expect(hrefs).not.toContain('/publishing');
     expect(hrefs).not.toContain('/campaigns');
   });
