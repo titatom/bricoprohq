@@ -60,6 +60,14 @@ const QUICK_LINK_LOGO_DOMAINS = {
   canva: 'canva.com',
 };
 
+// Direct branded icon URLs for well-known services where the favicon API
+// returns a generic icon instead of the recognisable product logo.
+const WELL_KNOWN_ICON_URLS = {
+  'google calendar': 'https://www.gstatic.com/images/branding/product/2x/calendar_2020q4_48dp.png',
+  'gmail': 'https://www.gstatic.com/images/branding/product/2x/gmail_2020q4_48dp.png',
+  'google business': 'https://www.gstatic.com/images/branding/product/2x/google_my_business_2020q4_48dp.png',
+};
+
 function logoDomainFor(link) {
   const knownDomain = QUICK_LINK_LOGO_DOMAINS[link.title.toLowerCase()];
   if (knownDomain) return knownDomain;
@@ -71,6 +79,8 @@ function logoDomainFor(link) {
 }
 
 function logoUrlFor(link) {
+  const wellKnown = WELL_KNOWN_ICON_URLS[link.title.toLowerCase()];
+  if (wellKnown) return wellKnown;
   return `https://www.google.com/s2/favicons?domain=${logoDomainFor(link)}&sz=64`;
 }
 
@@ -262,8 +272,11 @@ function WidgetSettingsModal({ source, settings, onClose, onSave }) {
 
 function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading, onConfigure, isPaperlessGpt = false }) {
   const docs = isPaperlessGpt ? (data?.documents || []) : (data?.recent_documents || []);
-  const stats = data?.stats || {};
-  const health = data?.health || {};
+  // stats is null when the endpoint failed, {} when reachable but empty, or an object with keys
+  const stats = isPaperlessGpt ? (data?.stats ?? null) : (data?.stats || {});
+  const health = isPaperlessGpt ? (data?.health ?? null) : (data?.health || {});
+  const statsError = data?.stats_error || null;
+  const healthError = data?.health_error || null;
 
   return (
     <div className="card flex flex-col gap-3">
@@ -272,13 +285,29 @@ function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading,
         <p className="text-sm text-red-500">Integration not connected. Configure in Settings.</p>
       ) : isPaperlessGpt ? (
         <div className="space-y-3">
-          {health.service && (
+          {/* Health status */}
+          {health !== null ? (
+            health.service ? (
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${health.ok ? 'bg-green-500' : 'bg-red-400'}`}></span>
+                <span className="text-xs text-gray-500">{health.service} {health.ok ? 'online' : 'unreachable'}</span>
+              </div>
+            ) : null
+          ) : (
             <div className="flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full ${health.ok ? 'bg-green-500' : 'bg-red-400'}`}></span>
-              <span className="text-xs text-gray-500">{health.service} {health.ok ? 'online' : 'unreachable'}</span>
+              <span className="w-2 h-2 rounded-full flex-shrink-0 bg-yellow-400"></span>
+              <span className="text-xs text-yellow-700">Health check unavailable</span>
             </div>
           )}
-          {Object.keys(stats).length > 0 && (
+
+          {/* Stats section */}
+          {stats === null ? (
+            <div className="rounded-lg bg-yellow-50 border border-yellow-100 p-3">
+              <p className="text-xs font-medium text-yellow-800">Stats endpoint not available</p>
+              <p className="text-xs text-yellow-700 mt-0.5">The BricoproHQ plugin may not be installed on your Paperless-GPT server.</p>
+              {statsError && <p className="text-xs text-yellow-600 mt-1 font-mono break-all">{statsError}</p>}
+            </div>
+          ) : stats && Object.keys(stats).length > 0 ? (
             <div className="grid grid-cols-2 gap-2">
               {Object.entries(stats).map(([key, value]) => (
                 <div key={key} className="rounded-lg bg-gray-50 border border-gray-100 p-2.5">
@@ -287,10 +316,14 @@ function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading,
                 </div>
               ))}
             </div>
+          ) : (
+            <p className="text-xs text-gray-400">No stats yet.</p>
           )}
-          {docs.length > 0 && (
+
+          {/* Documents */}
+          {docs.length > 0 ? (
             <div className="space-y-2">
-              <p className="text-xs text-gray-400">{data?.count ?? docs.length} documents</p>
+              <p className="text-xs text-gray-400 font-medium">{data?.count ?? docs.length} document{(data?.count ?? docs.length) !== 1 ? 's' : ''} indexed</p>
               {docs.slice(0, 3).map((doc) => (
                 <a
                   key={doc.id || doc.title}
@@ -304,9 +337,10 @@ function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading,
                 </a>
               ))}
             </div>
-          )}
-          {!Object.keys(stats).length && docs.length === 0 && (
-            <p className="text-sm text-gray-500">No data from Paperless-GPT yet.</p>
+          ) : (
+            stats === null
+              ? <p className="text-xs text-gray-400">No documents retrieved — check server setup.</p>
+              : <p className="text-sm text-gray-500">No documents indexed yet.</p>
           )}
         </div>
       ) : docs.length > 0 ? (
@@ -333,6 +367,183 @@ function PaperlessWidget({ title, icon, status, stale, data, onRefresh, loading,
     </div>
   );
 }
+
+// ── Google Calendar Widget ────────────────────────────────────────────────────
+
+const GCAL_EVENT_COLORS = [
+  'bg-blue-500', 'bg-purple-500', 'bg-green-500', 'bg-orange-500', 'bg-pink-500',
+];
+
+function gcalEventColor(summary = '') {
+  let hash = 0;
+  for (let i = 0; i < summary.length; i++) hash = (hash * 31 + summary.charCodeAt(i)) | 0;
+  return GCAL_EVENT_COLORS[Math.abs(hash) % GCAL_EVENT_COLORS.length];
+}
+
+function gcalFormatTime(isoString) {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  if (isNaN(d)) return '';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function gcalFormatDateRange(start, end) {
+  if (!start) return '';
+  const s = new Date(start);
+  const e = end ? new Date(end) : null;
+  const dateStr = s.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+  const startTime = gcalFormatTime(start);
+  const endTime = e ? gcalFormatTime(end) : '';
+  if (!startTime) return dateStr;
+  return `${dateStr}, ${startTime}${endTime ? ` – ${endTime}` : ''}`;
+}
+
+function GoogleCalendarEventPopover({ event, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-sm bg-white rounded-2xl shadow-2xl border border-gray-100 p-5 space-y-3"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="font-semibold text-gray-900 leading-snug">{event.summary}</h3>
+          <button className="text-gray-400 hover:text-gray-600 flex-shrink-0 text-lg leading-none" onClick={onClose} aria-label="Close">×</button>
+        </div>
+        <p className="text-sm text-gray-500">{gcalFormatDateRange(event.start, event.end)}</p>
+        {event.location && (
+          <p className="text-sm text-gray-600 flex items-start gap-1.5">
+            <span className="text-gray-400 mt-0.5">📍</span>
+            <span>{event.location}</span>
+          </p>
+        )}
+        {event.description && (
+          <p className="text-sm text-gray-600 line-clamp-4 whitespace-pre-line">{event.description}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function GoogleCalendarWidget({ title, icon, status, stale, data, onRefresh, loading, onConfigure }) {
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [selectedEvent, setSelectedEvent] = useState(null);
+
+  const events = data?.upcoming_events || [];
+
+  // Build the 7-day grid for the displayed week
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const daysFromMonday = today.getDay() === 0 ? 6 : today.getDay() - 1; // Mon=0 … Sun=6
+  const weekStart = new Date(today);
+  weekStart.setDate(today.getDate() - daysFromMonday + weekOffset * 7);
+
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(weekStart);
+    d.setDate(weekStart.getDate() + i);
+    return d;
+  });
+
+  const isoDate = (d) => d.toISOString().slice(0, 10);
+
+  const eventsForDay = (day) => {
+    const dayStr = isoDate(day);
+    return events.filter((ev) => {
+      const evStart = ev.start ? ev.start.slice(0, 10) : null;
+      return evStart === dayStr;
+    });
+  };
+
+  const weekLabel = () => {
+    const end = new Date(days[6]);
+    const opts = { month: 'short', day: 'numeric' };
+    if (days[0].getMonth() === end.getMonth()) {
+      return `${days[0].toLocaleDateString([], { month: 'long' })} ${days[0].getDate()}–${end.getDate()}`;
+    }
+    return `${days[0].toLocaleDateString([], opts)} – ${end.toLocaleDateString([], opts)}`;
+  };
+
+  const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  return (
+    <div className="card flex flex-col gap-3">
+      <WidgetHeader title={title} icon={icon} status={status} stale={stale} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />
+
+      {status === 'not_connected' ? (
+        <p className="text-sm text-red-500">Integration not connected. Configure in Settings.</p>
+      ) : (
+        <>
+          {/* Week navigation */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1">
+              <button
+                className="w-7 h-7 rounded-lg border border-gray-200 hover:bg-gray-50 flex items-center justify-center text-gray-500 text-sm transition-colors"
+                onClick={() => setWeekOffset((o) => o - 1)}
+                aria-label="Previous week"
+              >‹</button>
+              <button
+                className="w-7 h-7 rounded-lg border border-gray-200 hover:bg-gray-50 flex items-center justify-center text-gray-500 text-sm transition-colors"
+                onClick={() => setWeekOffset((o) => o + 1)}
+                aria-label="Next week"
+              >›</button>
+            </div>
+            <span className="text-xs font-medium text-gray-600">{weekLabel()}</span>
+            {weekOffset !== 0 && (
+              <button
+                className="text-xs text-brand-600 hover:text-brand-800 font-medium"
+                onClick={() => setWeekOffset(0)}
+              >Today</button>
+            )}
+            {weekOffset === 0 && <span className="w-10" />}
+          </div>
+
+          {/* 7-day grid */}
+          <div className="grid grid-cols-7 gap-px bg-gray-100 rounded-xl overflow-hidden border border-gray-100">
+            {days.map((day, idx) => {
+              const isToday = isoDate(day) === isoDate(new Date());
+              const dayEvents = eventsForDay(day);
+              return (
+                <div key={idx} className={`flex flex-col bg-white min-h-[90px] ${isToday ? 'bg-brand-50' : ''}`}>
+                  {/* Day header */}
+                  <div className={`px-1 pt-1.5 pb-1 text-center border-b border-gray-100 ${isToday ? 'bg-brand-100' : ''}`}>
+                    <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">{DAY_LABELS[idx]}</p>
+                    <p className={`text-sm font-bold leading-tight ${isToday ? 'text-brand-700' : 'text-gray-700'}`}>{day.getDate()}</p>
+                  </div>
+                  {/* Events */}
+                  <div className="flex flex-col gap-0.5 p-0.5 flex-1">
+                    {dayEvents.map((ev, evIdx) => (
+                      <button
+                        key={evIdx}
+                        className={`w-full text-left rounded px-1 py-0.5 text-white text-[10px] leading-tight truncate ${gcalEventColor(ev.summary)} hover:opacity-80 transition-opacity`}
+                        onClick={() => setSelectedEvent(ev)}
+                        title={ev.summary}
+                      >
+                        {ev.all_day ? (
+                          <span>{ev.summary}</span>
+                        ) : (
+                          <span>{gcalFormatTime(ev.start)} {ev.summary}</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {events.length === 0 && (
+            <p className="text-sm text-gray-400 text-center py-2">No events this week.</p>
+          )}
+        </>
+      )}
+
+      {selectedEvent && (
+        <GoogleCalendarEventPopover event={selectedEvent} onClose={() => setSelectedEvent(null)} />
+      )}
+    </div>
+  );
+}
+
+// ── Immich ────────────────────────────────────────────────────────────────────
 
 function ImmichThumbnail({ asset }) {
   const { apiFetch } = useAuth();
@@ -586,6 +797,9 @@ function JobberWidget({ title, icon, status, stale, data, settings, onRefresh, l
 }
 
 function WidgetCard({ source, title, icon, status, stale, data, settings, onRefresh, loading, onConfigure }) {
+  if (source === 'google_calendar') {
+    return <GoogleCalendarWidget title={title} icon={icon} status={status} stale={stale} data={data} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />;
+  }
   if (source === 'jobber') {
     return <JobberWidget title={title} icon={icon} status={status} stale={stale} data={data} settings={settings} onRefresh={onRefresh} loading={loading} onConfigure={onConfigure} />;
   }
@@ -750,44 +964,85 @@ function normalizeDashboardHidden(rawHidden) {
   return new Set(Array.isArray(parsed) ? parsed.filter((id) => DEFAULT_DASHBOARD_ORDER.includes(id)) : []);
 }
 
+function StatusPill({ label, count, color = 'gray' }) {
+  if (!count) return null;
+  const colors = {
+    gray: 'bg-gray-100 text-gray-600',
+    orange: 'bg-orange-100 text-orange-700',
+    red: 'bg-red-100 text-red-700',
+    yellow: 'bg-yellow-100 text-yellow-700',
+    blue: 'bg-blue-100 text-blue-700',
+    green: 'bg-green-100 text-green-700',
+  };
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${colors[color] || colors.gray}`}>
+      <span className="font-bold">{count}</span> {label}
+    </span>
+  );
+}
+
 function DashboardStats({ dashboard, jobberStats }) {
   const integrationValues = SOURCES.map((src) => dashboard[src] || {});
   const connectedCount = integrationValues.filter((item) => item.status === 'ok').length;
   const staleCount = integrationValues.filter((item) => item.stale).length;
-  const stats = [
-    {
-      label: 'Upcoming jobs',
-      value: jobberStats.upcoming_unscheduled_count ?? 0,
-      detail: 'unscheduled / action needed',
-      secondary: jobberStats.action_required_count ? `${jobberStats.action_required_count} action required` : '',
-    },
-    {
-      label: 'Open requests',
-      value: jobberStats.new_requests_count ?? 0,
-      detail: 'new requests to review',
-    },
-    {
-      label: 'Pending invoices',
-      value: jobberStats.pending_invoice_count ?? 0,
-      detail: 'late + awaiting payment',
-    },
-    {
-      label: 'Connected services',
-      value: `${connectedCount}/${SOURCES.length}`,
-      detail: staleCount ? `${staleCount} stale` : 'all current',
-    },
-  ];
+
+  const jobsByStatus = jobberStats.jobs_by_status || {};
+  const requestsByStatus = jobberStats.requests_by_status || {};
+  const invoicesByStatus = jobberStats.invoices_by_status || {};
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-6">
-      {stats.map((stat) => (
-        <div key={stat.label} className="rounded-2xl bg-white border border-gray-100 p-4 shadow-sm">
-          <p className="text-xs font-medium uppercase tracking-wide text-gray-400">{stat.label}</p>
-          <p className="text-3xl font-black text-gray-900 mt-2">{stat.value}</p>
-          <p className="text-xs text-gray-500 mt-1">{stat.detail}</p>
-          {stat.secondary && <p className="text-xs text-orange-500 mt-0.5">{stat.secondary}</p>}
+      {/* Upcoming jobs */}
+      <div className="rounded-2xl bg-white border border-gray-100 p-4 shadow-sm">
+        <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Upcoming jobs</p>
+        <p className="text-3xl font-black text-gray-900 mt-2">{jobberStats.upcoming_unscheduled_count ?? 0}</p>
+        <div className="flex flex-wrap gap-1 mt-2">
+          <StatusPill label="coming up" count={jobsByStatus.coming_up} color="blue" />
+          <StatusPill label="action required" count={jobsByStatus.action_required} color="orange" />
+          <StatusPill label="to invoice" count={jobsByStatus.requires_invoicing} color="yellow" />
+          {!jobsByStatus.coming_up && !jobsByStatus.action_required && !jobsByStatus.requires_invoicing && (
+            <span className="text-xs text-gray-400">no active jobs</span>
+          )}
         </div>
-      ))}
+      </div>
+
+      {/* Open requests */}
+      <div className="rounded-2xl bg-white border border-gray-100 p-4 shadow-sm">
+        <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Open requests</p>
+        <p className="text-3xl font-black text-gray-900 mt-2">{jobberStats.new_requests_count ?? 0}</p>
+        <div className="flex flex-wrap gap-1 mt-2">
+          <StatusPill label="new" count={requestsByStatus.new} color="orange" />
+          <StatusPill label="pending" count={requestsByStatus.pending} color="blue" />
+          {!requestsByStatus.new && !requestsByStatus.pending && (
+            <span className="text-xs text-gray-400">no open requests</span>
+          )}
+        </div>
+      </div>
+
+      {/* Pending invoices */}
+      <div className="rounded-2xl bg-white border border-gray-100 p-4 shadow-sm">
+        <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Pending invoices</p>
+        <p className="text-3xl font-black text-gray-900 mt-2">{jobberStats.pending_invoice_count ?? 0}</p>
+        <div className="flex flex-wrap gap-1 mt-2">
+          <StatusPill label="late" count={invoicesByStatus.late} color="red" />
+          <StatusPill label="awaiting payment" count={invoicesByStatus.awaiting_payment} color="yellow" />
+          <StatusPill label="sent" count={invoicesByStatus.sent} color="blue" />
+          {!invoicesByStatus.late && !invoicesByStatus.awaiting_payment && !invoicesByStatus.sent && (
+            <span className="text-xs text-gray-400">no pending invoices</span>
+          )}
+        </div>
+      </div>
+
+      {/* Connected services */}
+      <div className="rounded-2xl bg-white border border-gray-100 p-4 shadow-sm">
+        <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Connected services</p>
+        <p className="text-3xl font-black text-gray-900 mt-2">{connectedCount}<span className="text-lg font-semibold text-gray-400">/{SOURCES.length}</span></p>
+        <div className="flex flex-wrap gap-1 mt-2">
+          {staleCount > 0 && <StatusPill label="stale" count={staleCount} color="yellow" />}
+          {connectedCount === SOURCES.length && <span className="text-xs text-green-600 font-medium">all current</span>}
+          {connectedCount === 0 && <span className="text-xs text-gray-400">none connected</span>}
+        </div>
+      </div>
     </div>
   );
 }
