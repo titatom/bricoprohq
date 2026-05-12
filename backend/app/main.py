@@ -811,6 +811,14 @@ def update_integration(
     if provider == "paperless-gpt":
         existing_config = {"api_key": existing_config.get("api_key", "")}
 
+    # If a raw access token was pasted into the config (supported for instagram),
+    # move it to oauth_access_token rather than persisting it in config_json.
+    manual_token = (existing_config.pop("access_token", "") or "").strip()
+    if manual_token and not all(c == "•" for c in manual_token):
+        i.oauth_access_token = manual_token
+        i.status = "ok"
+        i.last_sync_at = datetime.now(timezone.utc)
+
     i.config_json = json.dumps(existing_config)
     db.add(i)
     db.commit()

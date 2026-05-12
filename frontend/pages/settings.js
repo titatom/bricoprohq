@@ -118,6 +118,7 @@ const INTEGRATION_FIELDS = {
     fields: [
       { key: 'client_id',     label: 'Instagram App ID (optional)',     placeholder: 'Leave blank to use Meta App ID above', help: 'Only needed if your Instagram Login product uses a different App ID than your Meta / Facebook Login app. Found at developers.facebook.com → Your App → Settings → Basic → App ID.' },
       { key: 'client_secret', label: 'Instagram App Secret (optional)', placeholder: 'Leave blank to use Meta App Secret above', type: 'password', help: 'Corresponding App Secret for the Instagram App ID above.' },
+      { key: 'access_token',  label: 'Access Token (optional)',         placeholder: 'Paste a token to connect without OAuth', type: 'password', help: 'If you generated an Instagram User Access Token in the Meta developer portal or Graph API Explorer, paste it here and Save. The field clears after saving — the token is stored securely. You can still use the Connect button above instead.' },
     ],
   },
   jobber: {
