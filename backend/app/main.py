@@ -9,7 +9,7 @@ from urllib.parse import urlencode, urlparse
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 from jose import JWTError
 
@@ -684,6 +684,43 @@ def oauth_callback(
     db.commit()
 
     return RedirectResponse(f"{frontend_base}/settings?oauth_connected={provider}")
+
+
+@app.get("/integrations/instagram/webhook")
+def instagram_webhook_verify(
+    hub_mode: str | None = Query(None, alias="hub.mode"),
+    hub_verify_token: str | None = Query(None, alias="hub.verify_token"),
+    hub_challenge: str | None = Query(None, alias="hub.challenge"),
+):
+    """
+    Meta webhook verification endpoint for the Instagram product.
+
+    When you configure a Webhook Callback URL in the Meta developer portal
+    (Instagram product → Webhooks), Meta sends a GET request here with
+    hub.mode=subscribe, hub.verify_token, and hub.challenge.  We confirm the
+    verify token matches INSTAGRAM_WEBHOOK_VERIFY_TOKEN and echo the challenge.
+
+    This URL goes in Webhooks → Callback URL.
+    The OAuth redirect URI (/api/integrations/instagram/oauth/callback) goes
+    separately in Instagram Login → Valid OAuth Redirect URIs.
+    """
+    expected = os.getenv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN", "").strip()
+    if hub_mode == "subscribe" and hub_verify_token and expected and hub_verify_token == expected:
+        log.info("Instagram webhook verified successfully")
+        return PlainTextResponse(hub_challenge or "")
+    log.warning(
+        "Instagram webhook verification failed (mode=%s, token_match=%s)",
+        hub_mode,
+        hub_verify_token == expected if expected else "no token configured",
+    )
+    raise HTTPException(403, "Instagram webhook verification failed")
+
+
+@app.post("/integrations/instagram/webhook")
+async def instagram_webhook_receive(request: Request):
+    """Receive Instagram webhook event payloads (no-op placeholder)."""
+    log.info("Instagram webhook payload received")
+    return {"ok": True}
 
 
 @app.post("/integrations/{provider}/oauth/disconnect")
