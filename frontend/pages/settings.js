@@ -95,17 +95,29 @@ const INTEGRATION_FIELDS = {
     fields: [],
   },
   meta: {
-    label: 'Meta (Facebook & Instagram)',
+    label: 'Meta (Facebook Pages)',
     icon: '📘',
     logoDomain: 'facebook.com',
-    description: 'Connect your Facebook Page and Instagram Business account for publishing.',
+    description: 'Connect your Facebook Page for publishing. Enter your Meta App ID and Secret once — Instagram reuses these credentials.',
     authType: 'oauth',
     connectLabel: 'Connect with Meta',
     connectStyle: 'bg-[#1877F2] hover:bg-[#166FE5] border-[#1877F2]',
+    group: 'meta',
     fields: [
       { key: 'client_id',     label: 'App ID',     placeholder: 'Meta App ID from developers.facebook.com', help: 'developers.facebook.com → Your App → Settings → Basic → App ID' },
       { key: 'client_secret', label: 'App Secret', placeholder: 'App Secret from developers.facebook.com', type: 'password', help: 'developers.facebook.com → Your App → Settings → Basic → App Secret' },
     ],
+  },
+  instagram: {
+    label: 'Instagram',
+    icon: '📸',
+    logoDomain: 'instagram.com',
+    description: 'Connect your Instagram Professional account for publishing. Uses your Meta App ID and Secret from the Meta integration above.',
+    authType: 'oauth',
+    connectLabel: 'Connect with Instagram',
+    connectStyle: 'bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 border-purple-500',
+    group: 'meta',
+    fields: [],
   },
   jobber: {
     label: 'Jobber',
@@ -165,7 +177,7 @@ const INTEGRATION_FIELDS = {
 };
 
 const INTEGRATION_ORDER = [
-  'google_calendar', 'google_business', 'meta', 'jobber',
+  'google_calendar', 'google_business', 'meta', 'instagram', 'jobber',
   'immich', 'immich-gpt', 'paperless-gpt', 'paperless',
 ];
 

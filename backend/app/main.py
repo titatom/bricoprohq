@@ -96,7 +96,7 @@ log.info("CORS allowed_origins=%s allow_credentials=%s", _cors_origins, _cors_al
 
 Base.metadata.create_all(bind=_db_module.engine)
 
-SOURCES = ["google_calendar", "jobber", "immich", "immich-gpt", "paperless", "paperless-gpt", "meta", "google_business"]
+SOURCES = ["google_calendar", "jobber", "immich", "immich-gpt", "paperless", "paperless-gpt", "meta", "google_business", "instagram"]
 CACHE_TTL_MINUTES = 15
 PENDING_IMAGE_STATUSES = {"new", "pending_ai", "needs_review"}
 PENDING_DOC_STATUSES = {"new", "pending_ai", "needs_review", "missing_tags", "missing_correspondent", "missing_document_type"}
@@ -374,6 +374,10 @@ def _consume_oauth_state(state: str, expected_provider: str, db: Session) -> boo
 _SECRET_KEYS = {"api_key", "client_secret"}
 _GOOGLE_PROVIDERS = {"google_calendar", "google_business"}
 _GOOGLE_CANONICAL_PROVIDER = "google_calendar"
+# Instagram shares App ID / App Secret from the "meta" integration row.
+# Unlike Google, each provider stores its own independent access token.
+_META_PROVIDERS = {"meta", "instagram"}
+_META_CANONICAL_PROVIDER = "meta"
 
 # ── OAuth provider registry ────────────────────────────────────────────────────
 # Each entry describes how to build an authorization URL and exchange the code.
@@ -400,19 +404,38 @@ OAUTH_PROVIDERS: dict[str, dict] = {
     "meta": {
         "authorize_url": "https://www.facebook.com/v21.0/dialog/oauth",
         "token_url":     "https://graph.facebook.com/v21.0/oauth/access_token",
-        # Pages permissions: manage posts + read page insights; Instagram requires pages_show_list
-        # Instagram publishing uses the current Instagram Platform scopes (instagram_business_*)
+        # Facebook Login scopes for Page management; Instagram publishing uses the
+        # separate "instagram" provider below (Instagram API with Instagram Login).
         "scopes": [
             "pages_show_list",
             "pages_read_engagement",
             "pages_manage_posts",
-            "instagram_business_basic",
-            "instagram_business_content_publish",
             "business_management",
         ],
         "extra_params": {},
         # Meta does not use standard refresh tokens; we exchange for a long-lived token post-callback.
-        "long_lived_token": True,
+        # FB long-lived exchange: grant_type=fb_exchange_token, param name=fb_exchange_token
+        "long_lived_token":       True,
+        "long_lived_token_url":   "https://graph.facebook.com/v21.0/oauth/access_token",
+        "long_lived_grant":       "fb_exchange_token",
+        "long_lived_token_param": "fb_exchange_token",
+    },
+    # Instagram API with Instagram Login — uses instagram_business_* scopes and
+    # a separate authorization endpoint.  Credentials (App ID / Secret) are
+    # shared from the "meta" integration row via _META_PROVIDERS.
+    # IG long-lived exchange: grant_type=ig_exchange_token, param name=access_token
+    "instagram": {
+        "authorize_url": "https://api.instagram.com/oauth/authorize",
+        "token_url":     "https://api.instagram.com/oauth/access_token",
+        "scopes": [
+            "instagram_business_basic",
+            "instagram_business_content_publish",
+        ],
+        "extra_params": {},
+        "long_lived_token":       True,
+        "long_lived_token_url":   "https://graph.instagram.com/access_token",
+        "long_lived_grant":       "ig_exchange_token",
+        "long_lived_token_param": "access_token",
     },
 }
 
@@ -428,6 +451,10 @@ def _oauth_config_integration(provider: str, db: Session) -> Integration | None:
     """Return the integration row that owns OAuth client configuration."""
     if provider in _GOOGLE_PROVIDERS:
         canonical = db.query(Integration).filter(Integration.provider == _GOOGLE_CANONICAL_PROVIDER).first()
+        if canonical and canonical.config_json:
+            return canonical
+    if provider in _META_PROVIDERS:
+        canonical = db.query(Integration).filter(Integration.provider == _META_CANONICAL_PROVIDER).first()
         if canonical and canonical.config_json:
             return canonical
     return db.query(Integration).filter(Integration.provider == provider).first()
@@ -628,17 +655,20 @@ def oauth_callback(
     refresh_token = token_data.get("refresh_token", "")
     expires_in = token_data.get("expires_in", 3600)
 
-    # Meta does not use standard refresh tokens. Exchange the short-lived token
-    # (valid ~1 hour) for a long-lived token (~60 days) immediately.
-    if prov.get("long_lived_token") and access_token:
+    # Some providers (Meta, Instagram) do not use standard refresh tokens.
+    # Exchange the short-lived code token for a long-lived token immediately.
+    ll_url = prov.get("long_lived_token_url")
+    ll_grant = prov.get("long_lived_grant", "fb_exchange_token")
+    ll_token_param = prov.get("long_lived_token_param", ll_grant)
+    if prov.get("long_lived_token") and ll_url and access_token:
         try:
             ll_resp = httpx.get(
-                "https://graph.facebook.com/v21.0/oauth/access_token",
+                ll_url,
                 params={
-                    "grant_type": "fb_exchange_token",
+                    "grant_type": ll_grant,
                     "client_id": client_id,
                     "client_secret": client_secret,
-                    "fb_exchange_token": access_token,
+                    ll_token_param: access_token,
                 },
                 timeout=15,
             )
@@ -646,9 +676,9 @@ def oauth_callback(
             ll_data = ll_resp.json()
             access_token = ll_data.get("access_token", access_token)
             expires_in = ll_data.get("expires_in", 5183944)  # ~60 days default
-            log.info("Meta: short-lived token exchanged for long-lived token (expires_in=%s)", expires_in)
+            log.info("%s: short-lived token exchanged for long-lived token (expires_in=%s)", provider, expires_in)
         except Exception as exc:
-            log.warning("Meta long-lived token exchange failed (using short-lived): %s", exc)
+            log.warning("%s long-lived token exchange failed (using short-lived): %s", provider, exc)
 
     _store_oauth_tokens(provider, db, access_token, refresh_token, expires_in)
     db.commit()
