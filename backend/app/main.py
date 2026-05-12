@@ -454,6 +454,17 @@ def _oauth_config_integration(provider: str, db: Session) -> Integration | None:
         if canonical and canonical.config_json:
             return canonical
     if provider in _META_PROVIDERS:
+        # Use the provider's own row first (allows Instagram-specific App ID/Secret).
+        # Fall back to the meta row so the user only has to enter credentials once
+        # when both integrations share the same Meta app.
+        own = db.query(Integration).filter(Integration.provider == provider).first()
+        if own and own.config_json:
+            try:
+                own_cfg = json.loads(own.config_json)
+                if own_cfg.get("client_id") and own_cfg.get("client_secret"):
+                    return own
+            except Exception:
+                pass
         canonical = db.query(Integration).filter(Integration.provider == _META_CANONICAL_PROVIDER).first()
         if canonical and canonical.config_json:
             return canonical
