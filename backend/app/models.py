@@ -130,8 +130,28 @@ class ContentDraft(Base):
     status: Mapped[str] = mapped_column(String(100), default="draft_generated")
     planned_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     planned_time: Mapped[str] = mapped_column(String(10), default="")
+    # Social publishing tracking
+    platform_post_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    platform_account_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    publish_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class PostMetricSnapshot(Base):
+    """Time-series snapshots of platform metrics for a published draft."""
+    __tablename__ = "post_metric_snapshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    draft_id: Mapped[int] = mapped_column(ForeignKey("content_drafts.id"), index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    impressions: Mapped[int] = mapped_column(Integer, default=0)
+    reach: Mapped[int] = mapped_column(Integer, default=0)
+    clicks: Mapped[int] = mapped_column(Integer, default=0)
+    engagements: Mapped[int] = mapped_column(Integer, default=0)
+    reactions: Mapped[int] = mapped_column(Integer, default=0)
+    shares: Mapped[int] = mapped_column(Integer, default=0)
+    saves: Mapped[int] = mapped_column(Integer, default=0)
+
 
 class PostMetric(Base):
     __tablename__ = "post_metrics"
