@@ -96,6 +96,90 @@ log.info("CORS allowed_origins=%s allow_credentials=%s", _cors_origins, _cors_al
 
 Base.metadata.create_all(bind=_db_module.engine)
 
+
+def _sqlite_col_type(col) -> str:
+    """Return a SQLite-compatible type string for a SQLAlchemy column."""
+    from sqlalchemy import String, Text, Integer, Float, Boolean, DateTime, Date
+    t = type(col.type)
+    if issubclass(t, String):
+        length = getattr(col.type, "length", None)
+        return f"VARCHAR({length})" if length else "TEXT"
+    if issubclass(t, Text):
+        return "TEXT"
+    if issubclass(t, Boolean):
+        return "INTEGER"
+    if issubclass(t, Integer):
+        return "INTEGER"
+    if issubclass(t, Float):
+        return "REAL"
+    if issubclass(t, DateTime):
+        return "DATETIME"
+    if issubclass(t, Date):
+        return "DATE"
+    return "TEXT"
+
+
+def _sqlite_alter_default(col) -> str:
+    """
+    Return the DEFAULT clause for ALTER TABLE ADD COLUMN.
+    SQLite requires a non-null DEFAULT when adding a NOT NULL column so that
+    existing rows receive a valid value.
+    """
+    if col.nullable:
+        return ""
+    from sqlalchemy import String, Text, Integer, Float, Boolean, DateTime, Date
+    t = type(col.type)
+    if issubclass(t, (String, Text)):
+        return " DEFAULT ''"
+    if issubclass(t, (Integer, Boolean)):
+        return " DEFAULT 0"
+    if issubclass(t, Float):
+        return " DEFAULT 0"
+    if issubclass(t, DateTime):
+        return " DEFAULT CURRENT_TIMESTAMP"
+    if issubclass(t, Date):
+        return " DEFAULT (date('now'))"
+    return " DEFAULT ''"
+
+
+def _migrate_db() -> None:
+    """
+    Add any model columns that are absent from the live database tables.
+
+    SQLAlchemy's create_all() only creates entirely missing tables — it never
+    alters existing ones.  Any column added to a model after a user's initial
+    install will be absent from their live database, causing INSERT failures
+    (HTTP 500) the next time that table is written to.
+
+    This function is idempotent and safe on every startup.
+    It only acts on SQLite (the app's default); for other engines create_all
+    handles full schema creation on a fresh database.
+    """
+    from sqlalchemy import inspect, text
+
+    if not str(_db_module.engine.url).startswith("sqlite"):
+        return
+
+    inspector = inspect(_db_module.engine)
+    existing_tables = set(inspector.get_table_names())
+
+    with _db_module.engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue  # brand-new table — create_all already handled it
+            existing_cols = {row["name"] for row in inspector.get_columns(table.name)}
+            for col in table.columns:
+                if col.key in existing_cols:
+                    continue
+                col_type = _sqlite_col_type(col)
+                default_clause = _sqlite_alter_default(col)
+                ddl = f'ALTER TABLE "{table.name}" ADD COLUMN {col.key} {col_type}{default_clause}'
+                log.info("DB migration: %s", ddl)
+                conn.execute(text(ddl))
+
+
+_migrate_db()
+
 SOURCES = ["google_calendar", "jobber", "immich", "immich-gpt", "paperless", "paperless-gpt", "meta", "google_business", "instagram"]
 CACHE_TTL_MINUTES = 15
 PENDING_IMAGE_STATUSES = {"new", "pending_ai", "needs_review"}
@@ -1980,10 +2064,17 @@ def _draft_payload(d: ContentDraft) -> dict:
 
 @app.post("/publishing/drafts")
 def create_draft(payload: DraftIn, _: User = Depends(auth_user), db: Session = Depends(get_db)):
-    pd = date.fromisoformat(payload.planned_date) if payload.planned_date else None
-    d = ContentDraft(**payload.model_dump(exclude={"planned_date"}), planned_date=pd)
-    db.add(d); db.commit(); db.refresh(d)
-    return {"id": d.id}
+    try:
+        pd = date.fromisoformat(payload.planned_date) if payload.planned_date else None
+        d = ContentDraft(**payload.model_dump(exclude={"planned_date"}), planned_date=pd)
+        db.add(d)
+        db.commit()
+        db.refresh(d)
+        return {"id": d.id}
+    except Exception as exc:
+        db.rollback()
+        log.error("create_draft failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Could not save draft: {exc}")
 
 
 @app.put("/publishing/drafts/{draft_id}")
