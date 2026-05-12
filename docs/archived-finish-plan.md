@@ -1,4 +1,9 @@
-# Milestone 1–6 Finish Plan
+# Milestone 1–6 Finish Plan (Archived)
+
+> This document is superseded by the current state of the app. All phases described here are
+> now complete. See `README.md` for the up-to-date acceptance checklist and feature overview.
+
+---
 
 ## Goal
 Move from scaffold to production-ready milestone completion with acceptance coverage.

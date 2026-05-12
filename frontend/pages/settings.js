@@ -188,6 +188,7 @@ const SS_DEFAULTS = {
   default_tone: 'local',
   default_city: 'Montréal',
   default_cta: 'request_quote',
+  default_hashtags: '#montreal #renovation',
   brand_voice: 'Friendly, local, practical, trustworthy Bricopro expert.',
   image_picker_prompt: 'Pick clear project photos to provide context for AI copy and to use in the post.',
   copy_prompt: 'Write practical, local, trustworthy Bricopro social posts based only on the provided job details and selected images.',
@@ -800,6 +801,16 @@ function SocialStudioSettingsInline({ apiFetch }) {
             <label className="label">Brand voice</label>
             <textarea className="input h-24 resize-y" value={form.brand_voice} onChange={(e) => setForm({ ...form, brand_voice: e.target.value })} />
           </div>
+          <div>
+            <label className="label">Default hashtags</label>
+            <input
+              className="input"
+              value={form.default_hashtags}
+              onChange={(e) => setForm({ ...form, default_hashtags: e.target.value })}
+              placeholder="#montreal #renovation"
+            />
+            <p className="text-xs text-gray-400 mt-1">Used as fallback hashtags when generating campaign drafts without AI.</p>
+          </div>
         </div>
       </section>
 
@@ -1036,12 +1047,31 @@ export default function SettingsPage() {
       </div>
 
       {activeTab === 'general' && (
-        <section className="card">
-          <h3 className="font-semibold text-gray-800">General</h3>
-          <p className="text-sm text-gray-500 mt-1">
-            Core app settings live here. More general preferences will appear in this tab as they are added.
-          </p>
-        </section>
+        <div className="space-y-4">
+          <section className="card">
+            <h3 className="font-semibold text-gray-800">General</h3>
+            <p className="text-sm text-gray-500 mt-1">
+              Core app settings. Configure AI provider and integration credentials in the tabs above.
+            </p>
+          </section>
+
+          <section className="card">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 flex-shrink-0 w-8 h-8 rounded-lg bg-yellow-50 border border-yellow-100 flex items-center justify-center text-yellow-500">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              </div>
+              <div>
+                <h4 className="font-semibold text-gray-800 text-sm">Scheduled background jobs</h4>
+                <p className="text-sm text-gray-500 mt-1">
+                  Automatic background tasks (scheduled integration refresh, stale-cache sweeps, and
+                  async AI content generation) are planned but not yet active. All data refreshes
+                  currently happen on demand — use the <strong>Reload</strong> buttons in each section
+                  to fetch the latest information.
+                </p>
+              </div>
+            </div>
+          </section>
+        </div>
       )}
 
       {activeTab === 'ai' && (

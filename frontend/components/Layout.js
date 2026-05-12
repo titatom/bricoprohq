@@ -1,12 +1,19 @@
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useAuth } from '../context/AuthContext';
+import {
+  HomeIcon,
+  SparklesIcon,
+  ChartBarIcon,
+  Cog6ToothIcon,
+  ArrowRightOnRectangleIcon,
+} from '@heroicons/react/24/outline';
 
 const NAV = [
-  { href: '/', label: 'Dashboard', icon: '🏠' },
-  { href: '/social-studio', label: 'Social Studio', icon: '✨' },
-  { href: '/kpi', label: 'KPI', icon: '📈' },
-  { href: '/settings', label: 'Settings', icon: '⚙️' },
+  { href: '/', label: 'Dashboard', Icon: HomeIcon },
+  { href: '/social-studio', label: 'Social Studio', Icon: SparklesIcon },
+  { href: '/kpi', label: 'KPI', Icon: ChartBarIcon },
+  { href: '/settings', label: 'Settings', Icon: Cog6ToothIcon },
 ];
 
 function BrandMark() {
@@ -38,7 +45,7 @@ export default function Layout({ children }) {
         </div>
 
         <nav className="flex-1 py-4 overflow-y-auto space-y-2">
-          {NAV.map(({ href, label, icon }) => {
+          {NAV.map(({ href, label, Icon }) => {
             const active = router.pathname === href;
             return (
               <Link
@@ -46,13 +53,13 @@ export default function Layout({ children }) {
                 href={href}
                 aria-label={label}
                 title={label}
-                className={`mx-auto w-12 h-12 rounded-2xl flex items-center justify-center text-xl transition-colors ${
+                className={`mx-auto w-12 h-12 rounded-2xl flex items-center justify-center transition-colors ${
                   active
                     ? 'bg-accent-500 text-white shadow-lg shadow-black/10'
                     : 'text-brand-100 hover:bg-brand-700 hover:text-white'
                 }`}
               >
-                <span className="text-base">{icon}</span>
+                <Icon className="w-5 h-5" />
               </Link>
             );
           })}
@@ -65,7 +72,7 @@ export default function Layout({ children }) {
             title={`Sign out ${user?.email || ''}`}
             aria-label="Sign out"
           >
-            →
+            <ArrowRightOnRectangleIcon className="w-5 h-5" />
           </button>
         </div>
       </aside>

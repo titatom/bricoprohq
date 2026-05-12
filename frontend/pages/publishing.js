@@ -432,18 +432,24 @@ export default function PublishingPage() {
   const [calendar, setCalendar] = useState([]);
   const [filterPlatform, setFilterPlatform] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [loadError, setLoadError] = useState(null);
 
   const loadDrafts = useCallback(async () => {
     const params = new URLSearchParams();
     if (filterPlatform) params.set('platform', filterPlatform);
     if (filterStatus) params.set('status', filterStatus);
-    const r = await apiFetch(`/publishing/drafts?${params}`);
-    if (r.ok) setDrafts(await r.json());
+    try {
+      const r = await apiFetch(`/publishing/drafts?${params}`);
+      if (r.ok) { setDrafts(await r.json()); setLoadError(null); }
+      else setLoadError('Failed to load drafts. Check that the backend is reachable.');
+    } catch { setLoadError('Failed to load drafts. Check that the backend is reachable.'); }
   }, [apiFetch, filterPlatform, filterStatus]);
 
   const loadCalendar = useCallback(async () => {
-    const r = await apiFetch('/publishing/calendar');
-    if (r.ok) setCalendar(await r.json());
+    try {
+      const r = await apiFetch('/publishing/calendar');
+      if (r.ok) setCalendar(await r.json());
+    } catch {}
   }, [apiFetch]);
 
   useEffect(() => { if (isLoggedIn) { loadDrafts(); loadCalendar(); } }, [isLoggedIn, filterPlatform, filterStatus]); // eslint-disable-line
@@ -459,6 +465,13 @@ export default function PublishingPage() {
     <div className="p-6">
       <h2 className="text-2xl font-bold text-gray-900 mb-1">Publishing Queue</h2>
       <p className="text-gray-500 text-sm mb-6">Manage, schedule, and track your content across platforms.</p>
+
+      {loadError && (
+        <div className="mb-4 rounded-lg bg-red-50 border border-red-100 px-4 py-2.5 text-sm text-red-700 flex items-center justify-between">
+          <span>{loadError}</span>
+          <button className="text-xs opacity-70 hover:opacity-100 ml-3" onClick={loadDrafts}>Retry</button>
+        </div>
+      )}
 
       {/* Toolbar */}
       <div className="flex flex-wrap gap-2 items-center mb-4">

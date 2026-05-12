@@ -113,21 +113,29 @@ export default function QueuesPage() {
   const [imgSource, setImgSource] = useState('');
   const [docStatus, setDocStatus] = useState('');
   const [docSource, setDocSource] = useState('');
+  const [imgError, setImgError] = useState(null);
+  const [docError, setDocError] = useState(null);
 
   const loadImages = useCallback(async () => {
     const params = new URLSearchParams();
     if (imgStatus) params.set('status', imgStatus);
     if (imgSource) params.set('source', imgSource);
-    const r = await apiFetch(`/queues/images?${params}`);
-    if (r.ok) setImages(await r.json());
+    try {
+      const r = await apiFetch(`/queues/images?${params}`);
+      if (r.ok) { setImages(await r.json()); setImgError(null); }
+      else setImgError('Failed to load image queue. Check that the backend is reachable.');
+    } catch { setImgError('Failed to load image queue. Check that the backend is reachable.'); }
   }, [apiFetch, imgStatus, imgSource]);
 
   const loadDocs = useCallback(async () => {
     const params = new URLSearchParams();
     if (docStatus) params.set('status', docStatus);
     if (docSource) params.set('source', docSource);
-    const r = await apiFetch(`/queues/documents?${params}`);
-    if (r.ok) setDocs(await r.json());
+    try {
+      const r = await apiFetch(`/queues/documents?${params}`);
+      if (r.ok) { setDocs(await r.json()); setDocError(null); }
+      else setDocError('Failed to load document queue. Check that the backend is reachable.');
+    } catch { setDocError('Failed to load document queue. Check that the backend is reachable.'); }
   }, [apiFetch, docStatus, docSource]);
 
   useEffect(() => { if (isLoggedIn) loadImages(); }, [isLoggedIn, imgStatus, imgSource]); // eslint-disable-line
@@ -180,6 +188,12 @@ export default function QueuesPage() {
       {/* Image queue */}
       {tab === 'images' && (
         <div className="card">
+          {imgError && (
+            <div className="mb-4 rounded-lg bg-red-50 border border-red-100 px-4 py-2.5 text-sm text-red-700 flex items-center justify-between">
+              <span>{imgError}</span>
+              <button className="text-xs opacity-70 hover:opacity-100 ml-3" onClick={loadImages}>Retry</button>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2 items-center mb-4">
             <span className="text-sm font-medium text-gray-700">Filters:</span>
             <select className="select w-40" value={imgStatus} onChange={(e) => setImgStatus(e.target.value)}>
@@ -209,6 +223,12 @@ export default function QueuesPage() {
       {/* Document queue */}
       {tab === 'documents' && (
         <div className="card">
+          {docError && (
+            <div className="mb-4 rounded-lg bg-red-50 border border-red-100 px-4 py-2.5 text-sm text-red-700 flex items-center justify-between">
+              <span>{docError}</span>
+              <button className="text-xs opacity-70 hover:opacity-100 ml-3" onClick={loadDocs}>Retry</button>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2 items-center mb-4">
             <span className="text-sm font-medium text-gray-700">Filters:</span>
             <select className="select w-40" value={docStatus} onChange={(e) => setDocStatus(e.target.value)}>

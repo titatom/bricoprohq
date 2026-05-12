@@ -29,14 +29,18 @@ export default function KPIPage() {
   const [summary, setSummary] = useState(null);
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState(null);
 
   const load = useCallback(async () => {
-    const [recordsRes, summaryRes] = await Promise.all([
-      apiFetch('/kpi/records'),
-      apiFetch('/kpi/summary'),
-    ]);
-    if (recordsRes.ok) setRecords(await recordsRes.json());
-    if (summaryRes.ok) setSummary(await summaryRes.json());
+    try {
+      const [recordsRes, summaryRes] = await Promise.all([
+        apiFetch('/kpi/records'),
+        apiFetch('/kpi/summary'),
+      ]);
+      if (recordsRes.ok) { setRecords(await recordsRes.json()); setLoadError(null); }
+      else setLoadError('Failed to load KPI records. Check that the backend is reachable.');
+      if (summaryRes.ok) setSummary(await summaryRes.json());
+    } catch { setLoadError('Failed to load KPI records. Check that the backend is reachable.'); }
   }, [apiFetch]);
 
   useEffect(() => { if (isLoggedIn) load(); }, [isLoggedIn]); // eslint-disable-line
@@ -55,7 +59,14 @@ export default function KPIPage() {
   return (
     <div className="p-6">
       <h2 className="text-2xl font-bold text-gray-900 mb-1">KPI Tracking</h2>
-      <p className="text-gray-500 text-sm mb-6">Track post and ad engagement after publishing on Meta, Google, and other platforms.</p>
+      <p className="text-gray-500 text-sm mb-4">Track post and ad engagement after publishing on Meta, Google, and other platforms.</p>
+
+      {loadError && (
+        <div className="mb-4 rounded-lg bg-red-50 border border-red-100 px-4 py-2.5 text-sm text-red-700 flex items-center justify-between">
+          <span>{loadError}</span>
+          <button className="text-xs opacity-70 hover:opacity-100 ml-3" onClick={load}>Retry</button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
         {[
