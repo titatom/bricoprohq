@@ -7,6 +7,10 @@ export default function PrivacyPolicy() {
       <Head>
         <title>Privacy Policy – Bricopro HQ</title>
         <meta name="description" content="Privacy Policy for Bricopro HQ" />
+        <meta property="og:title" content="Privacy Policy – Bricopro HQ" />
+        <meta property="og:description" content="Privacy Policy for Bricopro HQ" />
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content={`${process.env.NEXT_PUBLIC_APP_URL || ''}/privacy-policy`} />
       </Head>
 
       <div className="min-h-screen bg-gray-50">

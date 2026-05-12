@@ -1,0 +1,7 @@
+# Allow all user agents (including crawlers) full access
+User-agent: *
+Allow: /
+
+# Explicitly allow Facebook's link-preview crawler
+User-agent: facebookexternalhit
+Allow: /
