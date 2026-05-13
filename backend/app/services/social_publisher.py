@@ -38,8 +38,7 @@ def _ensure_assets_dir() -> Path:
     return PUBLISH_ASSETS_DIR
 
 
-def fetch_immich_original(asset_id: str, db: "Session") -> tuple[bytes, str]:
-    """Download the full-size original of an Immich asset. Returns (bytes, content_type)."""
+def _get_immich_connection(db: "Session") -> tuple[str, str]:
     from ..models import Integration
     i = db.query(Integration).filter(Integration.provider == "immich").first()
     if not i or not i.base_url:
@@ -51,9 +50,14 @@ def fetch_immich_original(asset_id: str, db: "Session") -> tuple[bytes, str]:
     api_key = config.get("api_key", "")
     if not api_key:
         raise ValueError("Immich api_key not configured")
+    return i.base_url.rstrip("/"), api_key
 
+
+def fetch_immich_original(asset_id: str, db: "Session") -> tuple[bytes, str]:
+    """Download the full-size original of an Immich asset. Returns (bytes, content_type)."""
+    base_url, api_key = _get_immich_connection(db)
     r = httpx.get(
-        f"{i.base_url.rstrip('/')}/api/assets/{asset_id}/original",
+        f"{base_url}/api/assets/{asset_id}/original",
         headers={"x-api-key": api_key},
         timeout=60,
         follow_redirects=True,
@@ -61,6 +65,24 @@ def fetch_immich_original(asset_id: str, db: "Session") -> tuple[bytes, str]:
     r.raise_for_status()
     content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
     return r.content, content_type
+
+
+def fetch_immich_preview_jpeg(asset_id: str, db: "Session") -> tuple[bytes, str]:
+    """Download an Immich-generated JPEG preview for APIs that require JPEG media."""
+    base_url, api_key = _get_immich_connection(db)
+    r = httpx.get(
+        f"{base_url}/api/assets/{asset_id}/thumbnail",
+        params={"size": "preview", "format": "JPEG"},
+        headers={"x-api-key": api_key},
+        timeout=60,
+        follow_redirects=True,
+    )
+    r.raise_for_status()
+    return r.content, "image/jpeg"
+
+
+def _is_jpeg_content_type(content_type: str) -> bool:
+    return content_type.split(";")[0].strip().lower() in {"image/jpeg", "image/jpg"}
 
 
 def save_asset_for_public_serving(asset_bytes: bytes, content_type: str = "image/jpeg") -> tuple[str, Path]:
@@ -211,6 +233,35 @@ def _get_instagram_token(db: "Session") -> str | None:
     return None
 
 
+def _instagram_post(base: str, ig_user_id: str, edge: str, token: str, body: dict, timeout: int = 30) -> httpx.Response:
+    """
+    POST to the Instagram publishing API using the request shape expected by each auth path.
+
+    Instagram Login uses graph.instagram.com with JSON bodies and Bearer auth.
+    The legacy Facebook Page token path is kept form-encoded because that is what
+    the Graph API reliably accepts for content publishing.
+    """
+    url = f"{base}/{ig_user_id}/{edge}"
+    if "graph.instagram.com" in base:
+        return httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json=body,
+            timeout=timeout,
+        )
+
+    form_body = {
+        key: ("true" if value is True else "false" if value is False else value)
+        for key, value in body.items()
+    }
+    return httpx.post(
+        url,
+        params={"access_token": token},
+        data=form_body,
+        timeout=timeout,
+    )
+
+
 def post_to_instagram(
     ig_user_id: str,
     caption: str,
@@ -242,12 +293,15 @@ def post_to_instagram(
         log.debug("Instagram: no Instagram token found, falling back to Meta page token")
 
     if len(image_ids) == 1:
-        public_url = _prepare_public_image(image_ids[0], db, app_base_url)
-        container_r = httpx.post(
-            f"{base}/{ig_user_id}/media",
-            params={"access_token": token},
-            data={"image_url": public_url, "caption": caption},
-            timeout=30,
+        public_url = _prepare_public_image(
+            image_ids[0], db, app_base_url, instagram_compatible=True
+        )
+        container_r = _instagram_post(
+            base,
+            ig_user_id,
+            "media",
+            token,
+            {"image_url": public_url, "caption": caption},
         )
         if not container_r.is_success:
             raise ValueError(
@@ -259,12 +313,15 @@ def post_to_instagram(
         item_ids: list[str] = []
         last_item_error: str = ""
         for asset_id in image_ids[:10]:
-            public_url = _prepare_public_image(asset_id, db, app_base_url)
-            item_r = httpx.post(
-                f"{base}/{ig_user_id}/media",
-                params={"access_token": token},
-                data={"image_url": public_url, "is_carousel_item": "true"},
-                timeout=30,
+            public_url = _prepare_public_image(
+                asset_id, db, app_base_url, instagram_compatible=True
+            )
+            item_r = _instagram_post(
+                base,
+                ig_user_id,
+                "media",
+                token,
+                {"image_url": public_url, "is_carousel_item": True},
             )
             if item_r.is_success:
                 item_ids.append(item_r.json()["id"])
@@ -279,11 +336,12 @@ def post_to_instagram(
                 f"No Instagram carousel items could be uploaded. "
                 f"Instagram API error — {last_item_error}"
             )
-        carousel_r = httpx.post(
-            f"{base}/{ig_user_id}/media",
-            params={"access_token": token},
-            data={"media_type": "CAROUSEL", "children": ",".join(item_ids), "caption": caption},
-            timeout=30,
+        carousel_r = _instagram_post(
+            base,
+            ig_user_id,
+            "media",
+            token,
+            {"media_type": "CAROUSEL", "children": ",".join(item_ids), "caption": caption},
         )
         if not carousel_r.is_success:
             raise ValueError(
@@ -292,11 +350,12 @@ def post_to_instagram(
         creation_id = carousel_r.json()["id"]
 
     # Publish the container
-    pub_r = httpx.post(
-        f"{base}/{ig_user_id}/media_publish",
-        params={"access_token": token},
-        data={"creation_id": creation_id},
-        timeout=30,
+    pub_r = _instagram_post(
+        base,
+        ig_user_id,
+        "media_publish",
+        token,
+        {"creation_id": creation_id},
     )
     if not pub_r.is_success:
         raise ValueError(
@@ -305,9 +364,21 @@ def post_to_instagram(
     return pub_r.json()["id"]
 
 
-def _prepare_public_image(asset_id: str, db: "Session", app_base_url: str) -> str:
+def _prepare_public_image(
+    asset_id: str,
+    db: "Session",
+    app_base_url: str,
+    *,
+    instagram_compatible: bool = False,
+) -> str:
     """Download Immich asset, save to publish-assets dir, return public URL."""
     img_bytes, content_type = fetch_immich_original(asset_id, db)
+    if instagram_compatible and not _is_jpeg_content_type(content_type):
+        log.info(
+            "Instagram requires JPEG media; using Immich JPEG preview for asset %s (%s)",
+            asset_id, content_type,
+        )
+        img_bytes, content_type = fetch_immich_preview_jpeg(asset_id, db)
     filename, _ = save_asset_for_public_serving(img_bytes, content_type)
     return f"{app_base_url.rstrip('/')}/media/publish-assets/{filename}"
 
