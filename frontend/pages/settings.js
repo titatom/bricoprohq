@@ -345,11 +345,12 @@ function AiProviderSection({ settings, onSave, onTest }) {
   };
 
   const meta = AI_PROVIDERS.find((p) => p.value === provider) || AI_PROVIDERS[0];
+  const isOpenRouter = provider === 'openrouter';
 
   const save = async (e) => {
     e.preventDefault();
     setSaving(true);
-    await onSave({ ai_provider: provider, ai_api_key: apiKey, ai_base_url: baseUrl, ai_model: model });
+    await onSave({ ai_provider: provider, ai_api_key: apiKey, ai_base_url: baseUrl, ai_model: model.trim() });
     setSaved(true);
     setSaving(false);
     setTimeout(() => setSaved(false), 2500);
@@ -359,7 +360,7 @@ function AiProviderSection({ settings, onSave, onTest }) {
     setTesting(true);
     setTestResult(null);
     try {
-      await onSave({ ai_provider: provider, ai_api_key: apiKey, ai_base_url: baseUrl, ai_model: model });
+      await onSave({ ai_provider: provider, ai_api_key: apiKey, ai_base_url: baseUrl, ai_model: model.trim() });
       const r = await onTest();
       setTestResult(r);
     } catch (err) {
@@ -417,12 +418,27 @@ function AiProviderSection({ settings, onSave, onTest }) {
           </div>
           <div>
             <label className="label">Model</label>
-            <select className="select" value={model} onChange={(e) => setModel(e.target.value)}>
-              <option value="">Default ({meta.models[0]?.label})</option>
-              {meta.models.map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </select>
+            {isOpenRouter ? (
+              <>
+                <input
+                  className="input"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="openai/gpt-4o-mini"
+                  autoComplete="off"
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  Enter any OpenRouter model slug, e.g. anthropic/claude-3.5-sonnet or google/gemini-flash-1.5.
+                </p>
+              </>
+            ) : (
+              <select className="select" value={model} onChange={(e) => setModel(e.target.value)}>
+                <option value="">Default ({meta.models[0]?.label})</option>
+                {meta.models.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+            )}
           </div>
           <div className="col-span-full">
             <label className="label">{meta.baseLabel}</label>
