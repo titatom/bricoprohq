@@ -338,7 +338,6 @@ def _cleanup_publish_assets():
 
 def _run_scheduled_posts():
     """Publish any drafts that are scheduled and past their planned_date/time."""
-    from .services.social_publisher import _publish_draft
     db = next(get_db())
     try:
         now = datetime.now(timezone.utc)
@@ -1097,16 +1096,22 @@ def _publish_draft(draft: ContentDraft, db: Session, app_base_url: str) -> str:
         user_token = _get_meta_token(db)
         post_id = post_to_facebook(account_id, message, image_ids, db, user_token)
     elif platform == "instagram":
-        user_token = _get_meta_token(db)
-        pages = _get_pages(user_token)
+        # Try to find the Facebook Page token for the linked IG account.
+        # If Meta is not connected (user configured Instagram directly), fall back
+        # gracefully — post_to_instagram will use the Instagram OAuth token instead.
         page_token = ""
         ig_user_id = account_id
-        for p in pages:
-            if p.get("ig_user_id") == account_id:
-                page_token = p["access_token"]
-                break
-        if not page_token:
-            page_token = _get_meta_token(db)
+        try:
+            user_token = _get_meta_token(db)
+            pages = _get_pages(user_token)
+            for p in pages:
+                if p.get("ig_user_id") == account_id:
+                    page_token = p["access_token"]
+                    break
+            if not page_token:
+                page_token = user_token
+        except Exception:
+            pass
         caption = "\n\n".join(filter(None, [draft.body, draft.hashtags]))
         post_id = post_to_instagram(ig_user_id, caption, image_ids, db, page_token, app_base_url)
     elif platform == "gbp":
