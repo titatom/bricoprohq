@@ -24,7 +24,9 @@ log = logging.getLogger("bricopro.publisher")
 
 GRAPH_API_BASE = "https://graph.facebook.com/v21.0"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GBP_MYBUSINESS_BASE = "https://mybusiness.googleapis.com/v4"
+# mybusiness.googleapis.com/v4 was deprecated in 2023; use the new posting API.
+GBP_POSTING_BASE = "https://mybusinesspostingapi.googleapis.com/v1"
+GBP_MYBUSINESS_BASE = "https://mybusiness.googleapis.com/v4"  # kept for legacy reference
 GBP_ACCOUNTS_BASE = "https://mybusinessaccountmanagement.googleapis.com/v1"
 
 PUBLISH_ASSETS_DIR = Path(os.getenv("PUBLISH_ASSETS_DIR", "/data/publish_assets"))
@@ -153,7 +155,9 @@ def post_to_facebook(
         r.raise_for_status()
         return r.json()["id"]
 
-    # Upload each image as an unpublished photo
+    # Upload each image as an unpublished photo via multipart form (source field).
+    # httpx requires files= for the binary part and data= for the form fields;
+    # using content= and data= together silently drops the image bytes.
     photo_ids: list[str] = []
     for asset_id in image_ids:
         try:
@@ -161,18 +165,24 @@ def post_to_facebook(
         except Exception as exc:
             log.warning("Could not fetch Immich asset %s: %s", asset_id, exc)
             continue
-        upload_r = httpx.post(
-            f"{GRAPH_API_BASE}/{page_id}/photos",
-            params={"access_token": page_token},
-            content=img_bytes,
-            headers={"Content-Type": "image/jpeg"},
-            data={"published": "false"},
-            timeout=60,
-        )
+        try:
+            upload_r = httpx.post(
+                f"{GRAPH_API_BASE}/{page_id}/photos",
+                params={"access_token": page_token},
+                files={"source": ("photo.jpg", img_bytes, "image/jpeg")},
+                data={"published": "false"},
+                timeout=60,
+            )
+        except Exception as exc:
+            log.warning("FB photo upload request error for asset %s: %s", asset_id, exc)
+            continue
         if upload_r.is_success:
             photo_ids.append(upload_r.json()["id"])
         else:
-            log.warning("FB photo upload failed for asset %s: %s", asset_id, upload_r.text)
+            log.warning(
+                "FB photo upload failed for asset %s: status=%s body=%s",
+                asset_id, upload_r.status_code, upload_r.text[:300],
+            )
 
     attached = [{"media_fbid": pid} for pid in photo_ids]
     body: dict = {"message": message}
@@ -191,6 +201,15 @@ def post_to_facebook(
 
 # ── Instagram posting ─────────────────────────────────────────────────────────
 
+def _get_instagram_token(db: "Session") -> str | None:
+    """Return the Instagram User Access Token if connected, else None."""
+    from ..models import Integration
+    intg = db.query(Integration).filter(Integration.provider == "instagram").first()
+    if intg and intg.oauth_access_token:
+        return intg.oauth_access_token
+    return None
+
+
 def post_to_instagram(
     ig_user_id: str,
     caption: str,
@@ -203,19 +222,36 @@ def post_to_instagram(
     Publish a post to an Instagram Business account. Returns the media ID.
     Requires at least one image (Instagram does not support text-only posts).
     For multiple images a carousel is created.
+
+    Token priority:
+      1. instagram.oauth_access_token (Instagram User Access Token via graph.instagram.com)
+      2. page_token (Facebook Page Access Token via graph.facebook.com) — legacy fallback
     """
     if not image_ids:
         raise ValueError("Instagram requires at least one image.")
 
+    ig_token = _get_instagram_token(db)
+    if ig_token:
+        base = "https://graph.instagram.com/v21.0"
+        token = ig_token
+        log.debug("Instagram: using Instagram API token (graph.instagram.com)")
+    else:
+        base = GRAPH_API_BASE
+        token = page_token
+        log.debug("Instagram: no Instagram token found, falling back to Meta page token")
+
     if len(image_ids) == 1:
         public_url = _prepare_public_image(image_ids[0], db, app_base_url)
         container_r = httpx.post(
-            f"{GRAPH_API_BASE}/{ig_user_id}/media",
-            params={"access_token": page_token},
+            f"{base}/{ig_user_id}/media",
+            params={"access_token": token},
             json={"image_url": public_url, "caption": caption},
             timeout=30,
         )
-        container_r.raise_for_status()
+        if not container_r.is_success:
+            raise ValueError(
+                f"Instagram media container creation failed: {container_r.status_code} {container_r.text[:300]}"
+            )
         creation_id = container_r.json()["id"]
     else:
         # Carousel: max 10 items
@@ -223,34 +259,43 @@ def post_to_instagram(
         for asset_id in image_ids[:10]:
             public_url = _prepare_public_image(asset_id, db, app_base_url)
             item_r = httpx.post(
-                f"{GRAPH_API_BASE}/{ig_user_id}/media",
-                params={"access_token": page_token},
+                f"{base}/{ig_user_id}/media",
+                params={"access_token": token},
                 json={"image_url": public_url, "is_carousel_item": True},
                 timeout=30,
             )
             if item_r.is_success:
                 item_ids.append(item_r.json()["id"])
             else:
-                log.warning("IG carousel item failed for %s: %s", asset_id, item_r.text)
+                log.warning(
+                    "IG carousel item failed for %s: %s %s",
+                    asset_id, item_r.status_code, item_r.text[:200],
+                )
         if not item_ids:
             raise ValueError("No Instagram carousel items could be uploaded.")
         carousel_r = httpx.post(
-            f"{GRAPH_API_BASE}/{ig_user_id}/media",
-            params={"access_token": page_token},
+            f"{base}/{ig_user_id}/media",
+            params={"access_token": token},
             json={"media_type": "CAROUSEL", "children": ",".join(item_ids), "caption": caption},
             timeout=30,
         )
-        carousel_r.raise_for_status()
+        if not carousel_r.is_success:
+            raise ValueError(
+                f"Instagram carousel container failed: {carousel_r.status_code} {carousel_r.text[:300]}"
+            )
         creation_id = carousel_r.json()["id"]
 
     # Publish the container
     pub_r = httpx.post(
-        f"{GRAPH_API_BASE}/{ig_user_id}/media_publish",
-        params={"access_token": page_token},
+        f"{base}/{ig_user_id}/media_publish",
+        params={"access_token": token},
         json={"creation_id": creation_id},
         timeout=30,
     )
-    pub_r.raise_for_status()
+    if not pub_r.is_success:
+        raise ValueError(
+            f"Instagram media_publish failed: {pub_r.status_code} {pub_r.text[:300]}"
+        )
     return pub_r.json()["id"]
 
 
@@ -266,7 +311,7 @@ def _prepare_public_image(asset_id: str, db: "Session", app_base_url: str) -> st
 def _get_gbp_token(db: "Session") -> str:
     """Return a valid GBP access token, refreshing if needed."""
     from ..models import Integration
-    from .connectors import GoogleBusinessConnector, _google_oauth_config, _sync_google_tokens
+    from .connectors import GoogleBusinessConnector
     intg = db.query(Integration).filter(Integration.provider == "google_business").first()
     if not intg or not intg.oauth_access_token:
         raise ValueError("Google Business not connected. Connect via Settings → Integrations.")
@@ -274,16 +319,37 @@ def _get_gbp_token(db: "Session") -> str:
     return connector._get_access_token()
 
 
+def _gbp_api_error(r: "httpx.Response", context: str) -> str:
+    """Extract a human-readable error from a failed GBP API response."""
+    try:
+        body = r.json()
+        err = body.get("error", {})
+        msg = err.get("message") or err.get("status") or str(body)
+    except Exception:
+        msg = r.text[:300] or f"HTTP {r.status_code}"
+    return f"{context}: {r.status_code} — {msg}"
+
+
 def _get_gbp_locations(token: str, db: "Session") -> list[dict]:
     """Return list of {name, title, account} for all GBP locations."""
-    from ..models import Integration
     headers = {"Authorization": f"Bearer {token}"}
+
     accounts_r = httpx.get(f"{GBP_ACCOUNTS_BASE}/accounts", headers=headers, timeout=15)
-    accounts_r.raise_for_status()
+    if not accounts_r.is_success:
+        raise ValueError(_gbp_api_error(accounts_r, "GBP accounts list failed"))
+
     accounts = accounts_r.json().get("accounts", [])
+    if not accounts:
+        raise ValueError(
+            "No Google Business accounts found. Ensure your Google account manages at least "
+            "one Business Profile location and that your location is verified."
+        )
+
     locations = []
     for acct in accounts:
         acct_name = acct.get("name", "")
+        if not acct_name:
+            continue
         loc_r = httpx.get(
             f"https://mybusinessinformation.googleapis.com/v1/{acct_name}/locations",
             params={"readMask": "name,title"},
@@ -298,6 +364,19 @@ def _get_gbp_locations(token: str, db: "Session") -> list[dict]:
                     "account": acct_name,
                     "type": "gbp_location",
                 })
+        else:
+            log.warning(
+                "GBP locations fetch failed for account %s: %s",
+                acct_name,
+                _gbp_api_error(loc_r, "locations"),
+            )
+
+    if not locations:
+        raise ValueError(
+            "No GBP locations found under your Google Business account(s). "
+            "The account may be pending verification or Business Profile access may not yet be granted."
+        )
+
     return locations
 
 
@@ -311,7 +390,14 @@ def post_to_gbp(
 ) -> str:
     """
     Publish a Local Post to Google Business Profile. Returns the post resource name.
+    Uses mybusinesspostingapi.googleapis.com/v1 (replacement for deprecated v4 endpoint).
     """
+    if not location_name or not location_name.startswith("locations/"):
+        raise ValueError(
+            f"Invalid GBP location name '{location_name}'. Expected format: 'locations/<id>'. "
+            "Re-select the account in the publish panel."
+        )
+
     token = _get_gbp_token(db)
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
@@ -331,12 +417,13 @@ def post_to_gbp(
         body["media"] = [{"mediaFormat": "PHOTO", "sourceUrl": public_url}]
 
     r = httpx.post(
-        f"{GBP_MYBUSINESS_BASE}/{location_name}/localPosts",
+        f"{GBP_POSTING_BASE}/{location_name}/localPosts",
         headers=headers,
         json=body,
         timeout=30,
     )
-    r.raise_for_status()
+    if not r.is_success:
+        raise ValueError(_gbp_api_error(r, "GBP localPost creation failed"))
     return r.json().get("name", "")
 
 
@@ -356,12 +443,50 @@ def _cta_to_gbp_action(cta: str) -> str:
 
 # ── Account discovery ─────────────────────────────────────────────────────────
 
+def _get_instagram_account_from_api(db: "Session") -> dict | None:
+    """
+    Fetch the user's own Instagram account details via the Instagram API token.
+    Returns a publishable account dict or None if not available.
+    """
+    ig_token = _get_instagram_token(db)
+    if not ig_token:
+        return None
+    try:
+        r = httpx.get(
+            "https://graph.instagram.com/v21.0/me",
+            params={"fields": "id,username,account_type", "access_token": ig_token},
+            timeout=10,
+        )
+        if not r.is_success:
+            log.info("Instagram API /me returned %s: %s", r.status_code, r.text[:200])
+            return None
+        data = r.json()
+        ig_id = data.get("id")
+        username = data.get("username", ig_id)
+        if not ig_id:
+            return None
+        return {
+            "provider": "instagram",
+            "account_id": ig_id,
+            "account_name": f"@{username}" if username else ig_id,
+            "type": "instagram",
+        }
+    except Exception as exc:
+        log.info("Instagram API account fetch failed: %s", exc)
+        return None
+
+
 def get_publishable_accounts(db: "Session") -> list[dict]:
     """
     Return all accounts available for publishing:
     - Facebook Pages (from Meta OAuth)
-    - Instagram Business accounts (linked to FB pages)
+    - Instagram Business accounts (linked to FB pages via Meta, or directly via Instagram API)
     - GBP locations (from Google Business OAuth)
+
+    Instagram account precedence:
+      1. If instagram.oauth_access_token is set, expose that account directly.
+         The publisher will use graph.instagram.com for posting.
+      2. Otherwise fall back to IG accounts discovered through linked Facebook Pages.
     """
     accounts: list[dict] = []
 
@@ -385,6 +510,21 @@ def get_publishable_accounts(db: "Session") -> list[dict]:
                 })
     except Exception as exc:
         log.info("Meta accounts unavailable: %s", exc)
+
+    # If the Instagram integration has its own OAuth token, prefer that account.
+    # Deduplicate by IG user ID so we don't list the same account twice.
+    ig_api_account = _get_instagram_account_from_api(db)
+    if ig_api_account:
+        existing_ig_ids = {a["account_id"] for a in accounts if a.get("type") == "instagram"}
+        if ig_api_account["account_id"] not in existing_ig_ids:
+            accounts.append(ig_api_account)
+        else:
+            # Replace the Meta-discovered entry with the direct API one so the
+            # publisher uses the Instagram token path instead of the page token.
+            accounts = [
+                ig_api_account if (a.get("type") == "instagram" and a["account_id"] == ig_api_account["account_id"]) else a
+                for a in accounts
+            ]
 
     try:
         token = _get_gbp_token(db)
@@ -461,13 +601,16 @@ def fetch_gbp_post_insights(local_post_name: str, db: "Session") -> dict:
     token = _get_gbp_token(db)
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     r = httpx.post(
-        f"{GBP_MYBUSINESS_BASE}/{local_post_name}:reportInsights",
+        f"{GBP_POSTING_BASE}/{local_post_name}:reportInsights",
         headers=headers,
         json={"basicRequest": {}},
         timeout=15,
     )
     if not r.is_success:
-        log.warning("GBP insights request failed %s: %s", r.status_code, r.text)
+        log.warning(
+            "GBP insights request failed: %s",
+            _gbp_api_error(r, "reportInsights"),
+        )
         return {"impressions": 0, "reach": 0, "clicks": 0, "engagements": 0, "reactions": 0, "shares": 0, "saves": 0}
 
     result = r.json()

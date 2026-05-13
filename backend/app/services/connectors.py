@@ -1176,6 +1176,48 @@ class PaperlessGptConnector(BaseConnector):
 # ── Meta (Facebook + Instagram) ───────────────────────────────────────────────
 
 GRAPH_API_BASE = "https://graph.facebook.com/v21.0"
+INSTAGRAM_GRAPH_BASE = "https://graph.instagram.com/v21.0"
+
+
+class InstagramConnector(BaseConnector):
+    """
+    Validates the Instagram User Access Token obtained via the Instagram OAuth
+    flow (api.instagram.com).  Uses graph.instagram.com/me — the token is NOT
+    a Facebook Page token and is incompatible with the graph.facebook.com API.
+    """
+    provider = "instagram"
+
+    def _get_access_token(self) -> str:
+        if not self.integration.oauth_access_token:
+            raise ConnectorNotConfigured(
+                "instagram: not connected via OAuth. Click 'Connect with Instagram' in Settings."
+            )
+        return self.integration.oauth_access_token
+
+    def fetch(self) -> dict:
+        token = self._get_access_token()
+        try:
+            r = httpx.get(
+                f"{INSTAGRAM_GRAPH_BASE}/me",
+                params={"fields": "id,username,account_type,media_count", "access_token": token},
+                timeout=10,
+            )
+            r.raise_for_status()
+            data = r.json()
+            return {
+                "id": data.get("id"),
+                "username": data.get("username"),
+                "account_type": data.get("account_type"),
+                "media_count": data.get("media_count", 0),
+            }
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:200]
+            raise ConnectorError(
+                f"Instagram API error {exc.response.status_code}: {body}",
+                upstream_status=exc.response.status_code,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise ConnectorError(f"Instagram request failed: {exc}") from exc
 
 
 class MetaConnector(BaseConnector):
@@ -1346,6 +1388,7 @@ _CONNECTORS = {
     "paperless": PaperlessConnector,
     "paperless-gpt": PaperlessGptConnector,
     "meta": MetaConnector,
+    "instagram": InstagramConnector,
     "google_business": GoogleBusinessConnector,
 }
 
