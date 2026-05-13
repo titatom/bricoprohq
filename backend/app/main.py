@@ -1322,34 +1322,38 @@ def ai_test(_: User = Depends(auth_user), db: Session = Depends(get_db)):
 
 # ── Social Studio ─────────────────────────────────────────────────────────────
 
-def _template_fallback(payload: SocialGenerateIn) -> dict:
+def _template_fallback(payload) -> dict:
     """Simple template-based copy used when no AI provider is configured."""
-    lang = payload.language
+    lang = getattr(payload, "language", "fr")
+    job_desc = getattr(payload, "job_description", "").strip()
+    city = getattr(payload, "city", "Montréal")
+    # Use service_category if present (single-generate path), otherwise first line of job_description
+    svc = (getattr(payload, "service_category", "") or "").strip() or (job_desc.split("\n")[0][:80] if job_desc else "Travaux")
     if lang == "fr":
         body = (
-            f"✅ Travaux récents : {payload.service_category} à {payload.city}.\n\n"
-            f"{payload.job_description}\n\n"
+            f"✅ Travaux récents : {svc} à {city}.\n\n"
+            f"{job_desc}\n\n"
             "Bricopro est votre entrepreneur local de confiance. "
             "Licencié et assuré. Demandez votre soumission gratuite aujourd'hui !"
         )
-        short = f"{payload.service_category} à {payload.city} — travaux professionnels. Contactez Bricopro !"
+        short = f"{svc} à {city} — travaux professionnels. Contactez Bricopro !"
         tags = "#montreal #bricopro #renovation #entrepreneur"
     elif lang == "en":
         body = (
-            f"✅ Recent work: {payload.service_category} in {payload.city}.\n\n"
-            f"{payload.job_description}\n\n"
+            f"✅ Recent work: {svc} in {city}.\n\n"
+            f"{job_desc}\n\n"
             "Bricopro is your trusted local contractor. "
             "Licensed and insured. Request your free estimate today!"
         )
-        short = f"{payload.service_category} in {payload.city} — professional work. Contact Bricopro!"
+        short = f"{svc} in {city} — professional work. Contact Bricopro!"
         tags = "#montreal #bricopro #renovation #contractor"
     else:
         body = (
-            f"✅ {payload.service_category} à {payload.city} / in {payload.city}.\n\n"
-            f"{payload.job_description}\n\n"
+            f"✅ {svc} à {city} / in {city}.\n\n"
+            f"{job_desc}\n\n"
             "Bricopro — entrepreneur local / local contractor. Licencié et assuré / Licensed and insured."
         )
-        short = f"{payload.service_category} — Bricopro, Montréal"
+        short = f"{svc} — Bricopro, Montréal"
         tags = "#montreal #bricopro #renovation #entrepreneur #contractor"
     return {"main_copy": body, "short_variation": short, "hashtags": tags, "cta_text": "", "notes": "No AI provider configured — template used. Set up an AI provider in Settings for richer copy."}
 
@@ -1517,9 +1521,6 @@ SOCIAL_SETTING_DEFAULTS = {
     "default_tone": "local",
     "default_city": "Montréal",
     "default_cta": "request_quote",
-    "default_hashtags": "#montreal #renovation",
-    "brand_voice": "Local, practical, trustworthy Bricopro voice",
-    "image_picker_prompt": "Help identify clear project photos, but let the user make the final selection.",
     "copy_prompt": "Write practical, local, trustworthy Bricopro social posts based only on the provided job details and selected images.",
     "facebook_prompt": "Facebook: conversational, helpful, local, and clear about the service.",
     "instagram_prompt": "Instagram: concise caption, strong opening line, tasteful emojis, and relevant hashtags.",
@@ -1968,34 +1969,36 @@ def social_generate_pack(payload: dict, _: User = Depends(auth_user), db: Sessio
     else:
         platforms = [p.strip() for p in social_cfg.get("default_platforms", "facebook").split(",") if p.strip()]
     platforms = platforms or ["facebook"]
+
     selected_assets = payload.get("asset_ids") or []
-    job_description = payload.get("job_description", "")
-    if selected_assets:
-        job_description = (
-            f"{job_description}\n\nSelected Immich asset IDs: {', '.join(map(str, selected_assets))}."
-        ).strip()
-    if social_cfg.get("brand_voice"):
-        job_description = f"{job_description}\n\nBrand voice: {social_cfg['brand_voice']}".strip()
-    if social_cfg.get("copy_prompt"):
-        job_description = f"{job_description}\n\nCopy instructions: {social_cfg['copy_prompt']}".strip()
-    if social_cfg.get("safety_prompt"):
-        job_description = f"{job_description}\n\nSafety rules: {social_cfg['safety_prompt']}".strip()
+
+    # Project description: exactly what the frontend sends (user text + filename context)
+    job_description = payload.get("job_description", "").strip()
+
+    # Global instruction fields — passed as dedicated prompt sections, not embedded in job_description
+    brand_voice       = (payload.get("brand_voice") or "").strip()
+    copy_instructions = (social_cfg.get("copy_prompt") or "").strip()
+    safety_rules      = (social_cfg.get("safety_prompt") or "").strip()
+
+    # Derive a title label from the job description (first 60 chars) for the draft card
+    title_label = (job_description[:60].rstrip() + "…") if len(job_description) > 60 else (job_description or "Bricopro project")
 
     drafts = []
     for platform in platforms:
-        platform_key = f"{platform}_prompt"
-        platform_job_description = job_description
-        if social_cfg.get(platform_key):
-            platform_job_description = f"{platform_job_description}\n\n{social_cfg[platform_key]}".strip()
+        platform_instructions = (social_cfg.get(f"{platform}_prompt") or "").strip()
 
         draft_payload = {
-            "service_category": payload.get("service_category", "Bricopro project"),
             "platform": platform,
             "language": payload.get("language") or social_cfg.get("default_language", "bilingual"),
             "tone": payload.get("tone") or social_cfg.get("default_tone", "local"),
-            "job_description": platform_job_description,
+            "job_description": job_description,
             "city": payload.get("city") or social_cfg.get("default_city", "Montréal"),
             "cta": payload.get("cta") or social_cfg.get("default_cta", "request_quote"),
+            # Dedicated instruction sections — kept separate from user content
+            "platform_instructions": platform_instructions,
+            "brand_voice": brand_voice,
+            "copy_instructions": copy_instructions,
+            "safety_rules": safety_rules,
         }
         ai_used = True
         try:
@@ -2006,10 +2009,9 @@ def social_generate_pack(payload: dict, _: User = Depends(auth_user), db: Sessio
         except AIError as exc:
             raise HTTPException(502, f"AI generation failed: {exc}") from exc
 
-        title = f"{draft_payload['service_category']} - {platform}"
         drafts.append({
             "draft_id": None,
-            "title": title,
+            "title": f"{title_label} — {platform}",
             "platform": platform,
             "main_copy": generated.get("main_copy", ""),
             "short_variation": generated.get("short_variation", ""),
@@ -2305,15 +2307,13 @@ def campaign_generate(campaign_id: int, _: User = Depends(auth_user), db: Sessio
     c = db.query(Campaign).filter(Campaign.id == campaign_id).first()
     if not c:
         raise HTTPException(404, "Campaign not found")
-    social_cfg = _social_settings_map(db)
-    default_hashtags = social_cfg.get("default_hashtags", "#montreal #renovation")
     d = ContentDraft(
         title=f"{c.name} — draft",
         platform="facebook",
         service_category=c.service_category,
         body=c.message or f"Campagne {c.name} — {c.service_category}",
         short_body=(c.message or c.name)[:120],
-        hashtags=default_hashtags,
+        hashtags="",
         status="draft_generated",
         campaign_id=c.id,
     )
