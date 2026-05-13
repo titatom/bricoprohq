@@ -38,8 +38,8 @@ def _ensure_assets_dir() -> Path:
     return PUBLISH_ASSETS_DIR
 
 
-def fetch_immich_original(asset_id: str, db: "Session") -> bytes:
-    """Download the full-size original of an Immich asset."""
+def fetch_immich_original(asset_id: str, db: "Session") -> tuple[bytes, str]:
+    """Download the full-size original of an Immich asset. Returns (bytes, content_type)."""
     from ..models import Integration
     i = db.query(Integration).filter(Integration.provider == "immich").first()
     if not i or not i.base_url:
@@ -59,7 +59,8 @@ def fetch_immich_original(asset_id: str, db: "Session") -> bytes:
         follow_redirects=True,
     )
     r.raise_for_status()
-    return r.content
+    content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+    return r.content, content_type
 
 
 def save_asset_for_public_serving(asset_bytes: bytes, content_type: str = "image/jpeg") -> tuple[str, Path]:
@@ -161,7 +162,7 @@ def post_to_facebook(
     photo_ids: list[str] = []
     for asset_id in image_ids:
         try:
-            img_bytes = fetch_immich_original(asset_id, db)
+            img_bytes, img_content_type = fetch_immich_original(asset_id, db)
         except Exception as exc:
             log.warning("Could not fetch Immich asset %s: %s", asset_id, exc)
             continue
@@ -169,7 +170,7 @@ def post_to_facebook(
             upload_r = httpx.post(
                 f"{GRAPH_API_BASE}/{page_id}/photos",
                 params={"access_token": page_token},
-                files={"source": ("photo.jpg", img_bytes, "image/jpeg")},
+                files={"source": ("photo.jpg", img_bytes, img_content_type)},
                 data={"published": "false"},
                 timeout=60,
             )
@@ -245,7 +246,7 @@ def post_to_instagram(
         container_r = httpx.post(
             f"{base}/{ig_user_id}/media",
             params={"access_token": token},
-            json={"image_url": public_url, "caption": caption},
+            data={"image_url": public_url, "caption": caption},
             timeout=30,
         )
         if not container_r.is_success:
@@ -254,29 +255,34 @@ def post_to_instagram(
             )
         creation_id = container_r.json()["id"]
     else:
-        # Carousel: max 10 items
+        # Carousel: max 10 items. Instagram Graph API expects form-encoded parameters.
         item_ids: list[str] = []
+        last_item_error: str = ""
         for asset_id in image_ids[:10]:
             public_url = _prepare_public_image(asset_id, db, app_base_url)
             item_r = httpx.post(
                 f"{base}/{ig_user_id}/media",
                 params={"access_token": token},
-                json={"image_url": public_url, "is_carousel_item": True},
+                data={"image_url": public_url, "is_carousel_item": "true"},
                 timeout=30,
             )
             if item_r.is_success:
                 item_ids.append(item_r.json()["id"])
             else:
+                last_item_error = f"HTTP {item_r.status_code}: {item_r.text[:300]}"
                 log.warning(
-                    "IG carousel item failed for %s: %s %s",
-                    asset_id, item_r.status_code, item_r.text[:200],
+                    "IG carousel item failed for %s: %s",
+                    asset_id, last_item_error,
                 )
         if not item_ids:
-            raise ValueError("No Instagram carousel items could be uploaded.")
+            raise ValueError(
+                f"No Instagram carousel items could be uploaded. "
+                f"Instagram API error — {last_item_error}"
+            )
         carousel_r = httpx.post(
             f"{base}/{ig_user_id}/media",
             params={"access_token": token},
-            json={"media_type": "CAROUSEL", "children": ",".join(item_ids), "caption": caption},
+            data={"media_type": "CAROUSEL", "children": ",".join(item_ids), "caption": caption},
             timeout=30,
         )
         if not carousel_r.is_success:
@@ -289,7 +295,7 @@ def post_to_instagram(
     pub_r = httpx.post(
         f"{base}/{ig_user_id}/media_publish",
         params={"access_token": token},
-        json={"creation_id": creation_id},
+        data={"creation_id": creation_id},
         timeout=30,
     )
     if not pub_r.is_success:
@@ -301,8 +307,8 @@ def post_to_instagram(
 
 def _prepare_public_image(asset_id: str, db: "Session", app_base_url: str) -> str:
     """Download Immich asset, save to publish-assets dir, return public URL."""
-    img_bytes = fetch_immich_original(asset_id, db)
-    filename, _ = save_asset_for_public_serving(img_bytes)
+    img_bytes, content_type = fetch_immich_original(asset_id, db)
+    filename, _ = save_asset_for_public_serving(img_bytes, content_type)
     return f"{app_base_url.rstrip('/')}/media/publish-assets/{filename}"
 
 
