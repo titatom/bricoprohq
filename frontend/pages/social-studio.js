@@ -1216,7 +1216,27 @@ function PublishPanel({ draft, apiFetch, onSuccess }) {
       {loadingAccounts ? (
         <p className="text-xs text-gray-400">Loading connected accounts…</p>
       ) : accounts.length === 0 ? (
-        <p className="text-xs text-red-500">No {draft.platform} accounts connected. Check Settings → Integrations.</p>
+        <div className="space-y-1">
+          <p className="text-xs text-red-500">No {draft.platform} accounts connected.</p>
+          {draft.platform === 'gbp' && (
+            <p className="text-xs text-gray-500">
+              Go to <strong>Settings → Integrations</strong> and connect Google. If you just connected, your
+              Business Profile may still be pending verification — Google must approve the location before
+              the API allows posting.
+            </p>
+          )}
+          {draft.platform === 'instagram' && (
+            <p className="text-xs text-gray-500">
+              Connect Instagram in <strong>Settings → Integrations</strong>. If Meta is connected but no
+              Instagram account appears, ensure your Instagram Professional account is linked to a Facebook Page.
+            </p>
+          )}
+          {draft.platform === 'facebook' && (
+            <p className="text-xs text-gray-500">
+              Connect Meta (Facebook) in <strong>Settings → Integrations</strong> and ensure your account manages at least one Facebook Page.
+            </p>
+          )}
+        </div>
       ) : (
         <div>
           <label className="label text-xs">Account / Page</label>
