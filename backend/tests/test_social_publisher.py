@@ -1,7 +1,10 @@
+import os
 import json
 from types import SimpleNamespace
 
 import httpx
+
+os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///./test_social_publisher.db")
 
 from app.services import social_publisher as publisher
 
