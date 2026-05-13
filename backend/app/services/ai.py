@@ -115,24 +115,40 @@ def _build_user_prompt(payload: dict) -> str:
     else:
         lang_hint = "Write in both French and English — provide the French version first, then English below."
 
+    # --- Project context (only the user's actual content) ---
     job_desc = payload.get("job_description", "").strip()
-    job_line = f"\nJob description provided by the user: {job_desc}" if job_desc else ""
+    project_line = f"Project description: {job_desc}" if job_desc else ""
+
+    # --- Optional instruction sections (each only emitted when non-empty) ---
+    def _section(label: str, key: str) -> str:
+        val = (payload.get(key) or "").strip()
+        return f"{label}: {val}" if val else ""
+
+    platform_instructions = _section("Platform instructions", "platform_instructions")
+    brand_voice           = _section("Brand voice", "brand_voice")
+    copy_instructions     = _section("Copy instructions", "copy_instructions")
+    safety_rules          = _section("Safety rules", "safety_rules")
+
+    instruction_lines = "\n".join(
+        line for line in [platform_instructions, brand_voice, copy_instructions, safety_rules]
+        if line
+    )
 
     return (
         f"Generate social media content for Bricopro.\n\n"
-        f"Service category: {payload.get('service_category', 'renovation')}\n"
         f"Location/neighbourhood: {payload.get('city', 'Montréal')}\n"
         f"Platform: {payload.get('platform', 'facebook')}\n"
-        f"{job_line}\n\n"
+        f"{project_line}\n\n"
         f"{platform_hint}\n"
         f"{tone_hint}\n"
         f"{cta_hint}\n"
-        f"{lang_hint}\n\n"
-        "Return a JSON object with these exact keys:\n"
+        f"{lang_hint}\n"
+        + (f"\n{instruction_lines}\n" if instruction_lines else "")
+        + "\nReturn a JSON object with these exact keys:\n"
         "{\n"
         '  "main_copy": "full post text",\n'
         '  "short_variation": "shorter version (under 120 chars)",\n'
-        '  "hashtags": "space-separated hashtags without # symbol — add # yourself",\n'
+        '  "hashtags": "space-separated hashtags — choose popular, relevant tags based on the post content",\n'
         '  "cta_text": "the call-to-action sentence to append",\n'
         '  "notes": "any important notes for the user to review before posting"\n'
         "}\n"

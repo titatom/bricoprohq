@@ -202,9 +202,6 @@ const SS_DEFAULTS = {
   default_tone: 'local',
   default_city: 'Montréal',
   default_cta: 'request_quote',
-  default_hashtags: '#montreal #renovation',
-  brand_voice: 'Friendly, local, practical, trustworthy Bricopro expert.',
-  image_picker_prompt: 'Pick clear project photos to provide context for AI copy and to use in the post.',
   copy_prompt: 'Write practical, local, trustworthy Bricopro social posts based only on the provided job details and selected images.',
   facebook_prompt: 'Facebook: conversational, helpful, local, and clear about the service.',
   instagram_prompt: 'Instagram: concise caption, strong opening line, tasteful emojis, and relevant hashtags.',
@@ -809,33 +806,8 @@ function SocialStudioSettingsInline({ apiFetch }) {
       </section>
 
       <section className="card">
-        <h3 className="font-semibold text-gray-800 mb-4">Brand and publishing defaults</h3>
+        <h3 className="font-semibold text-gray-800 mb-4">AI copy instructions</h3>
         <div className="space-y-4">
-          <div>
-            <label className="label">Brand voice</label>
-            <textarea className="input h-24 resize-y" value={form.brand_voice} onChange={(e) => setForm({ ...form, brand_voice: e.target.value })} />
-          </div>
-          <div>
-            <label className="label">Default hashtags</label>
-            <input
-              className="input"
-              value={form.default_hashtags}
-              onChange={(e) => setForm({ ...form, default_hashtags: e.target.value })}
-              placeholder="#montreal #renovation"
-            />
-            <p className="text-xs text-gray-400 mt-1">Used as fallback hashtags when generating campaign drafts without AI.</p>
-          </div>
-        </div>
-      </section>
-
-      <section className="card">
-        <h3 className="font-semibold text-gray-800 mb-4">Workflow prompts</h3>
-        <div className="space-y-4">
-          <div>
-            <label className="label">Image picker prompt</label>
-            <textarea className="input h-20 resize-y" value={form.image_picker_prompt} onChange={(e) => setForm({ ...form, image_picker_prompt: e.target.value })} />
-            <p className="text-xs text-gray-400 mt-1">Guidance shown in the image picker. The user selects images manually to provide context for AI copy and to include in posts.</p>
-          </div>
           <div>
             <label className="label">Base copy prompt</label>
             <textarea className="input h-24 resize-y" value={form.copy_prompt} onChange={(e) => setForm({ ...form, copy_prompt: e.target.value })} />

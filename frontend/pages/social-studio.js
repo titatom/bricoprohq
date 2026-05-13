@@ -45,11 +45,11 @@ const CTAS = [
 
 const DEFAULT_FORM = {
   album_id: '',
-  service_category: '',
   platforms: ['facebook', 'instagram', 'gbp'],
   language: 'fr',
   tone: 'local',
   job_description: '',
+  brand_voice: '',
   city: 'Montréal',
   cta: 'request_quote',
 };
@@ -470,18 +470,33 @@ function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAs
         <h3 className="font-semibold text-gray-800 mb-4 border-b border-gray-100 pb-3">Content settings</h3>
         <form onSubmit={generate} className="space-y-4">
 
-          {/* Row 1: Service category (full width) */}
+          {/* Row 1: Project description (single field — replaces service category + job description) */}
           <div>
             <label className="label">
-              <Tooltip text="Describe the renovation service — this is the main input to AI copy generation.">
-                Service category
+              <Tooltip text="Describe the project: what service was done, what the job involved, any notable details. This is the primary input for AI copy generation.">
+                Project description
+              </Tooltip>
+            </label>
+            <textarea
+              className="input h-24 resize-y"
+              value={form.job_description}
+              onChange={(e) => setForm({ ...form, job_description: e.target.value })}
+              placeholder="e.g. Peinture intérieure — repainted salon walls, fixed two drywall cracks, warm neutral colour…"
+            />
+          </div>
+
+          {/* Row 1b: Brand voice (optional per-post override) */}
+          <div>
+            <label className="label">
+              <Tooltip text="Optional: describe the voice and personality for this post. Leave blank to use the default Bricopro tone.">
+                Brand voice <span className="font-normal text-gray-400">(optional)</span>
               </Tooltip>
             </label>
             <input
               className="input"
-              value={form.service_category}
-              onChange={(e) => setForm({ ...form, service_category: e.target.value })}
-              placeholder="e.g. Peinture intérieure, Réparation de gypse…"
+              value={form.brand_voice}
+              onChange={(e) => setForm({ ...form, brand_voice: e.target.value })}
+              placeholder="e.g. Friendly and local, neighbourly, practical expert…"
             />
           </div>
 
@@ -541,21 +556,6 @@ function PostGenerationTab({ form, setForm, settings, albums, assets, selectedAs
                 );
               })}
             </div>
-          </div>
-
-          {/* Row 4: Job description */}
-          <div>
-            <label className="label">
-              <Tooltip text="Optional: describe what was done on the job. AI will craft copy around it.">
-                Job description
-              </Tooltip>
-            </label>
-            <textarea
-              className="input h-24 resize-y"
-              value={form.job_description}
-              onChange={(e) => setForm({ ...form, job_description: e.target.value })}
-              placeholder="e.g. Repainted salon walls, fixed two drywall cracks, cleaned trim, finished in a warm neutral colour…"
-            />
           </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
@@ -2051,23 +2051,23 @@ export default function SocialStudioPage() {
     setError('');
     setResult(null);
     const selected = assets.filter((asset) => selectedAssets.includes(asset.id));
-    const imageContext = selected.map((asset) => `${asset.filename || asset.title} (ID: ${asset.id})`).join(', ');
-    const jobDesc = form.job_description
-      ? `${form.job_description}\n\nSelected project photos for visual reference: ${imageContext}`
-      : `Selected project photos for visual reference: ${imageContext}`;
+    const imageNames = selected.map((asset) => asset.filename || asset.title).filter(Boolean).join(', ');
+    const jobDesc = [
+      form.job_description,
+      imageNames ? `Selected project photos: ${imageNames}` : '',
+    ].filter(Boolean).join('\n\n');
     const r = await apiFetch('/social/generate-pack', {
       method: 'POST',
       body: JSON.stringify({
         album_id: form.album_id,
         asset_ids: selected.map((asset) => asset.id),
-        asset_filenames: selected.map((asset) => asset.filename || asset.title),
         platforms: form.platforms,
-        service_category: form.service_category,
         language: form.language,
         tone: form.tone,
         city: form.city,
         cta: form.cta,
         job_description: jobDesc,
+        brand_voice: form.brand_voice,
       }),
     });
     setGenerating(false);
@@ -2084,6 +2084,7 @@ export default function SocialStudioPage() {
     setSaving(true);
     setError('');
     const imgIds = selectedAssets.join(',');
+    const derivedCategory = (form.job_description || '').split('\n')[0].slice(0, 80);
     let savedAll = true;
     for (const draft of drafts) {
       const r = await apiFetch('/publishing/drafts', {
@@ -2093,7 +2094,7 @@ export default function SocialStudioPage() {
           platform: draft.platform || 'facebook',
           language: form.language,
           tone: form.tone,
-          service_category: form.service_category,
+          service_category: derivedCategory,
           body: draft.main_copy || '',
           short_body: draft.short_variation || '',
           hashtags: draft.hashtags || '',
@@ -2121,6 +2122,7 @@ export default function SocialStudioPage() {
     setSaving(true);
     setError('');
     const imgIds = selectedAssets.join(',');
+    const derivedCategory = (form.job_description || '').split('\n')[0].slice(0, 80);
     const r = await apiFetch('/publishing/drafts', {
       method: 'POST',
       body: JSON.stringify({
@@ -2128,7 +2130,7 @@ export default function SocialStudioPage() {
         platform: draft.platform || 'facebook',
         language: form.language,
         tone: form.tone,
-        service_category: form.service_category,
+        service_category: derivedCategory,
         body: draft.main_copy || '',
         short_body: draft.short_variation || '',
         hashtags: draft.hashtags || '',

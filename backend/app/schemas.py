@@ -96,11 +96,12 @@ PLATFORMS = {"facebook", "instagram", "gbp", "linkedin", "website", "ad", "email
 LANGUAGES = {"fr", "en", "bilingual"}
 
 class SocialGenerateIn(BaseModel):
-    service_category: str
+    service_category: str = ""
     platform: str
     language: str = "fr"
     tone: str = "professional"
     job_description: str = ""
+    brand_voice: str = ""
     city: str = "Montréal"
     cta: str = "request_quote"
     album_id: str = ""
