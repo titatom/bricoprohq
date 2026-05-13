@@ -1,10 +1,15 @@
 import json
+import ipaddress
+import hashlib
+import hmac
 import logging
 import os
 import secrets
+import socket
+import time
 from types import SimpleNamespace
 from datetime import datetime, timezone, timedelta, date
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request
@@ -32,7 +37,7 @@ from .schemas import (
     PostMetricIn,
 )
 from .auth import verify_password, create_access_token, hash_password, decode_access_token
-from .secret_key import DEFAULT_PLACEHOLDER, resolve_secret_key
+from .secret_key import DEFAULT_PLACEHOLDER, current_secret_key, resolve_secret_key
 from .services.connectors import validate_paperless_gpt_base_url, ConnectorNotConfigured, ConnectorError
 from .services.rate_limit import (
     DEFAULT_LOGIN_LIMIT,
@@ -42,6 +47,9 @@ from .services.rate_limit import (
 
 log = logging.getLogger("bricopro")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+MAX_GENERATED_IMAGE_DOWNLOAD_BYTES = int(os.getenv("MAX_GENERATED_IMAGE_DOWNLOAD_BYTES", str(15 * 1024 * 1024)))
+MAX_GENERATED_IMAGE_REDIRECTS = 3
 
 
 def _build_cors_origins() -> tuple[list[str], bool]:
@@ -197,6 +205,69 @@ def _origin_from_url(value: str = "") -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _redacted_url_for_log(value: str) -> str:
+    parsed = urlparse(value)
+    if not parsed.scheme or not parsed.netloc:
+        return value[:200]
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+
+
+def _host_resolves_publicly(hostname: str, port: int | None = None) -> bool:
+    try:
+        infos = socket.getaddrinfo(hostname, port or 443, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if not ip.is_global:
+            return False
+    return bool(infos)
+
+
+def _validate_public_https_url(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme.lower() != "https":
+        raise ValueError("Generated image URL must use HTTPS.")
+    if not parsed.hostname:
+        raise ValueError("Generated image URL is missing a hostname.")
+    if not _host_resolves_publicly(parsed.hostname, parsed.port):
+        raise ValueError("Generated image URL host is not publicly routable.")
+    return value
+
+
+def _download_public_https_url(value: str) -> bytes:
+    """Download a public HTTPS URL with SSRF and response-size guardrails."""
+    current_url = _validate_public_https_url(value)
+    with httpx.Client(follow_redirects=False, timeout=60) as client:
+        for _ in range(MAX_GENERATED_IMAGE_REDIRECTS + 1):
+            with client.stream("GET", current_url) as response:
+                if response.is_redirect:
+                    location = response.headers.get("location", "")
+                    if not location:
+                        raise ValueError("Generated image URL redirected without a Location header.")
+                    current_url = _validate_public_https_url(urljoin(current_url, location))
+                    continue
+
+                response.raise_for_status()
+                length = response.headers.get("content-length")
+                if length and int(length) > MAX_GENERATED_IMAGE_DOWNLOAD_BYTES:
+                    raise ValueError("Generated image download is too large.")
+
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > MAX_GENERATED_IMAGE_DOWNLOAD_BYTES:
+                        raise ValueError("Generated image download is too large.")
+                    chunks.append(chunk)
+                return b"".join(chunks)
+
+    raise ValueError("Generated image URL redirected too many times.")
+
+
 def _first_header_value(value: str = "") -> str:
     return (value or "").split(",")[0].strip()
 
@@ -292,19 +363,22 @@ def _warn_default_admin_password() -> None:
 
 @app.on_event("startup")
 def startup_seed():
-    db = next(get_db())
-    _sync_configured_admin(db)
-    for s in SOURCES:
-        if not db.query(Integration).filter(Integration.provider == s).first():
-            db.add(Integration(provider=s, status="not_connected"))
-    db.commit()
-    _warn_default_admin_password()
-    if (os.getenv("SECRET_KEY") or "").strip() in ("", DEFAULT_PLACEHOLDER):
-        log.warning(
-            "SECRET_KEY env var not set; using the on-disk dev fallback. "
-            "Set SECRET_KEY explicitly in production."
-        )
-    _start_scheduler()
+    db = _db_module.SessionLocal()
+    try:
+        _sync_configured_admin(db)
+        for s in SOURCES:
+            if not db.query(Integration).filter(Integration.provider == s).first():
+                db.add(Integration(provider=s, status="not_connected"))
+        db.commit()
+        _warn_default_admin_password()
+        if (os.getenv("SECRET_KEY") or "").strip() in ("", DEFAULT_PLACEHOLDER):
+            log.warning(
+                "SECRET_KEY env var not set; using the on-disk dev fallback. "
+                "Set SECRET_KEY explicitly in production."
+            )
+        _start_scheduler()
+    finally:
+        db.close()
 
 
 def _start_scheduler():
@@ -346,6 +420,7 @@ def _run_scheduled_posts():
             .filter(
                 ContentDraft.status == "scheduled",
                 ContentDraft.planned_date.isnot(None),
+                ContentDraft.planned_date <= now.date(),
                 ContentDraft.platform_account_id.isnot(None),
             )
             .all()
@@ -521,11 +596,13 @@ def _consume_oauth_state(state: str, expected_provider: str, db: Session) -> boo
     row = db.query(OAuthState).filter(OAuthState.state == state).first()
     if not row:
         return False
-    valid = row.provider == expected_provider and row.expires_at > _now_utc_naive()
-    db.delete(row)
-    db.flush()
+    now = _now_utc_naive()
+    valid = row.provider == expected_provider and row.expires_at > now
+    if valid:
+        db.delete(row)
+        db.flush()
     # Best-effort cleanup of any other expired rows so the table doesn't grow.
-    db.query(OAuthState).filter(OAuthState.expires_at <= _now_utc_naive()).delete(synchronize_session=False)
+    db.query(OAuthState).filter(OAuthState.expires_at <= now).delete(synchronize_session=False)
     db.commit()
     return valid
 
@@ -887,8 +964,22 @@ def instagram_webhook_verify(
 
 
 @app.post("/integrations/instagram/webhook")
-async def instagram_webhook_receive(request: Request):
-    """Receive Instagram webhook event payloads (no-op placeholder)."""
+async def instagram_webhook_receive(request: Request, db: Session = Depends(get_db)):
+    """Receive Instagram webhook event payloads after verifying Meta's signature."""
+    body = await request.body()
+    signature = request.headers.get("x-hub-signature-256", "")
+    config_owner = _oauth_config_integration("instagram", db)
+    app_secret = os.getenv("INSTAGRAM_WEBHOOK_APP_SECRET", "").strip()
+    if not app_secret and config_owner:
+        try:
+            app_secret = json.loads(config_owner.config_json or "{}").get("client_secret", "").strip()
+        except Exception:
+            app_secret = ""
+    if not app_secret:
+        raise HTTPException(503, "Instagram webhook app secret not configured")
+    expected = "sha256=" + hmac.new(app_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    if not signature or not hmac.compare_digest(signature, expected):
+        raise HTTPException(403, "Invalid Instagram webhook signature")
     log.info("Instagram webhook payload received")
     return {"ok": True}
 
@@ -1158,13 +1249,27 @@ def immich_asset_original(asset_id: str, _: User = Depends(auth_user), db: Sessi
     return Response(content=upstream.content, media_type=content_type)
 
 
+def _valid_publish_asset_signature(filename: str, expires: str, sig: str) -> bool:
+    try:
+        expires_int = int(expires)
+    except (TypeError, ValueError):
+        return False
+    if expires_int < int(time.time()):
+        return False
+    message = f"{filename}:{expires_int}".encode("utf-8")
+    expected = hmac.new(current_secret_key().encode("utf-8"), message, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig or "", expected)
+
+
 @app.get("/media/publish-assets/{filename}")
-def serve_publish_asset(filename: str):
-    """Serve a temp publish asset publicly (no auth) for Instagram / GBP image URLs."""
+def serve_publish_asset(filename: str, expires: str = Query(default=""), sig: str = Query(default="")):
+    """Serve a temp publish asset via a signed URL for Instagram / GBP image fetches."""
     from .services.social_publisher import PUBLISH_ASSETS_DIR
     import re
     if not re.match(r'^[a-f0-9]{32}\.[a-z]+$', filename):
         raise HTTPException(404, "Not found")
+    if not _valid_publish_asset_signature(filename, expires, sig):
+        raise HTTPException(403, "Invalid or expired asset URL")
     path = PUBLISH_ASSETS_DIR / filename
     if not path.exists():
         raise HTTPException(404, "Asset not found or expired")
@@ -1813,11 +1918,9 @@ def social_generate_image_actual(payload: dict, _: User = Depends(auth_user), db
         # browser broke for any host that required headers or wasn't reachable from
         # the user's network.
         try:
-            dl = httpx.get(image_url, timeout=60, follow_redirects=True)
-            dl.raise_for_status()
-            image_bytes = dl.content
-        except httpx.HTTPError as exc:
-            log.error("Failed to download generated image from %s: %s", image_url, exc)
+            image_bytes = _download_public_https_url(image_url)
+        except (httpx.HTTPError, ValueError) as exc:
+            log.error("Failed to download generated image from %s: %s", _redacted_url_for_log(image_url), exc)
             raise HTTPException(502, f"Could not retrieve generated image: {exc}")
     else:
         raise HTTPException(502, "No image data returned from the generation model.")
@@ -2216,12 +2319,14 @@ def publish_draft(
     # Kick off an immediate insights seed (best-effort; non-blocking via thread)
     import threading
     def _seed():
+        seed_db = _db_module.SessionLocal()
         try:
             from .services.social_publisher import sync_post_insights
-            seed_db = next(get_db())
             sync_post_insights(draft_id, seed_db)
         except Exception as e:
             log.info("Initial insights seed for draft %s: %s", draft_id, e)
+        finally:
+            seed_db.close()
     threading.Thread(target=_seed, daemon=True).start()
 
     return {
@@ -2415,8 +2520,12 @@ def kpi_posts(_: User = Depends(auth_user), db: Session = Depends(get_db)):
         .all()
     )
     result = []
+    metrics = {
+        metric.draft_id: metric
+        for metric in db.query(PostMetric).filter(PostMetric.draft_id.in_([d.id for d in drafts])).all()
+    } if drafts else {}
     for d in drafts:
-        metric = db.query(PostMetric).filter(PostMetric.draft_id == d.id).first()
+        metric = metrics.get(d.id)
         result.append({
             "draft": _draft_payload(d),
             "metric": _metric_payload(metric) if metric else None,

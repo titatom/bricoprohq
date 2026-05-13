@@ -41,7 +41,8 @@ class Setting(Base):
     __tablename__ = "settings"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    value: Mapped[str] = mapped_column(Text, default="")
+    # Settings include API keys (for example ai_api_key), so store values encrypted.
+    value: Mapped[str] = mapped_column(EncryptedText, default="")
 
 class QuickLink(Base):
     __tablename__ = "quick_links"

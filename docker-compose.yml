@@ -3,9 +3,10 @@ services:
     image: ghcr.io/titatom/bricoprohq:latest
     restart: unless-stopped
     environment:
-      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      APP_ENV: ${APP_ENV:-production}
+      SECRET_KEY: "${SECRET_KEY:?Set SECRET_KEY in .env before starting the app}"
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@bricopro.local}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin1234}
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env before starting the app}"
       DATA_DIR: /data
       DATABASE_URL: ${DATABASE_URL:-sqlite+pysqlite:////data/bricoprohq.db}
       REDIS_URL: ${REDIS_URL:-}

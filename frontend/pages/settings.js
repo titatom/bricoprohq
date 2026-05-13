@@ -267,6 +267,16 @@ function errorDiagnostics(data) {
   ].filter(Boolean);
 }
 
+function safeOAuthErrorMessage(value = '') {
+  const normalized = value.replace(/[^\w .,:-]/g, '').slice(0, 160);
+  const known = {
+    missing_code: 'The provider did not return an authorization code.',
+    invalid_state: 'The OAuth session expired. Please try connecting again.',
+    token_exchange_failed: 'The provider rejected the token exchange.',
+  };
+  return known[normalized] || normalized || 'OAuth connection failed.';
+}
+
 function summarizeTextResponse(text, contentType = '', fallbackMessage = 'Request failed') {
   const raw = (text || '').trim();
   if (!raw) return fallbackMessage;
@@ -727,6 +737,7 @@ function SocialStudioSettingsInline({ apiFetch }) {
   const [form, setForm] = useState(SS_DEFAULTS);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     const r = await apiFetch('/social/settings');
@@ -738,11 +749,17 @@ function SocialStudioSettingsInline({ apiFetch }) {
   const save = async (e) => {
     e.preventDefault();
     setSaving(true);
-    await apiFetch('/social/settings', {
+    setError('');
+    const r = await apiFetch('/social/settings', {
       method: 'PUT',
       body: JSON.stringify(form),
     });
     setSaving(false);
+    if (!r.ok) {
+      const data = await parseApiResponse(r, 'Could not save Social Studio settings.');
+      setError(errorMessage(data, 'Could not save Social Studio settings.'));
+      return;
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   };
@@ -866,6 +883,7 @@ function SocialStudioSettingsInline({ apiFetch }) {
           {saving ? 'Saving...' : saved ? 'Saved ✓' : 'Save Social Studio Settings'}
         </button>
       </div>
+      {error && <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
     </form>
   );
 }
@@ -921,7 +939,7 @@ export default function SettingsPage() {
         window.history.replaceState({}, '', '/settings');
       } else if (oauthError) {
         const label = INTEGRATION_FIELDS[oauthProvider]?.label || oauthProvider || 'Integration';
-        setOauthBanner({ ok: false, message: `${label} OAuth error: ${oauthError}` });
+        setOauthBanner({ ok: false, message: `${label} OAuth error: ${safeOAuthErrorMessage(oauthError)}` });
         setActiveTab('integrations');
         window.history.replaceState({}, '', '/settings');
       }

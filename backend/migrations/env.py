@@ -8,8 +8,10 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Override sqlalchemy.url from environment so migrations work in Docker and tests
-db_url = os.getenv("DATABASE_URL", "postgresql+psycopg://bricopro:bricopro@db:5432/bricoprohq")
+# Override sqlalchemy.url from environment so migrations work in Docker and tests.
+db_url = os.getenv("DATABASE_URL")
+if not db_url:
+    raise RuntimeError("DATABASE_URL must be set before running Alembic migrations")
 # Alembic doesn't support psycopg3 driver prefix in all versions; normalise
 if db_url.startswith("postgresql+psycopg://"):
     db_url = db_url  # psycopg3 is fine for alembic >= 1.12

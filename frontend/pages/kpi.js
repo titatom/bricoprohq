@@ -30,6 +30,15 @@ function formatNum(v) {
   return String(n);
 }
 
+function safeHttpHref(value) {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) ? value : '';
+  } catch (err) {
+    return '';
+  }
+}
+
 const PLATFORM_COLORS = {
   facebook: 'bg-blue-100 text-blue-700',
   instagram: 'bg-pink-100 text-pink-700',
@@ -383,7 +392,7 @@ function ManualEntryTab({ apiFetch }) {
             <tbody>
               {records.map((r) => (
                 <tr key={r.id} className="border-b border-gray-50">
-                  <td className="py-3 pr-4 font-medium text-gray-800">{r.post_url ? <a className="hover:text-brand-600" href={r.post_url} target="_blank" rel="noopener noreferrer">{r.title}</a> : r.title}</td>
+                  <td className="py-3 pr-4 font-medium text-gray-800">{safeHttpHref(r.post_url) ? <a className="hover:text-brand-600" href={safeHttpHref(r.post_url)} target="_blank" rel="noopener noreferrer">{r.title}</a> : r.title}</td>
                   <td className="py-3 pr-4"><PlatformBadge platform={r.platform} /></td>
                   <td className="py-3 pr-4 text-gray-500">{r.campaign_name || '—'}</td>
                   <td className="py-3 pr-4">{formatCurrency(r.spend)}</td>

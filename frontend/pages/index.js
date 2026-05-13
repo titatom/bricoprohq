@@ -47,6 +47,15 @@ const DEFAULT_QUICK_LINKS = [
   { title: 'Canva',                icon: 'link', url: 'https://canva.com',                    category: 'Marketing'  },
 ];
 
+function safeExternalHref(value) {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:', 'mailto:'].includes(url.protocol) ? value : '';
+  } catch (err) {
+    return '';
+  }
+}
+
 const QUICK_LINK_LOGO_DOMAINS = {
   jobber: 'jobber.com',
   'google calendar': 'calendar.google.com',
@@ -897,18 +906,30 @@ function QuickLinksWidget({ links, onAdd, onUpdate, onDelete }) {
       )}
       {links.length > 0 ? (
         <div className="flex items-center justify-center gap-2 flex-wrap pb-1">
-          {links.map((link) => (
+          {links.map((link) => {
+            const safeHref = safeExternalHref(link.url);
+            return (
             <div key={link.id} className="relative group flex-shrink-0">
-              <a
-                href={link.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={link.title}
-                aria-label={link.title}
-                className="w-11 h-11 rounded-xl border border-gray-100 bg-white hover:bg-brand-50 hover:border-brand-200 shadow-sm flex items-center justify-center transition-colors"
-              >
-                <QuickLinkIcon link={link} />
-              </a>
+              {safeHref ? (
+                <a
+                  href={safeHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={link.title}
+                  aria-label={link.title}
+                  className="w-11 h-11 rounded-xl border border-gray-100 bg-white hover:bg-brand-50 hover:border-brand-200 shadow-sm flex items-center justify-center transition-colors"
+                >
+                  <QuickLinkIcon link={link} />
+                </a>
+              ) : (
+                <span
+                  title={`${link.title} has an invalid URL`}
+                  aria-label={`${link.title} has an invalid URL`}
+                  className="w-11 h-11 rounded-xl border border-red-100 bg-red-50 text-red-300 shadow-sm flex items-center justify-center"
+                >
+                  <QuickLinkIcon link={link} />
+                </span>
+              )}
               <button
                 className="absolute -left-1 -top-1 w-4 h-4 rounded-full bg-white border border-gray-200 text-gray-400 hover:text-brand-600 text-[10px] leading-none opacity-0 group-hover:opacity-100 transition-opacity"
                 onClick={() => startEdit(link)}
@@ -926,7 +947,8 @@ function QuickLinksWidget({ links, onAdd, onUpdate, onDelete }) {
                 ×
               </button>
           </div>
-          ))}
+          );
+          })}
         </div>
       ) : (
         <p className="text-sm text-gray-400">No quick links yet. Add some above.</p>
