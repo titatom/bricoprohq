@@ -31,6 +31,11 @@ from pathlib import Path
 log = logging.getLogger("bricopro.secret_key")
 
 DEFAULT_PLACEHOLDER = "change-me"
+DEFAULT_PLACEHOLDERS = {
+    DEFAULT_PLACEHOLDER,
+    "change-me-in-production",
+    "change-me-generate-a-random-secret",
+}
 DEV_KEY_FILENAME = "secret_key"
 MIN_KEY_LENGTH = 16
 
@@ -106,7 +111,7 @@ def _read_or_create_dev_key() -> str:
 def resolve_secret_key() -> str:
     """Return the SECRET_KEY to use for JWT and encryption, applying fallbacks."""
     env_value = (os.getenv("SECRET_KEY") or "").strip()
-    if env_value and env_value != DEFAULT_PLACEHOLDER:
+    if env_value and env_value not in DEFAULT_PLACEHOLDERS:
         if len(env_value) < MIN_KEY_LENGTH:
             log.warning(
                 "SECRET_KEY is shorter than %d characters; generate a stronger value with "

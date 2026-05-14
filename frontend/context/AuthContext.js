@@ -17,9 +17,11 @@ export function AuthProvider({ children }) {
   const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
 
   const apiFetch = useCallback(async (path, options = {}) => {
+    const body = options.body;
+    const shouldSetJsonType = body && !(body instanceof FormData) && !(body instanceof Blob) && !(body instanceof URLSearchParams);
     const res = await fetch(`${API}${path}`, {
       ...options,
-      headers: { 'Content-Type': 'application/json', ...authHeader, ...(options.headers || {}) },
+      headers: { ...(shouldSetJsonType ? { 'Content-Type': 'application/json' } : {}), ...authHeader, ...(options.headers || {}) },
     });
     if (res.status === 401) {
       setToken(''); setUser(null);
@@ -36,6 +38,9 @@ export function AuthProvider({ children }) {
     });
     if (!res.ok) throw new Error('Invalid credentials');
     const data = await res.json();
+    if (!data?.access_token || typeof data.access_token !== 'string') {
+      throw new Error('Login response did not include an access token');
+    }
     setToken(data.access_token);
     if (typeof window !== 'undefined') localStorage.setItem('hq_token', data.access_token);
     setUser({ email });

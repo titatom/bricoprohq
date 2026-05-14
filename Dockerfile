@@ -16,8 +16,12 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm \
+    && apt-get install -y --no-install-recommends gosu \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=frontend-build /usr/local/bin/node /usr/local/bin/node
+COPY --from=frontend-build /usr/local/bin/npm /usr/local/bin/npm
+COPY --from=frontend-build /usr/local/bin/npx /usr/local/bin/npx
+COPY --from=frontend-build /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
@@ -34,7 +38,10 @@ COPY --from=frontend-build /app/frontend/next.config.js /app/frontend/next.confi
 
 COPY docker/entrypoint.sh /usr/local/bin/bricoprohq-entrypoint
 RUN chmod +x /usr/local/bin/bricoprohq-entrypoint \
-    && mkdir -p /data/logos
+    && mkdir -p /data/logos \
+    && groupadd --system bricopro \
+    && useradd --system --gid bricopro --home /app --shell /usr/sbin/nologin bricopro \
+    && chown -R bricopro:bricopro /app /data
 
 EXPOSE 3000
 VOLUME ["/data"]

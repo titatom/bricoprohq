@@ -20,6 +20,12 @@ const HOP_BY_HOP_HEADERS = new Set([
   'transfer-encoding',
   'upgrade',
 ]);
+const FORWARDED_REQUEST_HEADERS = new Set([
+  'accept',
+  'authorization',
+  'content-type',
+  'user-agent',
+]);
 
 // Errors that usually mean "API container isn't ready yet" rather than a real
 // failure. We retry a few times with a small backoff so the first page load
@@ -36,32 +42,53 @@ const TRANSIENT_NETWORK_CODES = new Set([
 
 const MAX_PROXY_ATTEMPTS = 5;
 const PROXY_RETRY_DELAY_MS = 500;
+const MAX_PROXY_BODY_BYTES = Number(process.env.API_PROXY_MAX_BODY_BYTES || 10 * 1024 * 1024);
 
 function buildTargetUrl(req) {
   const apiPath = req.url.replace(/^\/api(?=\/|$)/, '') || '/';
-  return new URL(apiPath, API_URL.endsWith('/') ? API_URL : `${API_URL}/`);
+  if (apiPath.startsWith('//')) {
+    throw Object.assign(new Error('Invalid API path'), { statusCode: 400 });
+  }
+
+  const baseUrl = new URL(API_URL.endsWith('/') ? API_URL : `${API_URL}/`);
+  const targetUrl = new URL(apiPath, baseUrl);
+  if (targetUrl.origin !== baseUrl.origin) {
+    throw Object.assign(new Error('Invalid API target'), { statusCode: 400 });
+  }
+  return targetUrl;
 }
 
 function copyRequestHeaders(req) {
   const headers = {};
   for (const [name, value] of Object.entries(req.headers)) {
-    if (!HOP_BY_HOP_HEADERS.has(name.toLowerCase()) && value !== undefined) {
+    if (
+      FORWARDED_REQUEST_HEADERS.has(name.toLowerCase()) &&
+      !HOP_BY_HOP_HEADERS.has(name.toLowerCase()) &&
+      value !== undefined
+    ) {
       headers[name] = value;
     }
   }
-  if (req.headers.host && !headers['x-forwarded-host']) {
+  if (req.headers.host) {
     headers['x-forwarded-host'] = req.headers.host;
   }
-  if (!headers['x-forwarded-proto']) {
-    headers['x-forwarded-proto'] = req.headers['x-forwarded-proto'] || (req.headers.host?.includes('localhost') ? 'http' : 'https');
-  }
+  headers['x-forwarded-proto'] = req.headers.host?.includes('localhost') ? 'http' : 'https';
   return headers;
 }
 
 function readRequestBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (chunk) => chunks.push(chunk));
+    let totalBytes = 0;
+    req.on('data', (chunk) => {
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_PROXY_BODY_BYTES) {
+        reject(Object.assign(new Error('Request body too large'), { statusCode: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on('end', () => resolve(chunks.length ? Buffer.concat(chunks) : undefined));
     req.on('error', reject);
   });
@@ -97,9 +124,21 @@ function upstreamTimeoutMs(path) {
 }
 
 export default async function handler(req, res) {
-  const targetUrl = buildTargetUrl(req);
+  let targetUrl;
+  try {
+    targetUrl = buildTargetUrl(req);
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ detail: err.message || 'Invalid API request' });
+    return;
+  }
   const hasBody = !['GET', 'HEAD'].includes(req.method);
-  const body = hasBody ? await readRequestBody(req) : undefined;
+  let body;
+  try {
+    body = hasBody ? await readRequestBody(req) : undefined;
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ detail: err.message || 'Invalid request body' });
+    return;
+  }
   const headers = copyRequestHeaders(req);
   const timeoutMs = upstreamTimeoutMs(req.url);
 

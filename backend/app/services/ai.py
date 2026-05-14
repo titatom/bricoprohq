@@ -508,7 +508,10 @@ def _generate_image_openrouter(
         "AI image generation (OpenRouter chat): model=%s size=%s image_config=%s modalities=%s",
         model, size, json.dumps(image_config), modalities,
     )
-    log.debug("OpenRouter image gen request body: %s", json.dumps(body))
+    log.debug(
+        "OpenRouter image gen request metadata: messages=%d has_image_config=%s",
+        len(body.get("messages", [])), bool(image_config),
+    )
 
     try:
         r = httpx.post(

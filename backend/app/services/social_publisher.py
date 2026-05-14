@@ -7,15 +7,19 @@ PostMetric / PostMetricSnapshot tables.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
+from ..secret_key import current_secret_key
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -30,6 +34,7 @@ GBP_MYBUSINESS_BASE = "https://mybusiness.googleapis.com/v4"  # kept for legacy 
 GBP_ACCOUNTS_BASE = "https://mybusinessaccountmanagement.googleapis.com/v1"
 
 PUBLISH_ASSETS_DIR = Path(os.getenv("PUBLISH_ASSETS_DIR", "/data/publish_assets"))
+PUBLISH_ASSET_URL_TTL_SECONDS = int(os.getenv("PUBLISH_ASSET_URL_TTL_SECONDS", str(6 * 60 * 60)))
 
 # ── Asset helpers ─────────────────────────────────────────────────────────────
 
@@ -99,6 +104,13 @@ def save_asset_for_public_serving(asset_bytes: bytes, content_type: str = "image
     dest = _ensure_assets_dir() / filename
     dest.write_bytes(asset_bytes)
     return filename, dest
+
+
+def _signed_publish_asset_path(filename: str) -> str:
+    expires = str(int(time.time()) + PUBLISH_ASSET_URL_TTL_SECONDS)
+    message = f"{filename}:{expires}".encode("utf-8")
+    sig = hmac.new(current_secret_key().encode("utf-8"), message, hashlib.sha256).hexdigest()
+    return f"/media/publish-assets/{filename}?expires={expires}&sig={sig}"
 
 
 def cleanup_old_publish_assets(max_age_hours: int = 24) -> None:
@@ -380,7 +392,7 @@ def _prepare_public_image(
         )
         img_bytes, content_type = fetch_immich_preview_jpeg(asset_id, db)
     filename, _ = save_asset_for_public_serving(img_bytes, content_type)
-    return f"{app_base_url.rstrip('/')}/media/publish-assets/{filename}"
+    return f"{app_base_url.rstrip('/')}{_signed_publish_asset_path(filename)}"
 
 
 # ── Google Business Profile posting ──────────────────────────────────────────
@@ -652,6 +664,25 @@ def fetch_facebook_post_insights(post_id: str, page_id: str, db: "Session") -> d
 
 def fetch_instagram_media_insights(media_id: str, page_id: str, db: "Session") -> dict:
     """Fetch engagement metrics for an Instagram Business media post."""
+    ig_token = _get_instagram_token(db)
+    if ig_token:
+        r = httpx.get(
+            f"https://graph.instagram.com/v21.0/{media_id}/insights",
+            params={"metric": "impressions,reach,likes,comments,shares,saved,total_interactions", "access_token": ig_token},
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = {item["name"]: item.get("values", [{"value": 0}])[0].get("value", 0) for item in r.json().get("data", [])}
+        return {
+            "impressions": data.get("impressions", 0),
+            "reach": data.get("reach", 0),
+            "clicks": 0,
+            "engagements": data.get("total_interactions", 0),
+            "reactions": data.get("likes", 0),
+            "shares": data.get("shares", 0),
+            "saves": data.get("saved", 0),
+        }
+
     user_token = _get_meta_token(db)
     page_token = _page_token_for(user_token, page_id)
     metrics = "impressions,reach,likes,comments,shares,saved,total_interactions"

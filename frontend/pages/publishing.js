@@ -6,7 +6,7 @@ import StatusBadge from '../components/StatusBadge';
 
 const STATUSES = [
   'idea', 'draft_generated', 'needs_images', 'needs_review', 'approved',
-  'scheduled', 'posted', 'reuse_later', 'turn_into_ad', 'turn_into_page', 'archived',
+  'scheduled', 'posted', 'failed', 'reuse_later', 'turn_into_ad', 'turn_into_page', 'archived',
 ];
 
 const PLATFORMS = ['facebook', 'instagram', 'gbp', 'linkedin', 'website', 'ad', 'email_sms'];
@@ -20,12 +20,16 @@ const KANBAN_COLS = [
   { key: 'posted',          label: 'Posted',         color: 'bg-green-50 border-green-200',   emptyHint: 'Published posts will show up here.' },
 ];
 
-function copyDraftToClipboard(d) {
+async function copyDraftToClipboard(d) {
   const parts = [d.body || d.main_copy || '', d.hashtags, d.cta].filter(Boolean);
   const text = parts.join('\n\n');
   if (navigator.clipboard) {
-    navigator.clipboard.writeText(text).catch(() => {});
-    return true;
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (err) {
+      return false;
+    }
   }
   return false;
 }
@@ -70,7 +74,7 @@ function DraftModal({ draft, onClose, onStatusChange, campaigns }) {
         <div className="flex gap-2 justify-end">
           <button
             className="px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-gray-700 text-sm font-medium hover:bg-gray-100 transition-colors"
-            onClick={() => { if (copyDraftToClipboard(draft)) { setCopied(true); setTimeout(() => setCopied(false), 2000); } }}
+            onClick={async () => { if (await copyDraftToClipboard(draft)) { setCopied(true); setTimeout(() => setCopied(false), 2000); } }}
           >
             {copied ? 'Copied!' : 'Copy to Clipboard'}
           </button>
@@ -303,8 +307,8 @@ function ListView({ drafts, onStatusChange }) {
     return sortDir === 'asc' ? cmp : -cmp;
   });
 
-  const handleCopy = (d) => {
-    if (copyDraftToClipboard(d)) {
+  const handleCopy = async (d) => {
+    if (await copyDraftToClipboard(d)) {
       setCopiedId(d.id);
       setTimeout(() => setCopiedId(null), 2000);
     }

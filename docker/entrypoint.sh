@@ -3,17 +3,27 @@ set -eu
 
 DATA_DIR="${DATA_DIR:-/data}"
 LOGO_DIR="${LOGO_DIR:-$DATA_DIR/logos}"
+APP_USER="${APP_USER:-bricopro}"
 
 mkdir -p "$DATA_DIR" "$LOGO_DIR"
 
 export DATABASE_URL="${DATABASE_URL:-sqlite+pysqlite:///$DATA_DIR/bricoprohq.db}"
 export API_URL="${API_URL:-http://127.0.0.1:8000}"
 
+if [ "$(id -u)" = "0" ]; then
+  chown -R "$APP_USER:$APP_USER" "$DATA_DIR" "$LOGO_DIR" /app/frontend/public
+  exec gosu "$APP_USER" "$0"
+fi
+
 if [ -d /app/frontend/public/logos ] && [ -z "$(ls -A "$LOGO_DIR" 2>/dev/null)" ]; then
   cp -R /app/frontend/public/logos/. "$LOGO_DIR"/
 fi
 rm -rf /app/frontend/public/logos
 ln -s "$LOGO_DIR" /app/frontend/public/logos
+
+if [ "${RUN_ALEMBIC_MIGRATIONS:-true}" = "true" ]; then
+  (cd /app/backend && alembic upgrade head)
+fi
 
 uvicorn app.main:app --app-dir /app/backend --host 127.0.0.1 --port 8000 &
 API_PID="$!"

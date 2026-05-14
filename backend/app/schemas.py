@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from pydantic import BaseModel, field_validator
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -23,6 +25,18 @@ class QuickLinkIn(BaseModel):
     icon: str = "link"
     sort_order: int = 0
     is_active: bool = True
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        parsed = urlparse((value or "").strip())
+        if parsed.scheme not in {"http", "https", "mailto"}:
+            raise ValueError("URL must use http, https, or mailto")
+        if parsed.scheme in {"http", "https"} and not parsed.netloc:
+            raise ValueError("URL is missing a hostname")
+        if parsed.scheme == "mailto" and not parsed.path:
+            raise ValueError("mailto URL is missing an address")
+        return value.strip()
 
 class QuickLinkOut(QuickLinkIn):
     id: int
@@ -194,3 +208,14 @@ class PostMetricIn(BaseModel):
     engagements: int = 0
     engagement_rate: float = 0
     notes: str = ""
+
+    @field_validator("post_url")
+    @classmethod
+    def validate_post_url(cls, value: str) -> str:
+        value = (value or "").strip()
+        if not value:
+            return ""
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("post_url must be an http or https URL")
+        return value

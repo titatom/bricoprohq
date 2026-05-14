@@ -211,8 +211,9 @@ function ImmichImagePicker({ albums, assets, selectedAssets, setSelectedAssets, 
   const [expanded, setExpanded] = useState(false);
 
   // Auto-expand when photos are loaded
-  const prevAssetsLen = assets.length;
-  if (assets.length > 0 && !expanded) setExpanded(true);
+  useEffect(() => {
+    if (assets.length > 0) setExpanded(true);
+  }, [assets.length]);
 
   return (
     <div className="card">
@@ -1128,12 +1129,16 @@ function CharCount({ text, platform }) {
   return <span className={`text-xs ${color}`}>{len} / {limit.toLocaleString()}</span>;
 }
 
-function copyDraftToClipboard(d) {
+async function copyDraftToClipboard(d) {
   const parts = [d.body || d.main_copy || '', d.hashtags, d.cta].filter(Boolean);
   const text = parts.join('\n\n');
   if (navigator.clipboard) {
-    navigator.clipboard.writeText(text).catch(() => {});
-    return true;
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (err) {
+      return false;
+    }
   }
   return false;
 }
@@ -1274,7 +1279,7 @@ function PublishPanel({ draft, apiFetch, onSuccess }) {
       <button
         className="btn-primary w-full text-sm py-2"
         onClick={doPublish}
-        disabled={publishing || loadingAccounts || accounts.length === 0}
+        disabled={publishing || loadingAccounts || accounts.length === 0 || (scheduleMode && (!draft.planned_date || !draft.planned_time))}
       >
         {publishing ? 'Publishing…' : scheduleMode ? 'Schedule Post' : 'Publish Now'}
       </button>
@@ -1432,7 +1437,7 @@ function DraftModal({ draft, onClose, onStatusChange, onDelete, onUpdate, apiFet
           <div className="flex flex-wrap gap-2">
             <button
               className="px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-gray-700 text-sm font-medium hover:bg-gray-100 transition-colors"
-              onClick={() => { if (copyDraftToClipboard({ body, hashtags, cta })) { setCopied(true); setTimeout(() => setCopied(false), 2000); } }}
+              onClick={async () => { if (await copyDraftToClipboard({ body, hashtags, cta })) { setCopied(true); setTimeout(() => setCopied(false), 2000); } }}
             >
               {copied ? 'Copied!' : 'Copy to Clipboard'}
             </button>
@@ -1736,8 +1741,8 @@ function ListView({ drafts, onStatusChange, onDelete, apiFetch, onUpdate }) {
     return sortDir === 'asc' ? cmp : -cmp;
   });
 
-  const handleCopy = (d) => {
-    if (copyDraftToClipboard(d)) {
+  const handleCopy = async (d) => {
+    if (await copyDraftToClipboard(d)) {
       setCopiedId(d.id);
       setTimeout(() => setCopiedId(null), 2000);
     }

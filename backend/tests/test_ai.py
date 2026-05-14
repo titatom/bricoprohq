@@ -234,7 +234,7 @@ def test_openrouter_image_gen_images_field():
 
     call_body = mock_post.call_args[1]["json"]
     assert call_body["modalities"] == ["image", "text"]
-    assert call_body["image_config"] == {"aspect_ratio": "1:1"}
+    assert call_body["image_config"] == {"aspect_ratio": "1:1", "image_size": "1K"}
 
 
 def test_openrouter_image_gen_content_fallback():
@@ -353,7 +353,7 @@ def test_openrouter_image_gen_aspect_ratio_mapping():
         )
 
     call_body = mock_post.call_args[1]["json"]
-    assert call_body["image_config"] == {"aspect_ratio": "9:16"}
+    assert call_body["image_config"] == {"aspect_ratio": "9:16", "image_size": "2K"}
 
 
 def test_openrouter_image_gen_no_aspect_for_unknown_size():
@@ -382,7 +382,7 @@ def test_openrouter_image_gen_no_aspect_for_unknown_size():
         )
 
     call_body = mock_post.call_args[1]["json"]
-    assert "image_config" not in call_body
+    assert call_body["image_config"] == {"image_size": "1K"}
 
 
 def test_openrouter_image_gen_image_only_model_modalities():
